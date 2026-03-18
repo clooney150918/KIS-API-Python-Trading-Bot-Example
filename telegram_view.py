@@ -60,7 +60,6 @@ class TelegramView:
         ]
         return msg, InlineKeyboardMarkup(keyboard)
 
-    # 🚀 [V16.17] 접기/펼치기 인라인 버튼 UI가 적용된 버전 뷰어
     def get_version_message(self, history_data, show_all=False):
         title = "📚 <b>[ 전체 버전 및 업데이트 명예의 전당 ]</b>\n\n" if show_all else "🛠️ <b>[ 최신 버전 및 업데이트 내역 ]</b>\n\n"
         msg = title
@@ -110,7 +109,17 @@ class TelegramView:
         for t_info in ticker_data:
             t = t_info['ticker']
             v_mode = t_info['version']
-            v_mode_display = "무매4" if v_mode == "V14" else "무매3"
+            
+            if v_mode == "V17":
+                v_mode_display = "V17 시크릿"
+                main_icon = "🦇"
+            elif v_mode == "V14":
+                v_mode_display = "무매4"
+                main_icon = "💎"
+            else:
+                v_mode_display = "무매3"
+                main_icon = "💎"
+                
             is_rev = t_info.get('is_reverse', False)
             proc_status = t_info['plan'].get('process_status', '')
             
@@ -123,8 +132,8 @@ class TelegramView:
                 icon = "🩸" if proc_status == "🩸리버스(긴급수혈)" else "🔄"
                 body_msg += f"{icon} <b>[{t}] {v_mode_display} 리버스 ({t_info['t_val']}T / {int(t_info['split'])}분)</b>\n"
             else:
-                bdg_txt = f"오늘 예산 ${t_info['one_portion']:,.0f}" if v_mode == "V14" else f"1회 ${t_info['one_portion']:,.0f}"
-                body_msg += f"💎 <b>[{t}] ({v_mode_display} / {t_info['t_val']}T / {int(t_info['split'])}분할)</b>\n"
+                bdg_txt = f"오늘 예산 ${t_info['one_portion']:,.0f}" if v_mode in ["V14", "V17"] else f"1회 ${t_info['one_portion']:,.0f}"
+                body_msg += f"{main_icon} <b>[{t}] ({v_mode_display} / {t_info['t_val']}T / {int(t_info['split'])}분할)</b>\n"
             
             body_msg += f"💵 총 시드: ${t_info['seed']:,.0f} ({bdg_txt})\n"
             
@@ -152,9 +161,23 @@ class TelegramView:
                 n_orders = [o for o in t_info['plan']['orders'] if "줍줍" not in o['desc']]
 
                 for o in n_orders:
+                    # 기본 컬러 지정
                     ico = "🔴" if o['side'] == 'BUY' else "🔵"
-                    if "수혈" in o['desc']: ico = "🩸"
-                    body_msg += f" {ico} {o['desc']}: <b>${o['price']} x {o['qty']}주</b> {'' if o['type']=='LIMIT' else f'({o['type']})'}\n"
+                    desc = o['desc']
+                    
+                    # 특수 주문일 경우 이모지 교체 및 중복 이모지 제거
+                    if "수혈" in desc: 
+                        ico = "🩸"
+                        desc = desc.replace("🩸", "")
+                    elif "시크릿" in desc: 
+                        ico = "🦇"
+                        desc = desc.replace("🦇", "")
+                        
+                    # LIMIT(지정가)일 경우 빈칸 없이 깔끔하게 처리, LOC 등은 표시
+                    type_str = "" if o['type'] == 'LIMIT' else f"({o['type']})"
+                    type_disp = f" {type_str}" if type_str else ""
+                    
+                    body_msg += f" {ico} {desc}: <b>${o['price']} x {o['qty']}주</b>{type_disp}\n"
 
                 if jup_orders:
                     prices = sorted([o['price'] for o in jup_orders], reverse=True)

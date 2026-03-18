@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import logging
 import datetime
 import pytz
@@ -81,6 +80,28 @@ class TelegramController:
         latest_version = self.cfg.get_latest_version() 
         msg = self.view.get_start_message(target_hour, season_icon, latest_version) 
         await update.message.reply_text(msg, parse_mode='HTML')
+
+    async def cmd_v17(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update): return
+        args = context.args
+        if not args:
+            await update.message.reply_text("⚠️ 종목명을 함께 입력하세요. 예) /v17 TQQQ")
+            return
+            
+        ticker = args[0].upper()
+        active_tickers = self.cfg.get_active_tickers()
+        
+        if ticker in active_tickers:
+            self.cfg.set_version(ticker, "V17")
+            await update.message.reply_text(f"🦇 쉿! <b>[{ticker}] 나만의 시크릿 V17 모드</b>가 은밀하게 활성화되었습니다.", parse_mode='HTML')
+        else:
+            await update.message.reply_text(f"❌ 현재 운용 중인 종목이 아닙니다. (운용 중: {', '.join(active_tickers)})")
+
+    async def cmd_v4(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update): return
+        for t in self.cfg.get_active_tickers():
+            self.cfg.set_version(t, "V14")
+        await update.message.reply_text("✅ <b>모든 종목이 오리지널 V4(무매4) 모드로 복귀했습니다.</b>", parse_mode='HTML')
 
     async def cmd_sync(self, update, context):
         if not self._is_admin(update): return
@@ -260,11 +281,11 @@ class TelegramController:
                         exec_qty = int(float(ex.get('ft_ccld_qty', '0')))
                         exec_price = float(ex.get('ft_ccld_unpr3', '0'))
                         
-                        if side_cd == "02": # BUY
+                        if side_cd == "02": 
                             new_avg = ((temp_sim_qty * temp_sim_avg) + (exec_qty * exec_price)) / (temp_sim_qty + exec_qty) if (temp_sim_qty + exec_qty) > 0 else exec_price
                             temp_sim_qty += exec_qty
                             temp_sim_avg = new_avg
-                        else: # SELL
+                        else: 
                             temp_sim_qty -= exec_qty
                             
                         new_target_records.append({
@@ -423,8 +444,18 @@ class TelegramController:
         keyboard = []
         for t in self.cfg.get_active_tickers():
             ver = self.cfg.get_version(t)
-            ver_display = "무매4" if ver == "V14" else "무매3"
-            msg += f"💎 <b>{t} ({ver_display} 모드)</b>\n▫️ 분할: <b>{int(self.cfg.get_split_count(t))}회</b>\n▫️ 목표: <b>{self.cfg.get_target_profit(t)}%</b>\n▫️ 자동복리: <b>{self.cfg.get_compound_rate(t)}%</b>\n\n"
+            
+            if ver == "V17":
+                icon = "🦇"
+                ver_display = "V17 시크릿"
+            elif ver == "V14":
+                icon = "💎"
+                ver_display = "무매4"
+            else:
+                icon = "💎"
+                ver_display = "무매3"
+                
+            msg += f"{icon} <b>{t} ({ver_display} 모드)</b>\n▫️ 분할: <b>{int(self.cfg.get_split_count(t))}회</b>\n▫️ 목표: <b>{self.cfg.get_target_profit(t)}%</b>\n▫️ 자동복리: <b>{self.cfg.get_compound_rate(t)}%</b>\n\n"
             keyboard.append([
                 InlineKeyboardButton(f"⚙️ {t} 분할", callback_data=f"INPUT:SPLIT:{t}"), 
                 InlineKeyboardButton(f"🎯 {t} 목표", callback_data=f"INPUT:TARGET:{t}"),
@@ -435,7 +466,6 @@ class TelegramController:
             ])
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
-    # 🚀 [V16.17] 버전 출력 시 마크업(버튼) 함께 전달
     async def cmd_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update): return
         history_data = self.cfg.get_version_history()
@@ -448,7 +478,6 @@ class TelegramController:
         data = query.data.split(":")
         action, sub = data[0], data[1] if len(data) > 1 else ""
 
-        # 🚀 [V16.17] 버전 전체/최신 보기 버튼 이벤트 처리
         if action == "VERSION":
             if sub == "ALL":
                 history_data = self.cfg.get_full_version_history()
@@ -512,7 +541,12 @@ class TelegramController:
             plan = self.strategy.get_plan(t, self.broker.get_current_price(t), float(h['avg']), int(h['qty']), self.broker.get_previous_close(t), ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], force_turbo_off=force_turbo_off)
             
             is_rev = plan.get('is_reverse', False)
-            ver_display = "무매4" if self.cfg.get_version(t) == "V14" else "무매3"
+            ver = self.cfg.get_version(t)
+            
+            if ver == "V17": ver_display = "V17 시크릿"
+            elif ver == "V14": ver_display = "무매4"
+            else: ver_display = "무매3"
+            
             title = f"🔄 <b>[{t}] {ver_display} 리버스 주문 실행</b>\n" if is_rev else f"💎 <b>[{t}] 주문 실행 결과</b>\n"
             msg, success_count = title, 0
             
@@ -531,7 +565,7 @@ class TelegramController:
             if sub == "VERSION":
                 ticker = data[2]
                 curr_ver = self.cfg.get_version(ticker)
-                new_ver = "V14" if curr_ver == "V13" else "V13"
+                new_ver = "V14" if curr_ver in ["V13", "V17"] else "V13"
                 self.cfg.set_version(ticker, new_ver)
                 new_ver_display = "무매4" if new_ver == "V14" else "무매3"
                 await query.edit_message_text(f"✅ [{ticker}] 운용 로직이 {new_ver_display} 모드로 변경되었습니다. /settlement 로 확인하세요.")

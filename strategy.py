@@ -64,7 +64,7 @@ class InfiniteStrategy:
 
         t_val, base_portion = self.cfg.get_absolute_t_val(ticker, qty, avg_price)
 
-        if version == "V14":
+        if version in ["V14", "V17"]:
             _, dynamic_budget, rem_cash = self.cfg.calculate_v14_state(ticker)
             one_portion_amt = dynamic_budget
             
@@ -82,7 +82,6 @@ class InfiniteStrategy:
                 else:
                     exit_target = default_exit
 
-                # 🚀 [V16.16] 진입 시 오늘 날짜로 캘린더 스탬프 초기화
                 if market_type == "REG":
                     self.cfg.set_reverse_state(ticker, True, rev_day, exit_target)
             
@@ -177,7 +176,6 @@ class InfiniteStrategy:
                             if jup_price > 0:
                                 orders.append({"side": "BUY", "price": jup_price, "qty": 1, "type": "LOC", "desc": f"🧹리버스줍줍({i})" })
                 
-                # 🚀 [V16.16] 꼬리표 갱신 시에도 날짜 스탬프는 오늘 기준으로 자동 갱신됨 (Config 로직 처리)
                 if market_type == "REG":
                     self.cfg.set_reverse_state(ticker, True, rev_day, exit_target)
                         
@@ -248,7 +246,10 @@ class InfiniteStrategy:
                 orders.append({"side": "SELL", "price": 0, "qty": q_qty, "type": "MOC", "desc": "🛡️쿼터MOC"})
             else:
                 if star_price > 0:
-                    orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LOC", "desc": "🌟쿼터매도"})
+                    if version == "V17" and star_price > avg_price:
+                        orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LIMIT", "desc": "🦇시크릿지정가"})
+                    else:
+                        orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LOC", "desc": "🌟쿼터매도"})
 
             if target_price > 0:
                 orders.append({"side": "SELL", "price": target_price, "qty": r_qty, "type": "LIMIT", "desc": "🎯목표익절"})

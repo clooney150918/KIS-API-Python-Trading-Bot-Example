@@ -147,9 +147,6 @@ async def scheduled_regular_trade(context):
             if success_count > 0:
                 cfg.set_lock(t, "REG")
                 msg += "\n🔒 <b>주문 전송 완료 (매매 잠금 설정됨)</b>"
-                
-                # 🚀 [V16.16] 이곳에 있던 rev_day + 1 누적 로직은 삭제되었습니다.
-                # (이제 08:30 / record / sync 시점에서 멱등성 캘린더 엔진이 1회 누적을 완벽히 보장합니다.)
                     
             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
 
@@ -197,7 +194,20 @@ def main():
     
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     
-    for cmd, handler in [("start", bot.cmd_start), ("record", bot.cmd_record), ("history", bot.cmd_history), ("sync", bot.cmd_sync), ("settlement", bot.cmd_settlement), ("seed", bot.cmd_seed), ("ticker", bot.cmd_ticker), ("mode", bot.cmd_mode), ("reset", bot.cmd_reset), ("version", bot.cmd_version)]:
+    for cmd, handler in [
+        ("start", bot.cmd_start), 
+        ("record", bot.cmd_record), 
+        ("history", bot.cmd_history), 
+        ("sync", bot.cmd_sync), 
+        ("settlement", bot.cmd_settlement), 
+        ("seed", bot.cmd_seed), 
+        ("ticker", bot.cmd_ticker), 
+        ("mode", bot.cmd_mode), 
+        ("reset", bot.cmd_reset), 
+        ("version", bot.cmd_version),
+        ("v17", bot.cmd_v17),
+        ("v4", bot.cmd_v4)
+    ]:
         app.add_handler(CommandHandler(cmd, handler))
     app.add_handler(CallbackQueryHandler(bot.handle_callback))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_message))
