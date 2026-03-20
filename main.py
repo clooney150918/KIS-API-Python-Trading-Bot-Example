@@ -81,10 +81,12 @@ async def scheduled_force_reset(context):
     app_data['cfg'].reset_locks()
     
     for t in app_data['cfg'].get_active_tickers():
+        app_data['cfg'].increment_reverse_day(t)
+        
         bb_lower = await asyncio.to_thread(app_data['broker'].get_bb_lower, t)
         app_data['cfg'].set_daily_bb_lower(t, bb_lower)
         
-    await context.bot.send_message(chat_id=context.job.chat_id, text=f"🔓 <b>[{app_data.get('target_hour')}:00] 시스템 초기화 완료 (매매 잠금 해제 & 하단 스나이퍼 장전)</b>", parse_mode='HTML')
+    await context.bot.send_message(chat_id=context.job.chat_id, text=f"🔓 <b>[{app_data.get('target_hour')}:00] 시스템 초기화 완료 (매매 잠금 해제 & 하단 스나이퍼 장전 & 리버스 카운트 누적)</b>", parse_mode='HTML')
 
 async def scheduled_premarket_monitor(context):
     if not is_market_open(): return
@@ -166,11 +168,19 @@ async def scheduled_sniper_monitor(context):
             bb_lower = cfg.get_daily_bb_lower(t) 
             
             if bb_lower > 0 and curr_p <= bb_lower and curr_p < avg_price:
+                # 🦇 [V18.12 패치] 예산 고갈 시 스나이퍼 무한 루프(스팸) 방지
+                is_rev = cfg.get_reverse_state(t).get("is_active", False)
+                if is_rev:
+                    sniper_budget = cfg.get_escrow_cash(t) / 4.0
+                else:
+                    split = cfg.get_split_count(t)
+                    sniper_budget = cfg.get_seed(t) / split if split > 0 else 0
+                
+                if sniper_budget < curr_p:
+                    continue # 예산이 1주 가격보다 적으면 스나이퍼 타격 생략 (API 및 텔레그램 스팸 원천 차단)
+
                 await asyncio.to_thread(broker.cancel_all_orders_safe, t, side="BUY")
                 await asyncio.sleep(1.0)
-                
-                split = cfg.get_split_count(t)
-                base_portion = cfg.get_seed(t) / split if split > 0 else 0
                 
                 hunt_success = False
                 
@@ -178,7 +188,7 @@ async def scheduled_sniper_monitor(context):
                     ask_price = await asyncio.to_thread(broker.get_ask_price, t)
                     
                     if ask_price > 0 and ask_price <= bb_lower:
-                        buy_qty = math.floor(base_portion / ask_price)
+                        buy_qty = math.floor(sniper_budget / ask_price)
                         if buy_qty > 0:
                             res = broker.send_order(t, "BUY", buy_qty, ask_price, "LIMIT")
                             if res.get('rt_cd') == '0':
@@ -204,10 +214,15 @@ async def scheduled_sniper_monitor(context):
                 if hunt_success:
                     continue
 
-                msg = f"🛡️ <b>[{t}] 스나이퍼 하단 기습 실패 (방어선 복구)</b>\n"
-                msg += f"📉 3회에 걸쳐 하한선 타격을 시도했으나 전량 체결되지 않았습니다.\n"
-                msg += f"🦇 취소했던 원래의 방어 매수(LOC) 주문을 다시 호가창에 장전합니다."
-                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                # 🦇 [V18.12 패치] 스팸 방지 쿨타임 (1시간)
+                now_ts = time.time()
+                fail_history = app_data.setdefault('sniper_fail_ts', {})
+                if now_ts - fail_history.get(t, 0) > 3600:
+                    msg = f"🛡️ <b>[{t}] 스나이퍼 하단 기습 실패 (방어선 복구)</b>\n"
+                    msg += f"📉 3회에 걸쳐 하한선 타격을 시도했으나 전량 체결되지 않았습니다.\n"
+                    msg += f"🦇 취소했던 원래의 방어 매수(LOC) 주문을 다시 호가창에 장전합니다."
+                    await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                    fail_history[t] = now_ts
                 
                 ma_5day = await asyncio.to_thread(broker.get_5day_ma, t)
                 plan = strategy.get_plan(t, curr_p, avg_price, qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], force_turbo_off=force_turbo_off)
@@ -262,10 +277,14 @@ async def scheduled_sniper_monitor(context):
                 if hunt_success:
                     continue
                     
-                msg = f"🛡️ <b>[{t}] 스나이퍼 잭팟 기습 실패 (방어선 복구)</b>\n"
-                msg += f"🎯 3회에 걸쳐 전량 익절을 시도했으나 체결되지 않았습니다.\n"
-                msg += f"🦇 취소했던 원래의 방어 주문을 다시 호가창에 장전합니다."
-                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                now_ts = time.time()
+                fail_history_j = app_data.setdefault('sniper_j_fail_ts', {})
+                if now_ts - fail_history_j.get(t, 0) > 3600:
+                    msg = f"🛡️ <b>[{t}] 스나이퍼 잭팟 기습 실패 (방어선 복구)</b>\n"
+                    msg += f"🎯 3회에 걸쳐 전량 익절을 시도했으나 체결되지 않았습니다.\n"
+                    msg += f"🦇 취소했던 원래의 방어 주문을 다시 호가창에 장전합니다."
+                    await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                    fail_history_j[t] = now_ts
                 
                 ma_5day = await asyncio.to_thread(broker.get_5day_ma, t)
                 plan = strategy.get_plan(t, curr_p, avg_price, qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], force_turbo_off=force_turbo_off)
@@ -347,10 +366,14 @@ async def scheduled_sniper_monitor(context):
                     if hunt_success:
                         continue
                         
-                    msg = f"🛡️ <b>[{t}] 스나이퍼 쿼터 기습 실패 (방어선 복구)</b>\n"
-                    msg += f"🎯 3회에 걸쳐 쿼터 익절을 시도했으나 체결되지 않았습니다.\n"
-                    msg += f"🦇 취소했던 원래의 방어 주문을 다시 호가창에 장전합니다."
-                    await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                    now_ts = time.time()
+                    fail_history_q = app_data.setdefault('sniper_q_fail_ts', {})
+                    if now_ts - fail_history_q.get(t, 0) > 3600:
+                        msg = f"🛡️ <b>[{t}] 스나이퍼 쿼터 기습 실패 (방어선 복구)</b>\n"
+                        msg += f"🎯 3회에 걸쳐 쿼터 익절을 시도했으나 체결되지 않았습니다.\n"
+                        msg += f"🦇 취소했던 원래의 방어 주문을 다시 호가창에 장전합니다."
+                        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                        fail_history_q[t] = now_ts
                     
                     ma_5day = await asyncio.to_thread(broker.get_5day_ma, t)
                     plan = strategy.get_plan(t, curr_p, avg_price, qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], force_turbo_off=force_turbo_off)

@@ -128,9 +128,6 @@ class TelegramController:
         
         tickers = self.cfg.get_active_tickers()
         
-        for t in tickers:
-            self.cfg.update_reverse_day_if_needed(t)
-            
         sorted_tickers, allocated_cash, force_turbo_off = self._calculate_budget_allocation(cash, tickers)
         
         ticker_data_list = []
@@ -143,6 +140,12 @@ class TelegramController:
             prev_close = await asyncio.to_thread(self.broker.get_previous_close, t)
             ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
             
+            # 🦇 [V18.11 패치] 17:00 스케줄러 누락 시 BB 하한선 실시간 보완 캐싱
+            bb_lower = self.cfg.get_daily_bb_lower(t)
+            if bb_lower == 0.0 and self.cfg.get_version(t) == "V17":
+                bb_lower = await asyncio.to_thread(self.broker.get_bb_lower, t)
+                self.cfg.set_daily_bb_lower(t, bb_lower)
+            
             plan = self.strategy.get_plan(
                 t, curr, float(h['avg']), int(h['qty']), prev_close, ma_5day=ma_5day,
                 market_type="REG", available_cash=allocated_cash[t], force_turbo_off=force_turbo_off
@@ -150,8 +153,6 @@ class TelegramController:
             split = self.cfg.get_split_count(t)
             seed = self.cfg.get_seed(t)
             ver = self.cfg.get_version(t)
-            
-            bb_lower = self.cfg.get_daily_bb_lower(t)
             
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': plan.get('t_val', 0.0), 'split': split, 'curr': curr, 'avg': float(h['avg']), 'qty': int(h['qty']),
@@ -209,8 +210,6 @@ class TelegramController:
         self.sync_locks[ticker] = True 
         try:
             async with self.tx_lock:
-                self.cfg.update_reverse_day_if_needed(ticker)
-                
                 _, holdings = self.broker.get_account_balance()
                 if holdings is None:
                     await context.bot.send_message(chat_id, f"❌ <b>[{ticker}] API 오류</b>\n잔고를 불러오지 못했습니다.", parse_mode='HTML')

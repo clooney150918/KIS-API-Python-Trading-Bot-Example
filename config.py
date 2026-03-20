@@ -236,6 +236,12 @@ class ConfigManager:
         self._save_json(self.FILES["REVERSE_CFG"], d)
 
     def update_reverse_day_if_needed(self, ticker):
+        # 🦇 타임 패러독스 방지를 위해 기존 자동 누적 로직 무력화
+        # 이제 장부 동기화나 조회 시에는 일차가 절대 변하지 않습니다.
+        return False
+
+    def increment_reverse_day(self, ticker):
+        # 🛡️ 17:00/18:00 스케줄러에서 락(Lock)을 해제할 때만 강제로 일차를 누적합니다.
         state = self.get_reverse_state(ticker)
         if state.get("is_active"):
             est = pytz.timezone('US/Eastern')
@@ -415,7 +421,6 @@ class ConfigManager:
                 del locks[k]
             self._save_json(self.FILES["LOCKS"], locks)
 
-    # 🦇 [V18.10 패치] 볼린저 밴드 하한선 캐싱 변수 추가
     def get_daily_bb_lower(self, ticker):
         return float(self._load_json(self.FILES["BB_LOWER"], {}).get(ticker, 0.0))
 
