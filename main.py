@@ -136,10 +136,11 @@ async def scheduled_force_reset(context):
     for t in app_data['cfg'].get_active_tickers():
         app_data['cfg'].increment_reverse_day(t)
         
-        bb_lower = await asyncio.to_thread(app_data['broker'].get_bb_lower, t)
-        app_data['cfg'].set_daily_bb_lower(t, bb_lower)
+        # 🎯 [V20.0] 불필요한 일일 BB 하한가 캐싱 삭제 (API 호출 절약)
+        # bb_lower = await asyncio.to_thread(app_data['broker'].get_bb_lower, t)
+        # app_data['cfg'].set_daily_bb_lower(t, bb_lower)
         
-    await context.bot.send_message(chat_id=context.job.chat_id, text=f"🔓 <b>[{target_hour}:00] 시스템 초기화 완료 (매매 잠금 해제 & 하단 스나이퍼 장전 & 리버스 카운트 누적)</b>", parse_mode='HTML')
+    await context.bot.send_message(chat_id=context.job.chat_id, text=f"🔓 <b>[{target_hour}:00] 시스템 초기화 완료 (매매 잠금 해제 & 스나이퍼 장전 & 리버스 카운트 누적)</b>", parse_mode='HTML')
 
 async def scheduled_premarket_monitor(context):
     if not is_market_open(): return
@@ -172,7 +173,6 @@ async def scheduled_premarket_monitor(context):
                 broker.cancel_all_orders_safe(t)
                 for o in plan['orders']:
                     res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
-                    # 🦇 [V19.10] 구버전 파이썬 f-string 중첩 따옴표 SyntaxError 크래시 방어
                     err_msg = res.get('msg1')
                     is_success = res.get('rt_cd') == '0'
                     msg += f"\n└ {o['desc']}: {'✅' if is_success else f'❌({err_msg})'}"
@@ -221,18 +221,19 @@ async def scheduled_sniper_monitor(context):
             prev_c = await asyncio.to_thread(broker.get_previous_close, t)
             if curr_p <= 0: continue
             
-            real_time_bb_lower = await asyncio.to_thread(broker.get_bb_lower, t, current_price=curr_p)
-            
+            # 🎯 [V20.0] 스나이퍼 V3 절대 평단가 로직 적용 (블밴 폐기)
             sniper_pct = cfg.get_sniper_trigger(t)
-            hybrid_multiplier = (100.0 - sniper_pct) / 100.0
-            hybrid_base = min(avg_price, prev_c) * hybrid_multiplier
             
-            raw_target_price = max(real_time_bb_lower, hybrid_base)
+            # 1. 절대 방어선 타겟가 계산 (어제 종가 기준)
+            raw_target_price = prev_c * (1 - (sniper_pct / 100.0))
             target_buy_price = math.floor(raw_target_price * 100) / 100.0
             
-            trigger_reason = "실시간 블밴 하한가" if real_time_bb_lower >= hybrid_base else f"-{sniper_pct}% 고정 하한가"
+            # 2. 물타기 절대 원칙 검증: 타겟가가 내 평단가보다 무조건 싸야 함 (불타기 금지)
+            is_sniper_armed = target_buy_price < avg_price
+            trigger_reason = f"-{sniper_pct}% 절대방어선"
             
-            if target_buy_price > 0 and curr_p <= target_buy_price and curr_p < avg_price:
+            # 3. 방아쇠 당기기 (장전된 상태에서 현재가가 타겟가 이하로 뚫고 내려왔을 때)
+            if is_sniper_armed and target_buy_price > 0 and curr_p <= target_buy_price:
                 
                 is_rev = cfg.get_reverse_state(t).get("is_active", False)
                 if is_rev:
@@ -262,7 +263,6 @@ async def scheduled_sniper_monitor(context):
                                 if not buy_unfilled:
                                     cfg.set_lock(t, "SNIPER") 
                                     
-                                    # 🦇 [V19.10] 타임존 경계 오류 수정: KST 대신 EST 기준 날짜 사용
                                     today_est_str = datetime.datetime.now(est).strftime('%Y%m%d')
                                     execs = await asyncio.to_thread(broker.get_execution_history, t, today_est_str, today_est_str)
                                     
@@ -271,10 +271,11 @@ async def scheduled_sniper_monitor(context):
                                         computed_price = get_actual_execution_price(execs, buy_qty, '02')
                                         if computed_price > 0: actual_buy_price = computed_price
 
-                                    msg = f"💥 <b>[{t}] V19.1 하이브리드 덫 명중! ({trigger_reason} 이탈)</b>\n"
-                                    msg += f"📉 실시간 현재가(${curr_p:.2f})가 <b>[{trigger_reason}]</b> 기준선(${target_buy_price:.2f})마저 뚫었습니다!\n"
+                                    # 🎯 메시지 포맷 V20.0으로 업데이트
+                                    msg = f"💥 <b>[{t}] V20.0 절대 방어선 덫 명중! ({trigger_reason} 이탈)</b>\n"
+                                    msg += f"📉 실시간 현재가(${curr_p:.2f})가 <b>[절대 방어선]</b>(${target_buy_price:.2f})마저 뚫었습니다!\n"
                                     msg += f"🎯 <b>최적의 실제 체결 단가(${actual_buy_price:.2f})에 {buy_qty}주 지정가 덫이 완벽하게 체결</b>되었습니다!\n"
-                                    msg += "🔫 당일 스나이퍼 활동을 짜릿하게 종료합니다."
+                                    msg += "🔫 당일 스나이퍼 매수 활동을 짜릿하게 종료합니다."
                                     await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                                     hunt_success = True
                                     break
@@ -290,8 +291,8 @@ async def scheduled_sniper_monitor(context):
                 now_ts = time.time()
                 fail_history = app_data.setdefault('sniper_fail_ts', {})
                 if now_ts - fail_history.get(t, 0) > 3600:
-                    msg = f"🛡️ <b>[{t}] V19.1 하이브리드 덫 기습 실패 (1시간 쿨타임 진입)</b>\n"
-                    msg += f"📉 하이브리드 타격선(${target_buy_price:.2f})에 3회 덫을 놓았으나 전량 체결되지 않았습니다.\n"
+                    msg = f"🛡️ <b>[{t}] V20.0 절대 방어선 덫 기습 실패 (1시간 쿨타임 진입)</b>\n"
+                    msg += f"📉 절대 방어선(${target_buy_price:.2f})에 3회 덫을 놓았으나 전량 체결되지 않았습니다.\n"
                     msg += f"🦇 스나이퍼는 1시간 동안 숨을 죽이며, 일반 방어 매수(LOC) 주문을 호가창에 원상 복구합니다."
                     await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                     fail_history[t] = now_ts
@@ -306,6 +307,9 @@ async def scheduled_sniper_monitor(context):
                         
                 continue
 
+            # ==============================================================
+            # 🔺 아래부터는 상방 스나이퍼 (쿼터 익절 / 잭팟 전량 익절) 감시 로직입니다.
+            # ==============================================================
             target_pct_val = cfg.get_target_profit(t)
             target_price = math.ceil(avg_price * (1 + target_pct_val / 100.0) * 100) / 100.0
             

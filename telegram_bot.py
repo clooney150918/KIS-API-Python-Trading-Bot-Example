@@ -148,27 +148,17 @@ class TelegramController:
                 prev_close = await asyncio.to_thread(self.broker.get_previous_close, t)
                 ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
                 
-                bb_lower = self.cfg.get_daily_bb_lower(t)
-                if (bb_lower is None or bb_lower == 0.0) and self.cfg.get_version(t) == "V17":
-                    try:
-                        bb_lower = await asyncio.to_thread(self.broker.get_bb_lower, t, current_price=curr)
-                    except Exception as e:
-                        bb_lower = await asyncio.to_thread(self.broker.get_bb_lower, t)
-                    
-                    bb_lower = bb_lower if bb_lower is not None else 0.0
-                    self.cfg.set_daily_bb_lower(t, bb_lower)
-                    
+                # 🎯 [V20.0] 불필요한 BB 하한가 조회 및 캐싱 코드 삭제 (지시서 출력 속도 향상)
                 actual_avg = float(h['avg']) if h['avg'] else 0.0
                 safe_prev_close = prev_close if prev_close else 0.0
-                safe_bb_lower = bb_lower if bb_lower else 0.0
                 
+                # 🎯 [V20.0] 스나이퍼 V3 (절대 평단가 기준) 타겟가 및 관망 여부 계산
                 sniper_pct = self.cfg.get_sniper_trigger(t)
-                hybrid_multiplier = (100.0 - sniper_pct) / 100.0
+                hybrid_target = safe_prev_close * (1 - (sniper_pct / 100.0))
                 
-                hybrid_base = min(actual_avg, safe_prev_close) * hybrid_multiplier if actual_avg > 0 and safe_prev_close > 0 else safe_prev_close * hybrid_multiplier
-                
-                hybrid_target = max(safe_bb_lower, hybrid_base)
-                trigger_reason = "BB" if safe_bb_lower >= hybrid_base else f"-{sniper_pct}%"
+                # 물타기 룰: 타겟가가 내 평단가보다 싸야만 발동 (아니면 관망 모드로 표시)
+                is_sniper_active = hybrid_target < actual_avg if actual_avg > 0 else True
+                trigger_reason = f"-{sniper_pct}%" if is_sniper_active else "🛑(불타기 금지 관망)"
                 
                 is_already_ordered = self.cfg.check_lock(t, "REG") or self.cfg.check_lock(t, "SNIPER")
                 
@@ -191,8 +181,8 @@ class TelegramController:
                     'is_locked': is_already_ordered, 'mode': "REG",
                     'is_reverse': plan.get('is_reverse', False), 'star_price': plan.get('star_price', 0.0),
                     'escrow': self.cfg.get_escrow_cash(t),
-                    'bb_lower': safe_bb_lower,
-                    'hybrid_base': hybrid_base,
+                    'bb_lower': 0.0,  # V3에서는 더 이상 사용하지 않음
+                    'hybrid_base': 0.0, # V3에서는 더 이상 사용하지 않음
                     'hybrid_target': hybrid_target,
                     'trigger_reason': trigger_reason,
                     'sniper_trigger': sniper_pct
