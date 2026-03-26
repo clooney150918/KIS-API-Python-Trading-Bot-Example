@@ -105,20 +105,29 @@ class InfiniteStrategy:
             if ma_5day > 0: star_price = round(ma_5day, 2)
             else: star_price = round(avg_price, 2)
 
-            # 💡 [V21.15 긴급 수술] 제논의 역설(리버스 쿼터 잔금 무한 축소) 완벽 방어
-            # 남은 에스크로(escrow_cash)를 계속 4로 나누지 않고, 리버스 기간 동안 발생한 '총 매도 금액(생성된 원금)'을 4로 고정하여 나눔
+            # 💡 [수술 완료] 승승장군님 지정 공식 적용 & 제논의 역설 완벽 방어
+            # "현재 남은 가상의 장부 잔액 + 다시 수혈한 잔액을 더한 후 4분할"
+            # 로직: 마지막 수혈(SELL) 이후 소비된 매수액(BUY)을 역산하여 현재 에스크로에 더하면 '마지막 수혈 직후의 100% 잔고'가 완벽히 산출됨
             ledger = self.cfg.get_ledger()
-            total_sell_in_rev = 0.0
+            buys_after_last_sell = 0.0
+            
             for r in reversed(ledger):
                 if r.get('ticker') == ticker:
                     if r.get('is_reverse', False):
-                        if r['side'] == 'SELL':
-                            total_sell_in_rev += (r['qty'] * r['price'])
+                        if r['side'] == 'BUY':
+                            buys_after_last_sell += (r['qty'] * r['price'])
+                        elif r['side'] == 'SELL':
+                            # 가장 최근의 매도(수혈) 지점을 만나면 탐색을 즉시 중단
+                            break
                     else:
                         break
-                        
-            if total_sell_in_rev > 0:
-                one_portion_amt = total_sell_in_rev / 4.0
+            
+            current_escrow = self.cfg.get_escrow_cash(ticker)
+            # 마지막 수혈 직후 4분할의 기준이 되는 온전한 에스크로 총액
+            escrow_at_last_transfusion = current_escrow + buys_after_last_sell
+            
+            if escrow_at_last_transfusion > 0:
+                one_portion_amt = escrow_at_last_transfusion / 4.0
             else:
                 one_portion_amt = base_portion
         else:
