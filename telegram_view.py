@@ -215,7 +215,6 @@ class TelegramView:
             tracking_info = t_info.get('tracking_info', {}) 
             
             if v_mode == "V17":
-                # 💡 [V22.02] 진공 압축 폼 & 시계열 스나이퍼 텍스트
                 if "가로채기" in proc_status:
                     hit_price = tracking_info.get('hit_price', 0.0)
                     lowest = tracking_info.get('lowest_price', 0.0)
@@ -237,18 +236,17 @@ class TelegramView:
                         body_msg += f"💥 <b>스나이퍼: 명중 완료</b>\n"
                         
                 elif tracking_info.get('is_tracking', False):
-                    # 장전선 이탈 후 장중 바닥 추적 중 (모바일 최적화 2줄)
                     lowest = tracking_info.get('lowest_price', 0.0)
                     trigger_val = 1.5 if t == "SOXL" else 1.0
                     body_msg += f"🎯 <b>장전선 이탈! 장중 바닥 추적 중</b>\n  <b>(최저: ${lowest:.2f} / 목표반등: +{trigger_val}%)</b>\n"
                 elif hybrid_target > 0:
-                    # 고점 대비 방어선 대기 중
-                    body_msg += f"📉 <b>스나이퍼(방어선): ${hybrid_target:.2f} 장전 대기 중</b>\n"
+                    body_msg += f"📉 <b>스나이퍼: {sniper_pct:.2f}% 진폭(TR) 대기</b>\n"
                 else:
                     body_msg += f"📉 <b>스나이퍼: 장전 대기 중</b>\n"
                 
                 if secret_quarter_target > 0:
-                    body_msg += f"🦇 <b>쿼터 스나이퍼: ${secret_quarter_target:.2f} 이상 대기</b>\n"
+                    sq_pct = ((secret_quarter_target - t_info['avg']) / t_info['avg'] * 100) if t_info['avg'] > 0 else 0.0
+                    body_msg += f"🦇 <b>쿼터 스나이퍼: +{sq_pct:.2f}% 이상 대기</b>\n"
 
             body_msg += f"📋 <b>[주문 계획 - {proc_status}]</b>\n"
             
@@ -282,14 +280,64 @@ class TelegramView:
             else:
                 body_msg += f" 💤 주문 없음 (관망/예산소진)\n"
             
-            if v_mode != "V17" and hybrid_target > 0:
-                body_msg += f"\n🎯 <b>참고 방어선(-{sniper_pct:.2f}%): ${hybrid_target:.2f}</b>\n"
-
             body_msg += "\n"
 
         final_msg = header_msg + body_msg
         if not is_trade_active: final_msg += "⛔ 장마감/애프터마켓: 주문 불가"
         return final_msg, InlineKeyboardMarkup(keyboard) if keyboard else None
+
+    def get_settlement_message(self, active_tickers, config, atr_data):
+        msg = "⚙️ <b>[ 현재 설정 및 복리 상태 ]</b>\n\n"
+        keyboard = []
+        
+        for t in active_tickers:
+            ver = config.get_version(t)
+            
+            if ver == "V17":
+                icon = "🦇"
+                ver_display = "V17 시크릿"
+            elif ver == "V14":
+                icon = "💎"
+                ver_display = "무매4"
+            else:
+                icon = "💎"
+                ver_display = "무매3"
+                
+            split_cnt = int(config.get_split_count(t))
+            target_pct = config.get_target_profit(t)
+            comp_rate = config.get_compound_rate(t)
+            
+            msg += f"{icon} <b>{t} ({ver_display} 모드)</b>\n"
+            msg += f"▫️ 분할: {split_cnt}회\n▫️ 목표: {target_pct}%\n▫️ 자동복리: {comp_rate}%\n"
+            
+            if ver == "V17":
+                atr5, atr14 = atr_data.get(t, (0.0, 0.0))
+                weight = config.get_sniper_multiplier(t)
+                base_amp = 7.59 if t == "SOXL" else 6.18
+                final_amp = base_amp * weight
+                
+                msg += f"📊 <b>실시간 시장 지표:</b>\n"
+                msg += f"▫️ ATR5 ({atr5:.1f}%) / ATR14 ({atr14:.1f}%)\n"
+                msg += f"▫️ 타점 가중치: {base_amp}% x {weight} ({final_amp:.2f}%)\n\n"
+            else:
+                msg += "\n"
+                
+            row1 = [
+                InlineKeyboardButton(f"⚙️ {t} 분할", callback_data=f"INPUT:SPLIT:{t}"), 
+                InlineKeyboardButton(f"🎯 {t} 목표", callback_data=f"INPUT:TARGET:{t}"),
+                InlineKeyboardButton(f"💸 {t} 복리", callback_data=f"INPUT:COMPOUND:{t}")
+            ]
+            keyboard.append(row1)
+            
+            row2 = [
+                InlineKeyboardButton(f"🔄 {t} 무매3/무매4 전환", callback_data=f"TOGGLE:VERSION:{t}"),
+                InlineKeyboardButton(f"✂️ {t} 액면보정", callback_data=f"INPUT:STOCK_SPLIT:{t}")
+            ]
+            if ver == "V17":
+                row2.append(InlineKeyboardButton(f"📉 {t} 타점가중치", callback_data=f"INPUT:SNIPER:{t}"))
+            keyboard.append(row2)
+            
+        return msg, InlineKeyboardMarkup(keyboard)
 
     def create_ledger_dashboard(self, ticker, qty, avg, invested, sold, records, t_val, split, is_history=False, is_reverse=False):
         groups = {}

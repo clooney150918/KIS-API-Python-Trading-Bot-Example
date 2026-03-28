@@ -628,3 +628,43 @@ class KoreaInvestmentBroker:
             print(f"❌ [한투 API] 고가/저가 우회 조회 실패: {e}")
             
         return 0.0, 0.0
+
+    def get_atr_data(self, ticker):
+        """
+        [V22.02] 실시간 ATR5 및 ATR14 (변동성 지표) 연산 모듈
+        야후 파이낸스의 과거 일봉 데이터를 기반으로 최근 5일, 14일간의 평균 변동폭(%)을 산출합니다.
+        """
+        try:
+            stock = yf.Ticker(ticker)
+            # 14일 ATR을 구하기 위해 최소 15일 이상의 데이터 필요 (여유있게 30일치 확보)
+            hist = stock.history(period="30d")
+            
+            if hist.empty or len(hist) < 15:
+                return 0.0, 0.0
+                
+            # True Range (TR) 계산: max(당일고가-당일저가, abs(당일고가-전일종가), abs(당일저가-전일종가))
+            hist['Prev_Close'] = hist['Close'].shift(1)
+            hist['TR'] = hist.apply(lambda row: max(
+                row['High'] - row['Low'],
+                abs(row['High'] - row['Prev_Close']) if not pd.isna(row['Prev_Close']) else 0,
+                abs(row['Low'] - row['Prev_Close']) if not pd.isna(row['Prev_Close']) else 0
+            ), axis=1)
+            
+            # 단순 이동 평균(SMA) 방식으로 5일 및 14일 평균 TR 산출
+            hist['ATR5'] = hist['TR'].rolling(window=5).mean()
+            hist['ATR14'] = hist['TR'].rolling(window=14).mean()
+            
+            last_row = hist.iloc[-1]
+            last_close = float(last_row['Close'])
+            
+            if last_close > 0:
+                # 퀀트 표준에 맞춰 현재가 대비 백분율(%)로 변환
+                atr5_pct = (float(last_row['ATR5']) / last_close) * 100
+                atr14_pct = (float(last_row['ATR14']) / last_close) * 100
+                return round(atr5_pct, 1), round(atr14_pct, 1)
+                
+            return 0.0, 0.0
+            
+        except Exception as e:
+            print(f"⚠️ [Broker] 실시간 ATR 연산 실패 ({ticker}): {e}")
+            return 0.0, 0.0

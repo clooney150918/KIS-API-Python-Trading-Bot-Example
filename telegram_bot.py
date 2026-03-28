@@ -513,45 +513,20 @@ class TelegramController:
 
     async def cmd_settlement(self, update, context):
         if not self._is_admin(update): return
-        msg = "⚙️ <b>[ 현재 설정 및 복리 상태 ]</b>\n\n"
-        keyboard = []
-        for t in self.cfg.get_active_tickers():
-            ver = self.cfg.get_version(t)
-            
-            if ver == "V17":
-                icon = "🦇"
-                ver_display = "V17 시크릿"
-            elif ver == "V14":
-                icon = "💎"
-                ver_display = "무매4"
+        
+        active_tickers = self.cfg.get_active_tickers()
+        atr_data = {}
+        
+        status_msg = await update.message.reply_text("⏳ <b>실시간 시장 지표(ATR) 연산 중...</b>", parse_mode='HTML')
+        
+        for t in active_tickers:
+            if self.cfg.get_version(t) == "V17":
+                atr_data[t] = await asyncio.to_thread(self.broker.get_atr_data, t)
             else:
-                icon = "💎"
-                ver_display = "무매3"
+                atr_data[t] = (0.0, 0.0)
                 
-            msg += f"{icon} <b>{t} ({ver_display} 모드)</b>\n▫️ 분할: <b>{int(self.cfg.get_split_count(t))}회</b>\n▫️ 목표: <b>{self.cfg.get_target_profit(t)}%</b>\n▫️ 자동복리: <b>{self.cfg.get_compound_rate(t)}%</b>\n"
-            
-            if ver == "V17":
-                sniper_multiplier = self.cfg.get_sniper_multiplier(t)
-                msg += f"▫️ 스나이퍼 타점 가중치: <b>x {sniper_multiplier}</b>\n\n"
-            else:
-                msg += "\n"
-                
-            row1 = [
-                InlineKeyboardButton(f"⚙️ {t} 분할", callback_data=f"INPUT:SPLIT:{t}"), 
-                InlineKeyboardButton(f"🎯 {t} 목표", callback_data=f"INPUT:TARGET:{t}"),
-                InlineKeyboardButton(f"💸 {t} 복리", callback_data=f"INPUT:COMPOUND:{t}")
-            ]
-            keyboard.append(row1)
-            
-            row2 = [
-                InlineKeyboardButton(f"🔄 {t} 무매3/무매4 전환", callback_data=f"TOGGLE:VERSION:{t}"),
-                InlineKeyboardButton(f"✂️ {t} 액면보정", callback_data=f"INPUT:STOCK_SPLIT:{t}")
-            ]
-            if ver == "V17":
-                row2.append(InlineKeyboardButton(f"📉 {t} 타점가중치", callback_data=f"INPUT:SNIPER:{t}"))
-            keyboard.append(row2)
-            
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        msg, markup = self.view.get_settlement_message(active_tickers, self.cfg, atr_data)
+        await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
 
     async def cmd_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update): return
