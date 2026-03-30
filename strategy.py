@@ -110,23 +110,18 @@ class InfiniteStrategy:
                 star_price = safe_floor_price
 
             ledger = self.cfg.get_ledger()
-            buys_after_last_sell = 0.0
+            total_sell_amount = 0.0
             
             for r in reversed(ledger):
                 if r.get('ticker') == ticker:
                     if r.get('is_reverse', False):
-                        if r['side'] == 'BUY':
-                            buys_after_last_sell += (r['qty'] * r['price'])
-                        elif r['side'] == 'SELL':
-                            break
+                        if r['side'] == 'SELL':
+                            total_sell_amount += (r['qty'] * r['price'])
                     else:
                         break
             
-            current_escrow = self.cfg.get_escrow_cash(ticker)
-            escrow_at_last_transfusion = current_escrow + buys_after_last_sell
-            
-            if escrow_at_last_transfusion > 0:
-                one_portion_amt = escrow_at_last_transfusion / 4.0
+            if total_sell_amount > 0:
+                one_portion_amt = total_sell_amount / 4.0
             else:
                 one_portion_amt = base_portion
         else:
