@@ -12,6 +12,9 @@ class VwapStrategy:
     def __init__(self, config):
         self.cfg = config
         
+        # 💡 [V23.05] 누적 잔차 이월 (Cumulative Residual Carry-over) 메모리 초기화
+        self.residual_tracker = {"BUY": {}, "SELL": {}}
+        
         # 💡 [V23.01 멀티 코어 엔진] 백테스트 기반 종목별 1년 평균 U-Curve 가중치 딕셔너리
         self.raw_profiles = {
             "SOXL": [
@@ -96,6 +99,10 @@ class VwapStrategy:
                 "bin_weight": 0.0
             }
             
+        # 💡 스케줄러 첫 진입 시 잔차 메모리 초기화
+        if bin_idx == 0:
+            self.residual_tracker[side][ticker] = 0.0
+            
         # 💡 종목(ticker)에 맞는 가중치 프로파일 동적 로드
         vol_profile = self._get_vol_profile(ticker)
         current_weight = vol_profile[bin_idx]
@@ -110,38 +117,36 @@ class VwapStrategy:
         
         orders = []
         process_status = f"🎯VWAP({bin_idx+1}/30분)"
-        allocated_qty = 0
+        
+        prev_residual = self.residual_tracker[side].get(ticker, 0.0)
+        exact_qty = 0.0
         
         if side == "BUY":
             # 예산 기반 분할 (Budget Slicing)
             slice_budget = remaining_target * slice_ratio
-            allocated_qty = math.floor(slice_budget / current_price)
+            exact_qty = slice_budget / current_price
             
-            if allocated_qty > 0:
-                # 💡 실시간 1호가 정밀 타격용. 기준가는 순수 현재가로 세팅
-                safe_price = max(0.01, round(current_price, 2)) 
-                orders.append({
-                    "side": "BUY", 
-                    "price": safe_price, 
-                    "qty": allocated_qty, 
-                    "type": "LIMIT", 
-                    "desc": f"🎯VWAP매수({bin_idx+1})"
-                })
-                
         elif side == "SELL":
             # 수량 기반 분할 (Quantity Slicing)
-            allocated_qty = math.floor(remaining_target * slice_ratio)
+            exact_qty = remaining_target * slice_ratio
             
-            # 자연 종료 원칙 엄수
-            if allocated_qty > 0:
-                safe_price = max(0.01, round(current_price, 2))
-                orders.append({
-                    "side": "SELL", 
-                    "price": safe_price, 
-                    "qty": allocated_qty, 
-                    "type": "LIMIT", 
-                    "desc": f"🎯VWAP매도({bin_idx+1})"
-                })
+        total_qty = exact_qty + prev_residual
+        allocated_qty = math.floor(total_qty)
+        
+        # 💡 순수 소수점 잔차 이월
+        self.residual_tracker[side][ticker] = total_qty - allocated_qty
+        
+        if allocated_qty > 0:
+            safe_price = max(0.01, round(current_price, 2)) 
+            desc_tag = f"🎯VWAP매수({bin_idx+1})" if side == "BUY" else f"🎯VWAP매도({bin_idx+1})"
+            
+            orders.append({
+                "side": side, 
+                "price": safe_price, 
+                "qty": allocated_qty, 
+                "type": "LIMIT", 
+                "desc": desc_tag
+            })
 
         return {
             "orders": orders,

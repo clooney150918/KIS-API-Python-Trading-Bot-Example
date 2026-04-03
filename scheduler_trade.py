@@ -1,6 +1,6 @@
 # ==========================================================
-# [scheduler_trade.py]
-# ⚠️ VWAP Lock-in 핑퐁 버그 픽스 패치 완료 버전
+# [scheduler_trade.py] - Part 1
+# ⚠️ VWAP Lock-in 핑퐁 버그 픽스 및 IndentationError 교정 완료 버전
 # ==========================================================
 import os
 import logging
@@ -598,6 +598,10 @@ async def scheduled_sniper_monitor(context):
             app_data['sniper_timeout_ts'] = now_ts
     except Exception as e:
         logging.error(f"🚨 스나이퍼 모니터 에러: {e}")
+# ==========================================================
+# [scheduler_trade.py] - Part 2
+# ⚠️ VWAP Lock-in 핑퐁 버그 픽스 및 리버스 바이패스 패치 완료
+# ==========================================================
 
 async def scheduled_vwap_trade(context):
     if not is_market_open(): return
@@ -721,6 +725,11 @@ async def scheduled_vwap_trade(context):
             # ==========================================================
             for t in cfg.get_active_tickers():
                 if cfg.get_version(t) != "V_VWAP": 
+                    continue
+                
+                # 💡 [V23.05 핵심 수술] 리버스 모드 판별 및 VWAP 자동 바이패스
+                is_rev = cfg.get_reverse_state(t).get("is_active", False)
+                if is_rev:
                     continue
                     
                 h = holdings.get(t, {'qty': 0, 'avg': 0})
