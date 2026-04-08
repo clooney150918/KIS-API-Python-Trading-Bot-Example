@@ -2,6 +2,7 @@
 # [scheduler_core.py]
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 💡 [V24.09 패치] API 결측치(None) 방어용 Safe Casting 전면 이식 완료
+# 💡 [V24.10 수술] V_REV 동적 에스크로 차감 방어 (이중 차감 방지)
 # ==========================================================
 import os
 import logging
@@ -45,15 +46,30 @@ def get_budget_allocation(cash, tickers, cfg):
     
     # 💡 [핵심 수술] API 결측치(None) 방어 및 순수 가용 예산(Free Cash) 도출
     safe_cash = float(cash) if cash is not None else 0.0
-    total_locked = float(cfg.get_total_locked_cash() or 0.0)
-    free_cash = max(0.0, safe_cash - total_locked)
+    
+    # 💡 [V24.10 수술] 동적 에스크로 락다운 (예산 이중 차감 방어)
+    dynamic_total_locked = 0.0
+    for tx in tickers:
+        rev_state = cfg.get_reverse_state(tx)
+        if rev_state.get("is_active", False):
+            # KIS 계좌에 LOC 지정가 등으로 묶였는지(Flag) 확인. getattr 방어.
+            is_locked = getattr(cfg, 'get_order_locked', lambda x: False)(tx)
+            if not is_locked:
+                # 주문이 안 들어간 경우에만 방어를 위해 봇 내부 차감 실행
+                dynamic_total_locked += float(cfg.get_escrow_cash(tx) or 0.0)
+
+    free_cash = max(0.0, safe_cash - dynamic_total_locked)
     
     for tx in sorted_tickers:
         rev_state = cfg.get_reverse_state(tx)
         is_rev = rev_state.get("is_active", False)
         
-        # strategy.py의 `real_available_cash = available_cash - other_locked_cash` 역산 앵커링
-        other_locked = float(cfg.get_total_locked_cash(exclude_ticker=tx) or 0.0)
+        # 본인 종목을 제외한 타 종목의 동적 잠금 예산 역산 앵커링
+        other_locked = dynamic_total_locked
+        if is_rev:
+            is_locked = getattr(cfg, 'get_order_locked', lambda x: False)(tx)
+            if not is_locked:
+                other_locked -= float(cfg.get_escrow_cash(tx) or 0.0)
         
         if is_rev:
             # 💡 [핵심 수술] 리버스 모드 종목은 공유 예산(rem_cash) 탈취를 금지하고 오직 자신의 에스크로만 락온
@@ -157,6 +173,11 @@ async def scheduled_force_reset(context):
         chat_id = context.job.chat_id
         
         cfg.reset_locks()
+        
+        # 💡 [V24.10 수술] 17:00 매매 스케줄러 초기화 시 주문 상태 플래그 전면 해제
+        for t in cfg.get_active_tickers():
+            if hasattr(cfg, 'set_order_locked'):
+                cfg.set_order_locked(t, False)
         
         async with tx_lock:
             _, holdings = broker.get_account_balance()

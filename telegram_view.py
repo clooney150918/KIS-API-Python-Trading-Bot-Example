@@ -1,7 +1,7 @@
 # ==========================================================
 # [telegram_view.py] - Part 1/2 부 (상반부)
 # ⚠️ V-REV 장부 강제 초기화 3중 경고 방어막 유지
-# 💡 [핵심] 갓 모드 큐 관리 메뉴 UI 간소화 (층수/시간 제거) 완료
+# 💡 [핵심] 갓 모드 큐 관리 메뉴 UI 간소화 완료
 # ==========================================================
 import os
 import math
@@ -163,9 +163,6 @@ class TelegramView:
             
         return msg, InlineKeyboardMarkup(keyboard) if keyboard else None
 
-    # ==========================================================
-    # 💡 [핵심 수술] 갓 모드 큐 정밀 타격 관리 (큐 번호 추가 및 라우팅 변경)
-    # ==========================================================
     def get_queue_management_menu(self, ticker, q_data):
         msg = f"🗄️ <b>[ {ticker} V-REV 큐(Queue) 정밀 타격 통제소 ]</b>\n\n"
         msg += "▫️ 현재 장부에 적재된 날짜별 지층입니다.\n"
@@ -185,10 +182,9 @@ class TelegramView:
                 price = item.get('price', 0.0)
                 lot_type = item.get('type', '')
 
-                # 💡 [제안 2] 기초 지층(INIT_TRANSFERRED)은 ❌ 버튼 미표시
                 if lot_type == "INIT_TRANSFERRED":
                     btn_text = f"[{floor}] {short_date} | {qty}주 | ${price:.2f} 🔒(보호)"
-                    callback_data = "IGNORE" # 클릭 무시
+                    callback_data = "IGNORE"
                 else:
                     btn_text = f"[{floor}] {short_date} | {qty}주 | ${price:.2f} ❌"
                     callback_data = f"DEL_REQ:{ticker}:{date_str}"
@@ -216,10 +212,20 @@ class TelegramView:
 # ==========================================================
 # [telegram_view.py] - Part 2/2 부 (하반부)
 # ⚠️ V-REV 설정줄 숨김 및 종목 간 띄어쓰기(엔터) 간격 완벽 교정
-# 💡 [핵심] 0주 진입 시 UI 텍스트 오버라이드 (1.15배 / 0.975배 디커플링)
+# 💡 [핵심] 주문 체결 상태(is_locked) 기반 동적 RP 권장액 산출 엔진 탑재
 # ==========================================================
 
     def create_sync_report(self, status_text, dst_text, cash, rp_amount, ticker_data, is_trade_active, p_trade_data=None):
+        # 💡 [핵심 수술] LOC 주문이 아직 들어가지 않은(is_locked가 False인) 종목의 필수 예산만 합산
+        total_required_budget = sum(
+            t_info.get('one_portion', 0.0) 
+            for t_info in ticker_data 
+            if not t_info.get('is_locked', False)
+        )
+        
+        # 💡 [핵심 수술] KIS 주문가능금액(cash)에서 미주문 필수 예산만 선제적 차감 (이중 차감 방어)
+        dynamic_rp_amount = max(0.0, cash - total_required_budget)
+        
         total_locked = sum(t_info.get('escrow', 0.0) for t_info in ticker_data)
         
         header_msg = f"📜 <b>[ 통합 지시서 ({status_text}) ]</b>\n📅 <b>{dst_text}</b>\n"
@@ -232,7 +238,7 @@ class TelegramView:
         else:
             header_msg += f"💵 주문가능금액: ${cash:,.2f}\n"
             
-        header_msg += f"🏛️ RP 투자권장: ${rp_amount:,.2f}\n"
+        header_msg += f"🏛️ RP 투자권장: ${dynamic_rp_amount:,.2f}\n"
         header_msg += "----------------------------\n\n"
         
         body_msg = ""
@@ -406,7 +412,6 @@ class TelegramView:
             if v_mode == "V_REV":
                 body_msg += f"📋 <b>[주문 가이던스 - ⚖️다중 LIFO 제어]</b>\n"
                 
-                # 💡 [핵심 수술] 0주 보유 시 UI 텍스트 강제 오버라이드 (1.15배 / 0.975배 디커플링)
                 qty = t_info.get('qty', 0)
                 alloc_cash = t_info.get('one_portion', 0.0)
                 prev_c = t_info.get('prev_close', 0.0)
@@ -428,7 +433,6 @@ class TelegramView:
                     raw_guidance = raw_guidance.rstrip('\n')
                     body_msg += raw_guidance + "\n"
                 
-                # 💡 [핵심 수술] V-REV Buy 2 단독 줍줍 5단계 그물망 범위 역산 및 노출
                 if alloc_cash > 0 and prev_c > 0:
                     p2_trigger = round(prev_c * 0.975, 2)
                     if p2_trigger > 0:
