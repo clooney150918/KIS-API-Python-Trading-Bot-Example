@@ -3,11 +3,8 @@
 # ⚠️ 수술 내역: 
 # 1. /reset 시 삼위일체(본장부, 에스크로, 백업장부, 큐장부) 100% 소각 엔진 탑재
 # 2. 0주 도달 시 마이너스 수익이라도 장부를 비우는(강제 손절 리셋) 로직 개방
-# 💡 [V24.15 대수술] vwap_strategy 의존성 100% 적출 및 2대 코어 최적화
-# 💡 [V24.16 팩트 동기화] /sync 지시서 V-REV 0주 및 1층 가이던스 타점 코어 엔진 동기화 완료
-# 💡 [V24.16 팩트 동기화] 누락된 핸들러 및 콜백 라우터 100% 무손실 복원 완료
-# 💡 [V24.18 수술] 수동 긴급 수혈(Emergency MOC) 3중 경고 및 장외시간 원천 차단 엔진 신설
 # 💡 [V24.18 하이브리드] AVWAP 하이브리드 토글(ON/OFF) 2단계 경고 라우터 융합
+# 🚨 [V25.01 UI 교정] /sync 지시서 내 AVWAP 잉여 예산 표기 오류 수정 (팩트 동기화)
 # ==========================================================
 import logging
 import datetime
@@ -23,7 +20,6 @@ from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, Mes
 from telegram_view import TelegramView 
 
 class TelegramController:
-    # 💡 [핵심 수술] vwap_strategy 의존성 및 변수 100% 적출 완료
     def __init__(self, config, broker, strategy, tx_lock=None, queue_ledger=None, strategy_rev=None):
         self.cfg = config
         self.broker = broker
@@ -79,9 +75,8 @@ class TelegramController:
             rev_state = self.cfg.get_reverse_state(tx)
             is_rev = rev_state.get("is_active", False)
             
-            # 💡 [V24.18 하이브리드] 기본 모드는 2대 코어로 100% 롤백되어 예산 할당을 원복함. (AVWAP은 V-REV 내부에서 잉여 현금을 가져감)
             if is_rev:
-                allocated[tx] = 0.0 # 리버스는 0 (기존 잔금쿼터 로직에서 처리됨)
+                allocated[tx] = 0.0 
             else:
                 split = self.cfg.get_split_count(tx)
                 portion = self.cfg.get_seed(tx) / split if split > 0 else 0
@@ -298,16 +293,12 @@ class TelegramController:
                 actual_qty = int(h['qty'])
                 
                 safe_prev_close = prev_close if prev_close else 0.0
-                
                 idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
-                
                 dynamic_pct_obj = await asyncio.to_thread(self.broker.get_dynamic_sniper_target, idx_ticker)
-                
                 dynamic_pct = float(dynamic_pct_obj) if dynamic_pct_obj is not None else (8.79 if t == "SOXL" else 4.95)
                 
                 tracking_status = tracking_cache.get(t, {})
                 current_day_high = tracking_status.get('day_high', day_high) 
-                
                 hybrid_target_price = current_day_high * (1 - (abs(dynamic_pct) / 100.0))
                 trigger_reason = f"-{abs(dynamic_pct)}%"
                 is_already_ordered = self.cfg.check_lock(t, "REG") or self.cfg.check_lock(t, "SNIPER")
@@ -321,7 +312,6 @@ class TelegramController:
                 split = self.cfg.get_split_count(t)
                 seed = self.cfg.get_seed(t)
                 ver = self.cfg.get_version(t)
-                
                 t_val = plan.get('t_val', 0.0)
                 is_rev = plan.get('is_reverse', False)
                 
@@ -333,12 +323,10 @@ class TelegramController:
                     real_name = "지표"
                     
                 vol_status = "ON" if real_val >= 20.0 else "OFF"
-                
                 v_rev_q_qty = 0
                 v_rev_q_lots = 0
                 v_rev_guidance = ""
                 
-                # 💡 [V24.18 하이브리드] V-REV 모드일 때만 AVWAP 추가 스캔
                 is_avwap_active = False
                 avwap_budget = 0.0
                 avwap_qty = 0
@@ -357,7 +345,6 @@ class TelegramController:
                     one_portion_cash = seed * 0.15
                     plan['one_portion'] = one_portion_cash
                     one_portion_qty = math.floor(one_portion_cash / curr) if curr > 0 else 0
-                    
                     half_portion_cash = one_portion_cash * 0.5
                     
                     if q_list:
@@ -385,14 +372,14 @@ class TelegramController:
                     v_rev_guidance += f" 🔴 매수1(Buy1): ${b1_price:.2f} 진입 시 <b>{b1_qty}주</b>\n"
                     v_rev_guidance += f" 🔴 매수2(Buy2): ${b2_price:.2f} 진입 시 <b>{b2_qty}주</b>"
 
-                    # 💡 [V24.18 하이브리드] V-REV 모드 내부의 AVWAP 엔진 파싱
                     if hasattr(self.cfg, 'get_avwap_hybrid_mode') and self.cfg.get_avwap_hybrid_mode(t):
                         is_avwap_active = True
                         avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
                         avwap_avg = tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
                         
-                        v_rev_locked_cash = half_portion_cash * 2 # 대충 V-REV가 가져갈 최대 주문 보증금
-                        avwap_budget = max(0.0, cash - v_rev_locked_cash) # 나머지 전체 잉여현금
+                        # 🚨 [UI 교정] AVWAP 엔진은 KIS가 반환한 '실시간 주문가능금액' 전체를 기동 예산으로 사용
+                        # 기존의 인위적 가상 차감 로직을 제거하여 팩트 동기화
+                        avwap_budget = cash
                         
                         if tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
                             avwap_status_txt = "🛑 영구동결 (SHUTDOWN)"
@@ -1129,9 +1116,6 @@ class TelegramController:
                 safe_avg = float(h.get('avg') or 0.0)
                 safe_qty = int(float(h.get('qty') or 0))
 
-                # =========================================================
-                # 🚨 [긴급 수술] V-REV 예방적 LOC 덫 수동 장전 라우터 분리
-                # =========================================================
                 if ver == "V_REV":
                     if not getattr(self, 'queue_ledger', None):
                         from queue_ledger import QueueLedger
@@ -1187,9 +1171,7 @@ class TelegramController:
                         
                     await context.bot.send_message(update.effective_chat.id, msg, parse_mode='HTML')
                     return
-                # =========================================================
                 
-                # [기존 V14 전용 오리지널 강제 전송 로직 유지]
                 ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
                 plan = self.strategy.get_plan(t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t])
                 
