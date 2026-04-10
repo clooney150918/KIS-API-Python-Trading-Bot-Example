@@ -4,6 +4,7 @@
 # 💡 [V24.15 대수술] 2대 코어(V14, V-REV) 체제 UI 최적화 및 V_VWAP 적출
 # 💡 [V24.18 수술] V-REV 큐 관리 메뉴 내 수동 긴급 수혈 3중 경고 방어막 UI 탑재
 # 💡 [V24.18 하이브리드] 차세대 AVWAP 가동 전 3대 리스크 강력 경고 팝업 UI 신설
+# 🚨 [V25.14 UI 팩트 교정] AVWAP 하드스탑 텍스트의 MOC 논리 오류 소각 및 듀얼 레퍼런싱(지정가) 3-Strike 팩트 동기화
 # ==========================================================
 import os
 import math
@@ -14,7 +15,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class TelegramView:
     def __init__(self):
-        # 💡 리눅스 서버(Ubuntu 등) 폰트 파일 시스템 전방위 추적 경로 확장
         self.bold_font_paths = [
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
@@ -112,16 +112,16 @@ class TelegramView:
         ]
         return msg, InlineKeyboardMarkup(keyboard)
 
-    # 💡 [V24.18 신규] AVWAP 하이브리드 전술 ON 2단계 승인 팝업
+    # 🚨 MODIFIED: [V25.14 UI 팩트 교정] MOC 단어 소각 및 듀얼 레퍼런싱(지정가) 3-Strike 팩트 동기화
     def get_avwap_warning_menu(self, ticker):
         msg = (
-            f"🛑 <b>[ 초긴급 경고: {ticker} 차세대 AVWAP 당일 청산 모드 가동 ]</b>\n\n"
-            f"이 기능은 V-REV가 사용하고 남은 <b>계좌 내 모든 가용 현금 100%</b>를 일시적으로 끌어와, 당일 장중 VWAP -2% 타점에 전액 몰빵(All-in)하는 초공격적 전술입니다.\n\n"
-            f"⚠️ <b>[ 3대 치명적 리스크 ]</b>\n"
-            f"1️⃣ <b>확정 손절:</b> 진입 후 주가가 반등하지 못하고 -3% 하락 시, V-REV 지층과 무관하게 <b>전량 시장가(MOC) 손절</b>이 기계적으로 격발되며 막대한 현금 손실이 확정됩니다.\n"
-            f"2️⃣ <b>현금 고갈:</b> 장중 AVWAP이 현금을 모두 들고 교전하는 동안, 본대인 V-REV 엔진의 긴급 수혈이나 추가 매수가 일시적으로 마비될 수 있습니다.\n"
-            f"3️⃣ <b>타임 스탑:</b> 수익이 나지 않더라도 장 마감 5분 전(15:55 EST)에 무조건 <b>전량 강제 청산</b>됩니다.\n\n"
-            f"🔥 <b>이 모든 펀더멘털 붕괴 리스크와 -3% 확정 손실을 감수하고서라도 AVWAP 스나이퍼를 가동하시겠습니까?</b>"
+            f"🛑 <b>[ 초긴급 경고: {ticker} 듀얼 레퍼런싱 AVWAP 암살자 가동 ]</b>\n\n"
+            f"이 기능은 V-REV가 사용하고 남은 <b>계좌 내 모든 가용 현금 100%</b>를 일시적으로 끌어와, 파생상품의 노이즈를 배제한 <b>기초자산(SOXX) 기준 -0.67% (파생 -2% 상당)</b> 딥매수 타점에 전액 몰빵(All-in)하는 초공격적 전술입니다.\n\n"
+            f"⚠️ <b>[ 3대 강제 청산 (3-Strike Exit) 리스크 ]</b>\n"
+            f"1️⃣ <b>확정 손절:</b> 기초자산 기준 -1% (파생 -3% 상당) 하락 시, V-REV 지층과 무관하게 즉각 <b>전량 지정가(Limit) 하드스탑 손절</b>이 격발되어 막대한 현금 손실이 확정됩니다.\n"
+            f"2️⃣ <b>스퀴즈 익절:</b> 기초자산 기준 +1% (파생 +3% 상당) 반등 시 홈런 익절(지정가) 후 당일 작전을 영구 셧다운합니다.\n"
+            f"3️⃣ <b>타임 스탑:</b> 수익이 나지 않더라도 장 마감 5분 전(15:55 EST)에 오버나이트 원천 차단을 위해 무조건 <b>전량 덤핑 청산</b>됩니다.\n\n"
+            f"🔥 <b>이 모든 펀더멘털 붕괴 리스크와 확정 손실을 감수하고서라도 AVWAP 스나이퍼를 가동하시겠습니까?</b>"
         )
         keyboard = [
             [InlineKeyboardButton("💥 네, 리스크를 인지했으며 즉시 가동합니다", callback_data=f"MODE:AVWAP_ON:{ticker}")],
