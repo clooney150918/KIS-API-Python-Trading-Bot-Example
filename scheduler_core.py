@@ -1,8 +1,9 @@
 # ==========================================================
-# [scheduler_core.py]
+# [scheduler_core.py] - Part 1/2 부 (상반부)
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 💡 [V24.09 패치] API 결측치(None) 방어용 Safe Casting 전면 이식 완료
 # 💡 [V24.10 수술] V_REV 동적 에스크로 차감 방어 (이중 차감 방지)
+# 🚨 [V25.02 수술] 리버스 모드 일일 1회 확정 탈출(TQQQ -15% / SOXL -20%) 엔진 팩트 이식
 # ==========================================================
 import os
 import logging
@@ -149,6 +150,11 @@ async def scheduled_token_check(context):
     # 💡 [수술 완료] 오타(tothread) 교정
     await asyncio.to_thread(context.job.data['broker']._get_access_token, force=True)
     logging.info("🔑 [API 토큰 갱신] 토큰 갱신이 안전하게 완료되었습니다.")
+# ==========================================================
+# [scheduler_core.py] - Part 2/2 부 (하반부)
+# 🚨 [V25.02 핵심 수술] 리버스 모드 절대 하드스탑(TQQQ -15% / SOXL -20%) 확정 탈출 엔진 이식
+# 💡 가변 변수(exit_target) 의존성 100% 적출 및 타임 패러독스 원천 차단
+# ==========================================================
 
 async def scheduled_force_reset(context):
     kst = pytz.timezone('Asia/Seoul')
@@ -200,9 +206,11 @@ async def scheduled_force_reset(context):
                 
                 if curr_p > 0 and actual_avg > 0:
                     curr_ret = (curr_p - actual_avg) / actual_avg * 100.0
-                    exit_target = float(rev_state.get("exit_target") or 0.0)
                     
-                    if curr_ret >= exit_target:
+                    # 🚨 [V25.02 핵심 수술] 가변 exit_target 의존성 100% 적출 및 절대 하드스탑 팩트 이식
+                    exit_threshold = -15.0 if t == "TQQQ" else -20.0
+                    
+                    if curr_ret >= exit_threshold:
                         cfg.set_reverse_state(t, False, 0, 0.0)
                         cfg.clear_escrow_cash(t)
                         
@@ -215,7 +223,7 @@ async def scheduled_force_reset(context):
                         if changed:
                             cfg._save_json(cfg.FILES["LEDGER"], ledger_data)
                             
-                        msg_addons += f"\n🌤️ <b>[{t}] 리버스 목표 달성({curr_ret:.2f}%)!</b> 격리 병동 졸업 및 Escrow 해제 완료!"
+                        msg_addons += f"\n🌤️ <b>[{t}] 리버스 확정 탈출 조건 달성 (수익률: {curr_ret:.2f}% >= 기준: {exit_threshold}%)!</b>\n▫️ 격리 병동을 즉시 폐쇄하고 V14 본대로 완벽히 복귀했습니다."
                     else:
                         cfg.increment_reverse_day(t)
                 else:
@@ -223,7 +231,7 @@ async def scheduled_force_reset(context):
             else:
                 cfg.increment_reverse_day(t)
                 
-        final_msg = f"🔓 <b>[{target_hour}:00] 시스템 초기화 완료 (매매 잠금 해제 & 고점 관측 센서 가동)</b>" + msg_addons
+        final_msg = f"🔓 <b>[{target_hour}:00] 시스템 일일 초기화 완료 (매매 잠금 해제 & 팩트 스캔)</b>" + msg_addons
         await context.bot.send_message(chat_id=chat_id, text=final_msg, parse_mode='HTML')
         
     except Exception as e:
