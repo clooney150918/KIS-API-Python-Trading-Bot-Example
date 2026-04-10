@@ -2,6 +2,7 @@
 # [strategy_v14.py] - Part 1/2 부 (상반부)
 # ⚠️ 오리지널 V14(무매4) & 클래식 리버스 모드 독립 플러그인
 # 💡 V17 및 VWAP 등 타 모드 간섭 로직 100% 적출 완료
+# 🚨 [긴급 수술] 대박익절(리버스 생략) 로직 누수 방어 및 100% 스윕 피니셔 탑재 완료
 # ==========================================================
 import math
 import os
@@ -213,8 +214,22 @@ class V14Strategy:
                 orders = core_orders + bonus_orders
                 return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
 
+            # ==========================================================
+            # 🚨 [긴급 수술] 대박익절(리버스 생략) 누수 방어 및 스윕 피니셔 발사
+            # ==========================================================
             if is_jackpot_reached and (t_val > (split - 1) or is_money_short):
                 process_status = "🎉대박익절(리버스생략)"
+                if qty > 0:
+                    core_orders.append({"side": "SELL", "price": target_price, "qty": qty, "type": "LIMIT", "desc": "🎯전량대박익절"})
+                core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
+                orders = core_orders + bonus_orders
+                return {
+                    "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders,
+                    "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status,
+                    "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio,
+                    "real_cash_used": real_available_cash,
+                    "tracking_info": tr_info 
+                }
             elif is_last_lap: process_status = "🏁마지막회차"
             elif is_money_short: process_status = "🛡️방어모드(부족)"
             elif t_val < (split / 2): process_status = "🌓전반전"
