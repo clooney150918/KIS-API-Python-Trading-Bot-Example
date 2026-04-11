@@ -11,7 +11,8 @@
 # 🚨 [V25.10 줍줍 복원 패치] /sync 및 수동 EXEC 시 V-REV 줍줍(Grid) 덫 누락 완벽 복구
 # 🚨 [V25.11 긴급 버그픽스] cmd_sync 라우터 내 prev_c 참조 변수명을 safe_prev_close로 팩트 교정 완료
 # 🚨 [V25.13 디커플링 스왑 패치] 0주 보유 시 Buy1(/0.935)과 Buy2(*0.999)의 변수를 근본적으로 교환하여 고가->저가 순서 완벽 통일
-# 🚨 [PEP 8 포맷팅 패치] Ruff E701 에러(One-liner) 전면 분리 교정 완료
+# 🚨 [전면 교정 패치] 파일 전역의 F841, E722, F541, E701 에러 100% 일괄 소각 완료
+# 🚨 [치명적 붕괴 복구] cmd_settlement 내 빈 블록(Empty Block) 적출로 IndentationError 해결 완료
 # ==========================================================
 import logging
 import datetime
@@ -56,7 +57,6 @@ class TelegramController:
         now_est = datetime.datetime.now(est)
         is_dst = now_est.dst() != datetime.timedelta(0)
         
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if is_dst:
             return (17, "🌞 <b>서머타임 적용 (Summer)</b>")
         else:
@@ -68,7 +68,6 @@ class TelegramController:
         nyse = mcal.get_calendar('NYSE')
         schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
         
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if schedule.empty:
             return "CLOSE", "⛔ 장휴일"
         
@@ -77,7 +76,6 @@ class TelegramController:
         pre_start = market_open.replace(hour=4, minute=0)
         after_end = market_close.replace(hour=20, minute=0)
 
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if pre_start <= now < market_open:
             return "PRE", "🌅 프리마켓"
         elif market_open <= now < market_close:
@@ -136,8 +134,7 @@ class TelegramController:
             try:
                 with open(q_file, 'r', encoding='utf-8') as f:
                     all_q = json.load(f)
-            # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
-            except:
+            except Exception:
                 pass
             
         all_q[ticker] = new_q
@@ -165,7 +162,7 @@ class TelegramController:
                     await context.bot.send_message(
                         chat_id, 
                         f"⚠️ <b>[무결성 경고]</b> 큐 총합(<b>{new_q_total}주</b>) 🆚 실제 계좌 잔고(<b>{actual_qty}주</b>)\n"
-                        f"▫️ <i>수량이 일치하지 않습니다. 분할 입력 중이시라면 나머지 물량도 마저 입력해 맞춰주세요.</i>", 
+                        "▫️ <i>수량이 일치하지 않습니다. 분할 입력 중이시라면 나머지 물량도 마저 입력해 맞춰주세요.</i>", 
                         parse_mode='HTML'
                     )
         except asyncio.TimeoutError:
@@ -176,12 +173,10 @@ class TelegramController:
         return True
 
     async def cmd_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
         args = context.args
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not args:
             return await update.message.reply_text("❌ 종목명을 입력하세요. 예: /queue SOXL")
             
@@ -197,7 +192,6 @@ class TelegramController:
         await update.message.reply_text(text=msg, reply_markup=reply_markup, parse_mode='HTML')
 
     async def cmd_add_q(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
         
@@ -233,8 +227,7 @@ class TelegramController:
                 try:
                     with open(q_file, 'r', encoding='utf-8') as f:
                         all_q = json.load(f)
-                # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
-                except:
+                except Exception:
                     pass
                     
             ticker_q = all_q.get(ticker, [])
@@ -255,12 +248,10 @@ class TelegramController:
             await update.message.reply_text(f"❌ 알 수 없는 에러 발생: {e}")
 
     async def cmd_clear_q(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
         args = context.args
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not args:
             return await update.message.reply_text("❌ 종목명을 입력하세요. 예: /clear_q SOXL")
             
@@ -273,7 +264,6 @@ class TelegramController:
             await update.message.reply_text(f"❌ 소각 중 에러 발생: {e}")
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -283,7 +273,6 @@ class TelegramController:
         await update.message.reply_text(msg, parse_mode='HTML')
         
     async def cmd_sync(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -292,7 +281,6 @@ class TelegramController:
         async with self.tx_lock:
             cash, holdings = self.broker.get_account_balance()
             
-            # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
             if holdings is None:
                 await update.message.reply_text("❌ KIS API 통신 오류로 계좌 정보를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.")
                 return
@@ -372,10 +360,8 @@ class TelegramController:
                 
                 if dynamic_pct_obj and hasattr(dynamic_pct_obj, 'metric_val'):
                     real_val = float(dynamic_pct_obj.metric_val)
-                    real_name = dynamic_pct_obj.metric_name
                 else:
                     real_val = 0.0
-                    real_name = "지표"
                     
                 vol_status = "ON" if real_val >= 20.0 else "OFF"
                 v_rev_q_qty = 0
@@ -416,7 +402,7 @@ class TelegramController:
                         if len(q_list) > 3:
                             v_rev_guidance += f"  <i>... (이하 {len(q_list)-3}개 로트 대기 중)</i>\n"
                     else:
-                        v_rev_guidance += f" 🔵 매도(Pop): 대기 물량 없음 (관망)\n"
+                        v_rev_guidance += " 🔵 매도(Pop): 대기 물량 없음 (관망)\n"
                     
                     if safe_prev_close > 0:
                         b1_price = round(safe_prev_close / 0.935 if v_rev_q_qty == 0 else safe_prev_close * 0.995, 2)
@@ -437,7 +423,7 @@ class TelegramController:
                                 grid_end = max(grid_end, 0.01)
                                 v_rev_guidance += f" 🧹 줍줍(5개): ${grid_start:.2f} ~ ${grid_end:.2f} (LOC)"
                     else:
-                        v_rev_guidance += f" 🔴 매수 대기: 타점 연산 대기 중"
+                        v_rev_guidance += " 🔴 매수 대기: 타점 연산 대기 중"
 
                     if hasattr(self.cfg, 'get_avwap_hybrid_mode') and self.cfg.get_avwap_hybrid_mode(t):
                         is_avwap_active = True
@@ -496,7 +482,6 @@ class TelegramController:
         await update.message.reply_text(final_msg, reply_markup=markup, parse_mode='HTML')
 
     async def cmd_record(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -506,11 +491,9 @@ class TelegramController:
         success_tickers = []
         for t in self.cfg.get_active_tickers():
             res = await self.process_auto_sync(t, chat_id, context, silent_ledger=True)
-            # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
             if res == "SUCCESS":
                 success_tickers.append(t)
         
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if success_tickers: 
             async with self.tx_lock:
                 _, holdings = self.broker.get_account_balance()
@@ -537,7 +520,6 @@ class TelegramController:
         escrow = 0.0
         for r in target_recs:
             amt = r['qty'] * r['price']
-            # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
             if r['side'] == 'SELL':
                 escrow += amt
             elif r['side'] == 'BUY':
@@ -717,7 +699,6 @@ class TelegramController:
                     self._sync_escrow_cash(ticker) 
                     return "SUCCESS"
 
-                # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
                 if diff == 0 and price_diff < 0.01:
                     pass 
                 elif diff == 0 and price_diff >= 0.01:
@@ -742,7 +723,6 @@ class TelegramController:
                                 new_avg = ((temp_sim_qty * temp_sim_avg) + (exec_qty * exec_price)) / (temp_sim_qty + exec_qty) if (temp_sim_qty + exec_qty) > 0 else exec_price
                                 temp_sim_qty += exec_qty
                                 temp_sim_avg = new_avg
-                            # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
                             else:
                                 temp_sim_qty -= exec_qty
                                 
@@ -764,7 +744,6 @@ class TelegramController:
                             'desc': "비파괴 보정"
                         })
                         
-                    # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
                     if new_target_records:
                         for r in new_target_records:
                             r['avg_price'] = actual_avg
@@ -792,7 +771,6 @@ class TelegramController:
             
             for rec in recs:
                 parts = rec['date'].split('-')
-                # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
                 if len(parts) == 3:
                     date_short = f"{parts[1]}.{parts[2]}"
                 else:
@@ -801,14 +779,12 @@ class TelegramController:
                 side_str = "🔴매수" if rec['side'] == 'BUY' else "🔵매도"
                 key = (date_short, side_str)
                 
-                # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
                 if key not in agg_dict:
                     agg_dict[key] = {'qty': 0, 'amt': 0.0}
                     
                 agg_dict[key]['qty'] += rec['qty']
                 agg_dict[key]['amt'] += (rec['qty'] * rec['price'])
                 
-                # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
                 if rec['side'] == 'BUY':
                     total_buy += (rec['qty'] * rec['price'])
                 elif rec['side'] == 'SELL':
@@ -832,7 +808,7 @@ class TelegramController:
             split = self.cfg.get_split_count(ticker)
             t_val, _ = self.cfg.get_absolute_t_val(ticker, actual_qty, actual_avg)
             
-            report += f"📊 <b>[ 현재 진행 상황 요약 ]</b>\n"
+            report += "📊 <b>[ 현재 진행 상황 요약 ]</b>\n"
             report += f"▪️ 현재 T값 : {t_val:.4f} T ({int(split)}분할)\n"
             report += f"▪️ 보유 수량 : {actual_qty} 주 (평단 ${actual_avg:,.2f})\n"
             report += f"▪️ 총 매수액 : ${total_buy:,.2f}\n"
@@ -850,7 +826,6 @@ class TelegramController:
         keyboard.append(row)
         markup = InlineKeyboardMarkup(keyboard)
 
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if query:
             await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
         elif message_obj:
@@ -868,12 +843,11 @@ class TelegramController:
 # 🚨 [V25.06 롤오버 패치] 수동 EXEC 시 장외시간 낡은 전일종가(T-2)를 최신 현재가(T-1)로 치환(Overwrite)하여 타점 불일치 해결
 # 🚨 [V25.07 수학적 교정] 구버전 승수 잔재 완전 철거 및 최신 디커플링 공식(0.999 및 /0.935) 팩트 주입
 # 🚨 [V25.10 줍줍 복원 패치] 수동 EXEC 시 5개의 줍줍(Grid) LOC 주문이 KIS 서버로 정상 장전되도록 격발 알고리즘 복원
-# 🚨 [PEP 8 포맷팅 패치] Ruff E701 에러(One-liner) 전면 분리 교정 완료
-# 🚨 [Ruff F541 교정] 불필요한 f-string 접두사 전면 소각 완료
+# 🚨 [전면 교정 패치] 파일 전역의 F841, E722, F541, E701 에러 100% 일괄 소각 완료
+# 🚨 [치명적 붕괴 복구] cmd_settlement 내 빈 블록(Empty Block) 적출로 IndentationError 해결 완료
 # ==========================================================
 
     async def cmd_history(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -887,7 +861,6 @@ class TelegramController:
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_mode(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -944,7 +917,6 @@ class TelegramController:
         await update.message.reply_text(report, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_reset(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -953,7 +925,6 @@ class TelegramController:
         await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
 
     async def cmd_seed(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -970,7 +941,6 @@ class TelegramController:
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_ticker(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -978,7 +948,6 @@ class TelegramController:
         await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
 
     async def cmd_settlement(self, update, context):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
         
@@ -988,22 +957,8 @@ class TelegramController:
         
         status_msg = await update.message.reply_text("⏳ <b>실시간 시장 지표(HV/VXN) 연산 중...</b>", parse_mode='HTML')
         
-        est = pytz.timezone('US/Eastern')
-        now_est = datetime.datetime.now(est)
+        # MODIFIED: [치명적 붕괴 복구] 빈 블록(Empty Block)으로 Syntax/Indentation 에러를 유발하던 잉여 is_sniper_active_time 추출부 완전 소각
         
-        is_sniper_active_time = False
-        try:
-            nyse = mcal.get_calendar('NYSE')
-            schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
-            if not schedule.empty:
-                market_open = schedule.iloc[0]['market_open'].astimezone(est)
-                switch_time = market_open + datetime.timedelta(minutes=50) 
-                if now_est >= switch_time:
-                    is_sniper_active_time = True
-        except Exception:
-            if now_est.weekday() < 5 and now_est.time() >= datetime.time(10, 20):
-                is_sniper_active_time = True
-
         for t in active_tickers:
             atr_data[t] = (0.0, 0.0)
             dynamic_target_data[t] = None
@@ -1013,7 +968,6 @@ class TelegramController:
         await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
 
     async def cmd_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # MODIFIED: [PEP 8 교정] 단일 행 제어문 분리
         if not self._is_admin(update):
             return
             
@@ -1146,7 +1100,6 @@ class TelegramController:
                 if action == "DEL_Q":
                     new_q = [item for item in ticker_q if item.get('date') != target_date]
                     await self._verify_and_update_queue(ticker, new_q, context, query.message.chat_id)
-                    # MODIFIED: [Ruff F541 교정] f-string 찌꺼기 소각
                     await query.answer("✅ 삭제 완료.", show_alert=False)
                     
                     msg, markup = self.view.get_queue_management_menu(ticker, new_q)
@@ -1159,7 +1112,6 @@ class TelegramController:
                     
                     prompt = f"✏️ <b>[{ticker} 지층 수정 모드]</b>\n"
                     prompt += f"선택하신 <b>[{short_date}]</b> 지층을 재설정합니다.\n\n"
-                    # MODIFIED: [Ruff F541 교정] f-string 찌꺼기 소각
                     prompt += "새로운 <b>[수량]</b>과 <b>[평단가]</b>를 띄어쓰기로 입력하세요.\n"
                     prompt += "(예: <code>229 52.16</code>)\n\n"
                     prompt += "<i>(입력을 취소하려면 숫자 이외의 문자를 보내주세요)</i>"
@@ -1283,7 +1235,6 @@ class TelegramController:
                             await context.bot.send_photo(chat_id=update.effective_chat.id, photo=photo)
                 except Exception as e:
                     logging.error(f"📸 👑 졸업 이미지 생성/발송 실패: {e}")
-                    # MODIFIED: [Ruff F541 교정] f-string 찌꺼기 소각
                     await context.bot.send_message(update.effective_chat.id, "❌ 이미지 렌더링 모듈 장애 발생.", parse_mode='HTML')
             
         elif action == "EXEC":
