@@ -12,7 +12,7 @@
 # 🚨 [V25.11 긴급 버그픽스] cmd_sync 라우터 내 prev_c 참조 변수명을 safe_prev_close로 팩트 교정 완료
 # 🚨 [V25.13 디커플링 스왑 패치] 0주 보유 시 Buy1(/0.935)과 Buy2(*0.999)의 변수를 근본적으로 교환하여 고가->저가 순서 완벽 통일
 # 🚨 [전면 교정 패치] 파일 전역의 F841, E722, F541, E701 에러 100% 일괄 소각 완료
-# 🚨 [치명적 붕괴 복구] cmd_settlement 내 빈 블록(Empty Block) 적출로 IndentationError 해결 완료
+# 🚨 [치명적 붕괴 복구] 아키텍처 중복 라우터 제거 및 cmd_settlement 빈 블록 적출 준비 완료
 # ==========================================================
 import logging
 import datetime
@@ -844,7 +844,7 @@ class TelegramController:
 # 🚨 [V25.07 수학적 교정] 구버전 승수 잔재 완전 철거 및 최신 디커플링 공식(0.999 및 /0.935) 팩트 주입
 # 🚨 [V25.10 줍줍 복원 패치] 수동 EXEC 시 5개의 줍줍(Grid) LOC 주문이 KIS 서버로 정상 장전되도록 격발 알고리즘 복원
 # 🚨 [전면 교정 패치] 파일 전역의 F841, E722, F541, E701 에러 100% 일괄 소각 완료
-# 🚨 [치명적 붕괴 복구] cmd_settlement 내 빈 블록(Empty Block) 적출로 IndentationError 해결 완료
+# 🚨 [치명적 붕괴 복구] cmd_settlement 내 빈 블록(Empty Block) 100% 적출 완료 (IndentationError 해결)
 # ==========================================================
 
     async def cmd_history(self, update, context):
@@ -957,8 +957,9 @@ class TelegramController:
         
         status_msg = await update.message.reply_text("⏳ <b>실시간 시장 지표(HV/VXN) 연산 중...</b>", parse_mode='HTML')
         
-        # MODIFIED: [치명적 붕괴 복구] 빈 블록(Empty Block)으로 Syntax/Indentation 에러를 유발하던 잉여 is_sniper_active_time 추출부 완전 소각
-        
+        est = pytz.timezone('US/Eastern')
+        now_est = datetime.datetime.now(est)
+
         for t in active_tickers:
             atr_data[t] = (0.0, 0.0)
             dynamic_target_data[t] = None
