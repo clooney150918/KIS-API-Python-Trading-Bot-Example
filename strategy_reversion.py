@@ -9,6 +9,7 @@
 # 🚨 [V25.14 팩트 동기화] 1층 물귀신 덤핑 차단 및 지층별 평단가 완벽 분리 개별 탈출(Decoupling) 이식
 # 🚨 [V25.15 잔여물량 격리] SELL_L1 / SELL_UPPER / SELL_JACKPOT 독립 큐(Residual) 분리 및 줍줍 무손실 복원 완료
 # 🚨 [V25.17 잔재 소각] 수동 통제망(Telegram) 전환에 따른 자동 긴급 수혈(get_emergency_liquidation_qty) 레거시 함수 영구 삭제
+# 🚨 [V25.20 엣지 케이스 패치] 0주 새출발 시 줍줍(Sweep) 타점 생성 원천 차단 (단일 라우터 방어막 이식)
 # ==========================================================
 import math
 
@@ -100,18 +101,19 @@ class ReversionStrategy:
                 if q1 > 0: orders.append({"side": "BUY", "qty": q1, "price": p1_trigger})
                 if q2 > 0: orders.append({"side": "BUY", "qty": q2, "price": p2_trigger})
                 
-                # MODIFIED: 줍줍(Grid) 로직 무손실 복원
-                max_n = 5
-                if curr_p > 0:
-                    required_n = math.ceil(b2_budget / curr_p) - q2
-                    if required_n > 5:
-                        max_n = min(required_n, 50)
-                
-                for n in range(1, max_n + 1):
-                    if (q2 + n) > 0:
-                        grid_p2 = round(b2_budget / (q2 + n), 2)
-                        if grid_p2 >= 0.01 and grid_p2 < p2_trigger:
-                            orders.append({"side": "BUY", "qty": 1, "price": grid_p2})
+                # MODIFIED: [V25.20 엣지 케이스 패치] 0주 새출발 시 줍줍(Sweep) 타점 생성 원천 차단 (디커플링 통제)
+                if total_q > 0:
+                    max_n = 5
+                    if curr_p > 0:
+                        required_n = math.ceil(b2_budget / curr_p) - q2
+                        if required_n > 5:
+                            max_n = min(required_n, 50)
+                    
+                    for n in range(1, max_n + 1):
+                        if (q2 + n) > 0:
+                            grid_p2 = round(b2_budget / (q2 + n), 2)
+                            if grid_p2 >= 0.01 and grid_p2 < p2_trigger:
+                                orders.append({"side": "BUY", "qty": 1, "price": grid_p2})
                 
             rem_qty_total = max(0, total_q - self.executed["SELL_QTY"].get(ticker, 0))
             if rem_qty_total > 0:
