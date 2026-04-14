@@ -14,6 +14,8 @@
 # 🚨 [V25.14 수동 분할 LOC 패치] 승승장군님 지시에 따른 KIS 서버자동주문용 1층 / 상위층 타점 완벽 디커플링 렌더링 개편
 # 🚨 [V25.20 엣지 케이스 패치] 0주 새출발 시 줍줍(Sweep) 렌더링 차단 및 옵션 A 하드코딩
 # 🚨 [V25.22 타점 동기화 패치] 수동 주문 라우터(EXEC)에 야후 파이낸스(YF) 전일 종가 고정 롤오버 엔진 이식 완료
+# 🚀 [V26.01 모드 이원화] 수동 VWAP 시그널 모드(수수료 회피) 텍스트 렌더링 및 휴먼 에러 방어(30분 룰) 경고 탑재
+# 🚀 [V26.02 UI 최적화] 수동 모드 시 불필요한 줍줍(Grid) 연산 소각 및 뷰어로 수동 플래그(is_manual_vwap) 완벽 토스
 # ==========================================================
 import logging
 import datetime
@@ -260,7 +262,7 @@ class TelegramController:
         try:
             chat_id = update.effective_chat.id
             await self._verify_and_update_queue(ticker, [], context, chat_id)
-            await update.message.reply_text(f"🗑️ <b>[{ticker}] 장부가 완전히 소각되었습니다.</b>\n새로운 지층을 구축할 준비가 되 প্রক্র합니다.", parse_mode='HTML')
+            await update.message.reply_text(f"🗑️ <b>[{ticker}] 장부가 완전히 소각되었습니다.</b>\n새로운 지층을 구축할 준비가 완료되었습니다.", parse_mode='HTML')
         except Exception as e:
             await update.message.reply_text(f"❌ 소각 중 에러 발생: {e}")
 
@@ -374,6 +376,8 @@ class TelegramController:
                 avwap_qty = 0
                 avwap_avg = 0.0
                 avwap_status_txt = ""
+                
+                is_manual_vwap = getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t)
 
                 if ver == "V_REV":
                     if not getattr(self, 'queue_ledger', None):
@@ -388,24 +392,30 @@ class TelegramController:
                     plan['one_portion'] = one_portion_cash
                     half_portion_cash = one_portion_cash * 0.5
                     
+                    tag = "VWAP" if is_manual_vwap else "LOC"
+                    
                     if q_list and actual_qty > 0:
                         l1_qty = q_list[-1].get('qty', 0)
                         l1_price = q_list[-1].get('price', safe_prev_close)
                         
                         target_l1 = round(l1_price * 1.006, 2)
-                        v_rev_guidance += f" 🔵 [1층 단독] ${target_l1:.2f} 돌파 시 <b>{l1_qty}주</b> 매도\n"
+                        
+                        # 🚀 [V26.02 UI 최적화] 수동 모드일 때는 깔끔하게 매도/매수/줍줍 표기법 단일화 (단독/상위층 병합)
+                        v_rev_guidance += f" 🔵 매도1(Pop1) ${target_l1:.2f} <b>{l1_qty}주</b> ({tag})\n"
                         
                         upper_qty = actual_qty - l1_qty
                         if upper_qty > 0:
                             upper_invested = (actual_qty * actual_avg) - (l1_qty * l1_price)
                             upper_avg = upper_invested / upper_qty if upper_invested > 0 else actual_avg
                             target_upper = round(upper_avg * 1.005, 2)
-                            v_rev_guidance += f" 🔵 [상위 재고] ${target_upper:.2f} 돌파 시 <b>{upper_qty}주</b> 매도\n"
+                            v_rev_guidance += f" 🔵 매도2(Pop2) ${target_upper:.2f} <b>{upper_qty}주</b> ({tag})\n"
                             
                             target_jackpot = round(actual_avg * 1.01, 2)
-                            v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} 돌파 시 <b>{actual_qty}주</b> (옵션)\n"
+                            # 수동 모드일 때는 잭팟을 아예 보여주지 않거나, 참고용으로만 표시 (장군님의 깔끔한 예시에 잭팟이 없었으므로 여기서는 자동일때만 보여줍니다)
+                            if not is_manual_vwap:
+                                v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} 돌파 시 <b>{actual_qty}주</b> (옵션)\n"
                     else:
-                        v_rev_guidance += " 🔵 감시 매도: 대기 물량 없음 (관망)\n"
+                        v_rev_guidance += " 🔵 매도: 대기 물량 없음 (관망)\n"
                     
                     if safe_prev_close > 0:
                         b1_price = round(safe_prev_close / 0.935 if v_rev_q_qty == 0 else safe_prev_close * 0.995, 2)
@@ -415,20 +425,28 @@ class TelegramController:
                         b2_qty = math.floor(half_portion_cash / b2_price) if b2_price > 0 else 0
                         
                         if b1_qty > 0:
-                            v_rev_guidance += f" 🔴 매수1(Buy1): ${b1_price:.2f} 진입 시 <b>{b1_qty}주</b>\n"
+                            v_rev_guidance += f" 🔴 매수1(Buy1) ${b1_price:.2f} <b>{b1_qty}주</b> ({tag})\n"
                         if b2_qty > 0:
-                            v_rev_guidance += f" 🔴 매수2(Buy2): ${b2_price:.2f} 진입 시 <b>{b2_qty}주</b>\n"
+                            v_rev_guidance += f" 🔴 매수2(Buy2) ${b2_price:.2f} <b>{b2_qty}주</b> ({tag})\n"
                             
                         if actual_qty == 0 or v_rev_q_qty == 0:
                             v_rev_guidance += " 🚫 <code>[0주 새출발] 기준 평단가 부재로 줍줍 생략 (1층 확보에 예산 100% 집중)</code>"
                         elif b2_qty > 0 and b2_price > 0:
-                            grid_start = round(half_portion_cash / (b2_qty + 1), 2)
-                            grid_end = round(half_portion_cash / (b2_qty + 5), 2)
-                            if grid_start >= 0.01 and grid_start < b2_price:
-                                grid_end = max(grid_end, 0.01)
-                                v_rev_guidance += f" 🧹 줍줍(5개): ${grid_start:.2f} ~ ${grid_end:.2f} (LOC)"
+                            # 🚀 [V26.02 핵심 수술] 수동 모드일 경우 줍줍 연산 및 표출 원천 차단 (Bypass)
+                            if not is_manual_vwap:
+                                grid_start = round(half_portion_cash / (b2_qty + 1), 2)
+                                grid_end = round(half_portion_cash / (b2_qty + 5), 2)
+                                if grid_start >= 0.01 and grid_start < b2_price:
+                                    grid_end = max(grid_end, 0.01)
+                                    v_rev_guidance += f" 🧹 줍줍(5개): ${grid_start:.2f} ~ ${grid_end:.2f} ({tag})"
                     else:
                         v_rev_guidance += " 🔴 매수 대기: 타점 연산 대기 중"
+
+                    if is_manual_vwap:
+                        v_rev_guidance += "\n\n🚨 <b>[ ⛔ 치명적 경고: 수동 VWAP 설정 ]</b> 🚨\n"
+                        v_rev_guidance += "한투 앱(V앱)에서 수동 주문을 거실 때, <b>절대로 '하루 종일'로 설정하지 마십시오!</b>\n"
+                        v_rev_guidance += "작동 시간은 반드시 \n<b>[장 마감 30분 전 ~ 장 마감]</b>\n으로만 세팅하셔야 합니다.\n"
+                        v_rev_guidance += "장중 내내 작동하게 둘 경우 V-REV 코어 전략의 수익률이 심각하게 파괴됩니다."
 
                     if hasattr(self.cfg, 'get_avwap_hybrid_mode') and self.cfg.get_avwap_hybrid_mode(t):
                         is_avwap_active = True
@@ -444,6 +462,7 @@ class TelegramController:
                         else:
                             avwap_status_txt = "👀 장초반 필터 스캔 및 타점 대기"
 
+                # 🚀 [V26.02 UI 최적화] 뷰어가 수동 모드임을 알 수 있도록 is_manual_vwap 플래그 토스
                 ticker_data_list.append({
                     'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
                     'profit_amt': (curr - actual_avg) * actual_qty if actual_qty > 0 else 0, 
@@ -454,12 +473,9 @@ class TelegramController:
                     'is_locked': is_already_ordered, 'mode': "REG",
                     'is_reverse': is_rev, 'star_price': plan.get('star_price', 0.0),
                     'escrow': self.cfg.get_escrow_cash(t),
-                    'bb_lower': 0.0,  
-                    'hybrid_base': 0.0, 
                     'hybrid_target': hybrid_target_price,
                     'trigger_reason': trigger_reason,
                     'sniper_trigger': abs(float(dynamic_pct)), 
-                    'secret_quarter_target': 0.0, 
                     'day_high': day_high,
                     'day_low': day_low,
                     'prev_close': safe_prev_close,
@@ -475,7 +491,8 @@ class TelegramController:
                     'avwap_budget': avwap_budget,
                     'avwap_qty': avwap_qty,
                     'avwap_avg': avwap_avg,
-                    'avwap_status': avwap_status_txt
+                    'avwap_status': avwap_status_txt,
+                    'is_manual_vwap': is_manual_vwap
                 })
                 total_buy_needed += sum(o['price']*o['qty'] for o in plan['orders'] if o['side']=='BUY')
 
@@ -853,6 +870,7 @@ class TelegramController:
 # 🚨 [V25.14 분할 LOC 패치] 수동 EXEC 시 1층/상위층 완벽 분리 LOC 전송 렌더링 팩트 주입
 # 🚨 [V25.20 엣지 케이스 패치] 수동 EXEC 시 0주 새출발 줍줍(Sweep) 주문 격발 원천 차단 및 옵션A 텍스트 출력 이식
 # 🚨 [V25.22 타점 동기화 패치] 수동 주문 라우터(EXEC)에 야후 파이낸스(YF) 전일 종가 고정 롤오버 엔진 이식 완료
+# 🚀 [V26.01 모드 이원화] 수동 VWAP 모드 전환용 2단계 뎁스 라우터(SET_VER_CONFIRM) 신설 및 EXEC 발사 차단 쉴드 이식
 # ==========================================================
 
     async def cmd_history(self, update, context):
@@ -1250,11 +1268,16 @@ class TelegramController:
             t = sub
             ver = self.cfg.get_version(t)
             
+            # 🚀 [V26.01 핵심 수술] 수동 VWAP 모드일 경우 KIS API 강제 발사(EXEC) 원천 차단 쉴드
+            if ver == "V_REV" and getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t):
+                await query.answer("🚨 [격발 차단] 수동 VWAP 모드가 가동 중입니다. 지시서를 참고하여 한투 앱(V앱)에서 직접 매매를 걸어주십시오.", show_alert=True)
+                return
+            
             await query.edit_message_text(f"🚀 {t} 수동 강제 전송 시작 (교차 분리)...")
             async with self.tx_lock:
                 cash, holdings = self.broker.get_account_balance()
                 if holdings is None:
-                    return await query.edit_message_text("❌ API 통신 오류로 주문을 실행할 수 없습니다.")
+                    return await query.edit_message_text("❌ API 통신 오류로 주문을 실행할 수문을 실행할 수 없습니다.")
                     
                 _, allocated_cash = self._calculate_budget_allocation(cash, self.cfg.get_active_tickers())
                 h = holdings.get(t, {'qty':0, 'avg':0})
@@ -1266,7 +1289,6 @@ class TelegramController:
 
                 status_code, _ = self._get_market_status()
                 
-                # MODIFIED: [V25.22 타점 동기화 패치] 수동 EXEC 시 장외시간 현재가(curr_p) 덮어쓰기 로직 폐기 및 YF 전일종가 고정 롤오버 엔진 이식
                 if status_code in ["AFTER", "CLOSE", "PRE"]:
                     try:
                         def get_yf_close():
@@ -1391,6 +1413,7 @@ class TelegramController:
 
             await context.bot.send_message(update.effective_chat.id, msg, parse_mode='HTML')
 
+        # 🚀 [V26.01 핵심 수술] V_REV 2단계 수수료 안내 분기 라우터 신설
         elif action == "SET_VER":
             new_ver = sub
             ticker = data[2]
@@ -1399,19 +1422,38 @@ class TelegramController:
                 if not (os.path.exists("strategy_reversion.py") and os.path.exists("queue_ledger.py")):
                     await query.answer("🚨 [개봉박두] V-REV 엔진 모듈 파일이 존재하지 않아 전환할 수 없습니다! (업데이트 필요)", show_alert=True)
                     return
-                self.cfg.set_upward_sniper_mode(ticker, False) 
+                # 즉시 전환하지 않고 2단계 UI 렌더링 호출
+                msg, markup = self.view.get_vrev_mode_selection_menu(ticker)
+                await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                return
                 
-            if new_ver == "V_REV":
-                new_ver_display = "V_REV 역추세 하이브리드"
-            else:
-                new_ver_display = "V14 무매4"
-            
             self.cfg.set_version(ticker, new_ver)
+            self.cfg.set_upward_sniper_mode(ticker, False)
+            if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
+                self.cfg.set_avwap_hybrid_mode(ticker, False)
+            if hasattr(self.cfg, 'set_manual_vwap_mode'):
+                self.cfg.set_manual_vwap_mode(ticker, False)
+                
+            await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
+
+        # 🚀 [V26.01 핵심 수술] 2단계 모드 확정 라우터 신설 (Auto vs Manual)
+        elif action == "SET_VER_CONFIRM":
+            mode_type = sub # "AUTO" or "MANUAL"
+            ticker = data[2]
             
-            if new_ver != "V_REV" and hasattr(self.cfg, 'set_avwap_hybrid_mode'):
+            self.cfg.set_version(ticker, "V_REV")
+            self.cfg.set_upward_sniper_mode(ticker, False)
+            if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
                 self.cfg.set_avwap_hybrid_mode(ticker, False)
                 
-            await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>{new_ver_display}</b> 모드로 전환되었습니다.\n/sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
+            if mode_type == "MANUAL":
+                self.cfg.set_manual_vwap_mode(ticker, True)
+                mode_txt = "🖐️ 수동 VWAP 모드 (수수료 회피)"
+            else:
+                self.cfg.set_manual_vwap_mode(ticker, False)
+                mode_txt = "🤖 API 자동매매 모드 (1분 정밀타격)"
+                
+            await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V_REV 역추세 하이브리드</b>로 전환되었습니다.\n▫️ <b>운용 방식:</b> {mode_txt}\n▫️ /sync 지시서를 확인해 주십시오.", parse_mode='HTML')
 
         elif action == "MODE":
             mode_val = sub
@@ -1504,7 +1546,6 @@ class TelegramController:
         chat_id = update.effective_chat.id
         text = update.message.text.strip() if update.message.text else ""
         
-        # MODIFIED: [V25.05 텍스트 다이렉트 라우터] 하단 고정 키보드 한글 신호 증발 방어망 이식
         if "통합 지시서" in text or "지시서 조회" in text:
             return await self.cmd_sync(update, context)
         elif "장부 동기화" in text or "장부 조회" in text:

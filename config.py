@@ -5,6 +5,7 @@
 # 💡 [V25.00 수술] AVWAP 하이브리드 전술 상태 저장(캐싱) 파일 경로 및 함수 이식
 # 🚨 [V25.19 핫픽스] 빈 장부 스캔 시 IndexError 런타임 붕괴 완벽 방어
 # 🚨 [V25.19 핫픽스] 에스크로(Escrow) 3대 관리 함수(set/add/clear) 팩트 기반 완전 구현
+# 🚀 [V26.00 승격] 수동 VWAP 시그널 모드(Manual Mode) 독립 플래그 및 캐싱 엔진 신설 탑재
 # ==========================================================
 import json
 import os
@@ -40,19 +41,19 @@ class ConfigManager:
             "REVERSE_CFG": "data/reverse_config.json",
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
-            # 💡 [V25.00 핵심 수술] AVWAP 하이브리드 전용 로컬 상태 파일 신설
-            "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json"
+            "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
+            # 🚀 [V26.00 핵심 수술] 수동 VWAP 상태 저장 파일 신설
+            "MANUAL_VWAP_CFG": "data/manual_vwap_config.json"
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
         self.DEFAULT_SPLIT = {"SOXL": 40.0, "TQQQ": 40.0}
         self.DEFAULT_TARGET = {"SOXL": 12.0, "TQQQ": 10.0}
-        self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_VERSION = {"SOXL": "V14", "TQQQ": "V14"}
+        self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         
-        # NEW: [V25.19 핫픽스] 에스크로 고속 인메모리 캐시 신설
         self._escrow_cache = {}
 
     def _load_json(self, filename, default=None):
@@ -126,7 +127,6 @@ class ConfigManager:
         return self._load_json(self.FILES["LEDGER"], [])
 
     def get_escrow_cash(self, ticker):
-        # 💡 우선 장부를 역산하여 에스크로를 도출하되, V25.19 인메모리 캐시도 함께 참조
         ledger = self.get_ledger()
         escrow = 0.0
         for r in reversed(ledger):
@@ -139,20 +139,17 @@ class ConfigManager:
                 else:
                     break
                     
-        # 💡 장부 역산값이 0일 경우, 런타임에 set된 캐시값을 폴백으로 사용
         calc_escrow = max(0.0, float(escrow))
         if calc_escrow == 0.0:
             calc_escrow = self._escrow_cache.get(ticker, 0.0)
             
         return calc_escrow
 
-    # MODIFIED: [V25.19 핫픽스] pass 찌꺼기 소각 및 에스크로 세터 완벽 구현
     def set_escrow_cash(self, ticker, amount):
         if not hasattr(self, '_escrow_cache'):
             self._escrow_cache = {}
         self._escrow_cache[ticker] = max(0.0, float(amount))
 
-    # MODIFIED: [V25.19 핫픽스] pass 찌꺼기 소각 및 에스크로 증감 완벽 구현
     def add_escrow_cash(self, ticker, amount):
         if not hasattr(self, '_escrow_cache'):
             self._escrow_cache = {}
@@ -160,13 +157,11 @@ class ConfigManager:
         self._escrow_cache[ticker] = max(0.0, current + float(amount))
 
     def clear_escrow_cash(self, ticker):
-        # 1. 파일 기반 Lock 해제
         locks = self._load_json(self.FILES["LOCKS"], {})
         if f"ESCROW_{ticker}" in locks:
             del locks[f"ESCROW_{ticker}"]
             self._save_json(self.FILES["LOCKS"], locks)
             
-        # 2. 인메모리 캐시 100% 소각
         if hasattr(self, '_escrow_cache') and ticker in self._escrow_cache:
             self._escrow_cache[ticker] = 0.0
 
@@ -357,7 +352,6 @@ class ConfigManager:
         self.set_reverse_state(ticker, False, 0, 0.0)
         self.clear_escrow_cash(ticker)
 
-    # MODIFIED: [V25.19 핫픽스] 빈 장부 스캔 시 IndexError 런타임 붕괴 방어막 완벽 이식
     def calculate_holdings(self, ticker, records=None):
         if records is None:
             records = self.get_ledger()
@@ -400,7 +394,6 @@ class ConfigManager:
         d[ticker] = {"is_active": is_active, "day_count": day_count, "exit_target": exit_target, "last_update_date": last_update_date}
         self._save_json(self.FILES["REVERSE_CFG"], d)
 
-    # MODIFIED: [V25.19 핫픽스] 불필요한 관찰자 효과를 유발하던 데드코드 소각 (스케줄러 통제로 바이패스)
     def update_reverse_day_if_needed(self, ticker):
         pass
 
@@ -418,7 +411,7 @@ class ConfigManager:
                     schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
                     is_trading_day = not schedule.empty
                 except Exception as e:
-                    print(f"⚠️ [Config] 달력 라이브러리 에러 발생. 평일 강제 개장 처리합니다: {e}")
+                    print(f"⚠️ [Config] 달력 라이브러 에러 발생. 평일 강제 개장 처리합니다: {e}")
                     is_trading_day = now_est.weekday() < 5
                 
                 if is_trading_day:
@@ -650,6 +643,17 @@ class ConfigManager:
         d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
         d[ticker] = bool(v)
         self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
+
+    # 🚀 [V26.00 신설] 수동 VWAP(수수료 회피) 모드 게터
+    def get_manual_vwap_mode(self, ticker):
+        d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
+        return d.get(ticker, False)
+
+    # 🚀 [V26.00 신설] 수동 VWAP(수수료 회피) 모드 세터
+    def set_manual_vwap_mode(self, ticker, v):
+        d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
+        d[ticker] = bool(v)
+        self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
 
     def get_secret_mode(self):
         return self._load_file(self.FILES["SECRET_MODE"]) == 'True'
