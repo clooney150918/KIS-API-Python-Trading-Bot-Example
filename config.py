@@ -6,6 +6,7 @@
 # 🚨 [V25.19 핫픽스] 빈 장부 스캔 시 IndexError 런타임 붕괴 완벽 방어
 # 🚨 [V25.19 핫픽스] 에스크로(Escrow) 3대 관리 함수(set/add/clear) 팩트 기반 완전 구현
 # 🚀 [V26.00 승격] 수동 VWAP 시그널 모드(Manual Mode) 독립 플래그 및 캐싱 엔진 신설 탑재
+# 🚀 [V26.07 확정 순수익 렌더링 패치] 명예의 전당 및 졸업 카드 발급 시 한투 OpenAPI 왕복 수수료(0.5%) 완벽 차감 이식
 # ==========================================================
 import json
 import os
@@ -42,7 +43,6 @@ class ConfigManager:
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
-            # 🚀 [V26.00 핵심 수술] 수동 VWAP 상태 저장 파일 신설
             "MANUAL_VWAP_CFG": "data/manual_vwap_config.json"
         }
         
@@ -514,11 +514,15 @@ class ConfigManager:
 
             self._save_json(self.FILES["LEDGER"], ledger)
 
-        total_buy = math.ceil(sum(r['price']*r['qty'] for r in target_recs if r['side']=='BUY') * 100) / 100.0
-        total_sell = math.ceil(sum(r['price']*r['qty'] for r in target_recs if r['side']=='SELL') * 100) / 100.0
+        # MODIFIED: [V26.07 확정 순수익 렌더링 패치] 한투 OpenAPI 왕복 수수료(0.5%) 팩트 차감 로직 이식
+        raw_total_buy = sum(r['price']*r['qty'] for r in target_recs if r['side']=='BUY')
+        raw_total_sell = sum(r['price']*r['qty'] for r in target_recs if r['side']=='SELL')
         
-        profit = math.ceil((total_sell - total_buy) * 100) / 100.0
-        yield_pct = math.ceil(((profit / total_buy * 100) if total_buy > 0 else 0.0) * 100) / 100.0
+        net_invested = raw_total_buy * 1.0025
+        net_revenue = raw_total_sell * 0.9975
+        
+        profit = math.ceil((net_revenue - net_invested) * 100) / 100.0
+        yield_pct = math.ceil(((profit / net_invested * 100) if net_invested > 0 else 0.0) * 100) / 100.0
         
         compound_rate = self.get_compound_rate(ticker) / 100.0
         added_seed = 0
@@ -530,7 +534,7 @@ class ConfigManager:
         history = self._load_json(self.FILES["HISTORY"], [])
         new_hist = {
             "id": len(history) + 1, "ticker": ticker, "end_date": end_date,
-            "profit": profit, "yield": yield_pct, "revenue": total_sell, "invested": total_buy, "trades": target_recs
+            "profit": profit, "yield": yield_pct, "revenue": net_revenue, "invested": net_invested, "trades": target_recs
         }
         history.append(new_hist)
         self._save_json(self.FILES["HISTORY"], history)
@@ -644,12 +648,10 @@ class ConfigManager:
         d[ticker] = bool(v)
         self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
 
-    # 🚀 [V26.00 신설] 수동 VWAP(수수료 회피) 모드 게터
     def get_manual_vwap_mode(self, ticker):
         d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
         return d.get(ticker, False)
 
-    # 🚀 [V26.00 신설] 수동 VWAP(수수료 회피) 모드 세터
     def set_manual_vwap_mode(self, ticker, v):
         d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
         d[ticker] = bool(v)

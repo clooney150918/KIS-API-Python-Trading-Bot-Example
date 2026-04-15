@@ -6,6 +6,7 @@
 # 🚨 [V25.08 팩트 동기화] V-REV 종목 지시서 누수(DI Leak) 방어를 위한 지능형 동적 라우터(Dynamic Router) 구축
 # 🚨 [V25.19 핫픽스] 레거시 모드 감지 시 로컬 version 변수 미업데이트 맹점 팩트 교정
 # 🚀 [V26.02 핵심 수술] V14 오리지널 모드 내 LOC/VWAP 집행 방식 이원화 라우팅 탑재
+# 🚀 [V26.07 확정 순수익 렌더링 패치] V-REV 메모리 스냅샷 수수료(0.5%) 완벽 차감 이식
 # ==========================================================
 import logging
 import pandas as pd
@@ -133,10 +134,19 @@ class InfiniteStrategy:
             vwap_status=vwap_status
         )
 
+    # MODIFIED: [V26.07 확정 순수익 렌더링 패치] 한투 OpenAPI 왕복 수수료(0.5%) 팩트 차감 로직 이식
     def capture_vrev_snapshot(self, ticker, clear_price, avg_price, qty):
         if qty <= 0: return None
-        realized_pnl = (clear_price - avg_price) * qty
-        realized_pnl_pct = ((clear_price - avg_price) / avg_price) * 100 if avg_price > 0 else 0.0
+        
+        raw_total_buy = avg_price * qty
+        raw_total_sell = clear_price * qty
+        
+        net_invested = raw_total_buy * 1.0025
+        net_revenue = raw_total_sell * 0.9975
+        
+        realized_pnl = net_revenue - net_invested
+        realized_pnl_pct = (realized_pnl / net_invested) * 100 if net_invested > 0 else 0.0
+        
         return {
             "ticker": ticker,
             "clear_price": clear_price,
