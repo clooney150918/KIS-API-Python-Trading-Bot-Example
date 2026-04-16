@@ -191,8 +191,9 @@ class V14VwapStrategy:
             'tracking_info': {}
         }
         
-        if is_snapshot_mode:
-            self.save_daily_snapshot(ticker, plan_result)
+        # 🚨 [수술 완료] 조건문 철거! 
+        # 이 줄까지 코드가 도달했다면 캐시가 없거나 강제 갱신 모드이므로 무조건 박제합니다.
+        self.save_daily_snapshot(ticker, plan_result)
             
         return plan_result
 
