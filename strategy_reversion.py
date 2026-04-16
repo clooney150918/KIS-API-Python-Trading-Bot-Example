@@ -13,6 +13,7 @@
 # 🚀 [V26.03 영속성 캐시 이식] 서버 재시작 시 잔차 증발(기억상실)을 방어하는 L1/L2 듀얼 캐싱 엔진 탑재
 # 🚀 [V27.01 지시서 스냅샷] 매일 17:05 확정 지시서를 박제하여 장중 잔고 변이에 따른 타점 왜곡 원천 차단
 # 🚨 [V27.03 핫픽스] 스냅샷 로드 시 내부 날짜 검사(Validation) 전면 폐기로 무한루프 영구 방어
+# 🚨 [V27.05 그랜드 수술] API Reject 방어(소수점 덤핑 차단), ZeroDivision 방어 및 Safe Casting 완벽 이식
 # ==========================================================
 import math
 import os
@@ -53,11 +54,12 @@ class ReversionStrategy:
             try:
                 with open(state_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    # MODIFIED: [V27.03] 날짜 검사(Validation) 폐기 - 파일 존재만으로 맹신
                     for k in self.residual.keys():
-                        self.residual[k][ticker] = data.get("residual", {}).get(k, 0.0)
+                        self.residual[k][ticker] = float(data.get("residual", {}).get(k, 0.0))
                     for k in self.executed.keys():
-                        self.executed[k][ticker] = data.get("executed", {}).get(k, 0.0)
+                        # 🚨 [수술 완료] SELL_QTY는 반드시 정수(int)로 로드하여 API 붕괴 차단
+                        raw_val = data.get("executed", {}).get(k, 0)
+                        self.executed[k][ticker] = int(raw_val) if k == "SELL_QTY" else float(raw_val)
                     self.state_loaded[ticker] = today_str
                     return
             except Exception:
@@ -74,8 +76,11 @@ class ReversionStrategy:
         state_file = self._get_state_file(ticker)
         data = {
             "date": today_str,
-            "residual": {k: self.residual[k].get(ticker, 0.0) for k in self.residual.keys()},
-            "executed": {k: self.executed[k].get(ticker, 0.0) for k in self.executed.keys()}
+            "residual": {k: float(self.residual[k].get(ticker, 0.0)) for k in self.residual.keys()},
+            "executed": {
+                "BUY_BUDGET": float(self.executed.get("BUY_BUDGET", {}).get(ticker, 0.0)),
+                "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
+            }
         }
         try:
             dir_name = os.path.dirname(state_file)
@@ -116,7 +121,6 @@ class ReversionStrategy:
             try:
                 with open(snap_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    # MODIFIED: [V27.03] 날짜 검사(Validation) 폐기 - 파일 존재만으로 맹신
                     return data.get("plan")
             except Exception:
                 pass
@@ -136,10 +140,10 @@ class ReversionStrategy:
     def record_execution(self, ticker, side, qty, exec_price):
         self._load_state_if_needed(ticker)
         if side == "BUY":
-            spent = qty * exec_price
-            self.executed["BUY_BUDGET"][ticker] = self.executed["BUY_BUDGET"].get(ticker, 0.0) + spent
+            spent = float(qty * exec_price)
+            self.executed["BUY_BUDGET"][ticker] = float(self.executed["BUY_BUDGET"].get(ticker, 0.0)) + spent
         else:
-            self.executed["SELL_QTY"][ticker] = self.executed["SELL_QTY"].get(ticker, 0) + qty
+            self.executed["SELL_QTY"][ticker] = int(self.executed["SELL_QTY"].get(ticker, 0)) + int(qty)
         self._save_state(ticker)
 
     def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, vwap_status, min_idx, alloc_cash, q_data, is_snapshot_mode=False):
@@ -154,8 +158,8 @@ class ReversionStrategy:
             if not vwap_status.get('is_strong_up') and not vwap_status.get('is_strong_down'):
                 return {"orders": [], "trigger_loc": False}
 
-        total_q = sum(item.get("qty", 0) for item in q_data)
-        total_inv = sum(item.get('qty', 0) * item.get('price', 0.0) for item in q_data)
+        total_q = sum(int(item.get("qty", 0)) for item in q_data)
+        total_inv = sum(float(item.get('qty', 0)) * float(item.get('price', 0.0)) for item in q_data)
         avg_price = (total_inv / total_q) if total_q > 0 else 0.0
         
         dates_in_queue = sorted(list(set(item.get('date') for item in q_data if item.get('date'))), reverse=True)
@@ -163,8 +167,8 @@ class ReversionStrategy:
         
         if dates_in_queue:
             lots_1 = [item for item in q_data if item.get('date') == dates_in_queue[0]]
-            l1_qty = sum(item.get('qty', 0) for item in lots_1)
-            l1_price = sum(item.get('qty', 0) * item.get('price', 0.0) for item in lots_1) / l1_qty if l1_qty > 0 else 0.0
+            l1_qty = sum(int(item.get('qty', 0)) for item in lots_1)
+            l1_price = sum(float(item.get('qty', 0)) * float(item.get('price', 0.0)) for item in lots_1) / l1_qty if l1_qty > 0 else 0.0
             
         upper_qty = total_q - l1_qty
         upper_inv = total_inv - (l1_qty * l1_price)
@@ -190,8 +194,8 @@ class ReversionStrategy:
         orders = []
 
         if trigger_loc or is_snapshot_mode:
-            total_spent = self.executed["BUY_BUDGET"].get(ticker, 0.0)
-            rem_budget = max(0.0, alloc_cash - total_spent)
+            total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
+            rem_budget = max(0.0, float(alloc_cash) - total_spent)
             if rem_budget > 0:
                 b1_budget = rem_budget * 0.5
                 b2_budget = rem_budget - b1_budget
@@ -215,7 +219,7 @@ class ReversionStrategy:
                             if grid_p2 >= 0.01 and grid_p2 < p2_trigger:
                                 orders.append({"side": "BUY", "qty": 1, "price": grid_p2})
                 
-            rem_qty_total = max(0, total_q - self.executed["SELL_QTY"].get(ticker, 0))
+            rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
             if rem_qty_total > 0:
                 if curr_p >= trigger_jackpot:
                     orders.append({"side": "SELL", "qty": rem_qty_total, "price": trigger_jackpot})
@@ -242,52 +246,54 @@ class ReversionStrategy:
         slice_ratio_buy = current_weight / total_weight if total_weight > 0 else 1.0
 
         if side == "BUY":
-            total_spent = self.executed["BUY_BUDGET"].get(ticker, 0.0)
+            total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
             if total_spent >= alloc_cash:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
             b1_budget_slice = (alloc_cash * 0.5) * slice_ratio_buy
             b2_budget_slice = (alloc_cash * 0.5) * slice_ratio_buy
 
-            if curr_p <= p1_trigger:
-                exact_q1 = (b1_budget_slice / curr_p) + self.residual["BUY1"].get(ticker, 0.0)
-                alloc_q1 = math.floor(exact_q1)
-                self.residual["BUY1"][ticker] = exact_q1 - alloc_q1
+            # 🚨 [수술 완료] curr_p > 0 조건을 추가하여 API 에러 시 ZeroDivision 붕괴 원천 차단
+            if curr_p > 0 and curr_p <= p1_trigger:
+                exact_q1 = (b1_budget_slice / curr_p) + float(self.residual["BUY1"].get(ticker, 0.0))
+                alloc_q1 = int(math.floor(exact_q1))
+                self.residual["BUY1"][ticker] = float(exact_q1 - alloc_q1)
                 if alloc_q1 > 0:
                     orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger})
                     
-            if curr_p <= p2_trigger:
-                exact_q2 = (b2_budget_slice / curr_p) + self.residual["BUY2"].get(ticker, 0.0)
-                alloc_q2 = math.floor(exact_q2)
-                self.residual["BUY2"][ticker] = exact_q2 - alloc_q2
+            if curr_p > 0 and curr_p <= p2_trigger:
+                exact_q2 = (b2_budget_slice / curr_p) + float(self.residual["BUY2"].get(ticker, 0.0))
+                alloc_q2 = int(math.floor(exact_q2))
+                self.residual["BUY2"][ticker] = float(exact_q2 - alloc_q2)
                 if alloc_q2 > 0:
                     orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger})
 
         else: # SELL
-            rem_qty_total = max(0, total_q - self.executed["SELL_QTY"].get(ticker, 0))
+            # 🚨 [수술 완료] int 강제 캐스팅으로 소수점 주식 찌꺼기 100% 절단
+            rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
             if rem_qty_total <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
 
             if curr_p >= trigger_jackpot:
-                exact_qs = (total_q * slice_ratio_sell) + self.residual["SELL_JACKPOT"].get(ticker, 0.0)
-                alloc_qs = min(math.floor(exact_qs), rem_qty_total)
-                self.residual["SELL_JACKPOT"][ticker] = exact_qs - alloc_qs
+                exact_qs = float(total_q * slice_ratio_sell) + float(self.residual["SELL_JACKPOT"].get(ticker, 0.0))
+                alloc_qs = int(min(math.floor(exact_qs), rem_qty_total))
+                self.residual["SELL_JACKPOT"][ticker] = float(exact_qs - alloc_qs)
                 if alloc_qs > 0:
                     orders.append({"side": "SELL", "qty": alloc_qs, "price": trigger_jackpot})
             
             else:
                 if l1_qty > 0 and curr_p >= trigger_l1:
-                    exact_l1 = (l1_qty * slice_ratio_sell) + self.residual["SELL_L1"].get(ticker, 0.0)
-                    alloc_l1 = min(math.floor(exact_l1), rem_qty_total)
-                    self.residual["SELL_L1"][ticker] = exact_l1 - alloc_l1
+                    exact_l1 = float(l1_qty * slice_ratio_sell) + float(self.residual["SELL_L1"].get(ticker, 0.0))
+                    alloc_l1 = int(min(math.floor(exact_l1), rem_qty_total))
+                    self.residual["SELL_L1"][ticker] = float(exact_l1 - alloc_l1)
                     if alloc_l1 > 0:
                         orders.append({"side": "SELL", "qty": alloc_l1, "price": trigger_l1})
                         rem_qty_total -= alloc_l1
 
                 if upper_qty > 0 and trigger_upper > 0 and curr_p >= trigger_upper and rem_qty_total > 0:
-                    exact_upper = (upper_qty * slice_ratio_sell) + self.residual["SELL_UPPER"].get(ticker, 0.0)
-                    alloc_upper = min(math.floor(exact_upper), rem_qty_total)
-                    self.residual["SELL_UPPER"][ticker] = exact_upper - alloc_upper
+                    exact_upper = float(upper_qty * slice_ratio_sell) + float(self.residual["SELL_UPPER"].get(ticker, 0.0))
+                    alloc_upper = int(min(math.floor(exact_upper), rem_qty_total))
+                    self.residual["SELL_UPPER"][ticker] = float(exact_upper - alloc_upper)
                     if alloc_upper > 0:
                         orders.append({"side": "SELL", "qty": alloc_upper, "price": trigger_upper})
 
