@@ -159,7 +159,7 @@ async def scheduled_graduation_report(context):
     now = datetime.datetime.now(kst)
     
     # MODIFIED: [스케줄러 Time Drift 방어] 서버 지연을 고려해 09:01 ~ 09:05(5분) 넓은 윈도우 허용
-    if not (now.hour == 9 and 1 <= now.minute <= 5):
+    if not (now.hour == 10 and 1 <= now.minute <= 5):
         return
 
     app_data = context.job.data
