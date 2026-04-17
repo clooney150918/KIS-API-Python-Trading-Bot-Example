@@ -1,5 +1,5 @@
 # ==========================================================
-# [broker.py] - 🌟 100% 통합 무결점 완성본 🌟
+# [broker.py] - 🌟 100% 통합 무결점 완성본 (1/2) 🌟
 # ⚠️ 수술 내역: 야후 파이낸스(yfinance) 좀비 스레드 누적 방지
 # 모든 history() 호출에 timeout=5 파라미터 강제 주입 완료
 # 🚨 [V25.19 핫픽스] 토큰 만료 시간 타임존(Timezone) Naive/Aware 충돌 교정
@@ -455,6 +455,7 @@ class KoreaInvestmentBroker:
         except Exception as e:
             print(f"⚠️ [Broker] 야후 파이낸스 범용 1분봉 파싱 에러 ({ticker}): {e}")
             return None
+
     def get_unfilled_orders_detail(self, ticker):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         valid_orders = []
@@ -533,7 +534,6 @@ class KoreaInvestmentBroker:
             return False
             
         return True
-
     def cancel_targeted_orders(self, ticker, side, target_ord_dvsn):
         sll_buy_cd = '02' if side == "BUY" else '01'
         orders = self.get_unfilled_orders_detail(ticker)
@@ -650,7 +650,9 @@ class KoreaInvestmentBroker:
     def get_execution_history(self, ticker, start_date, end_date):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         valid_execs = []
-        seen_keys = set()
+        # MODIFIED: KIS API 중복 레코드 반환 방어를 위한 odno 기반 딥-디듀플리케이션(Deep-Deduplication) 및 분할 체결 병합 이식
+        # odno 기준으로 체결 데이터를 집계: {"odno": {"item": <원본 레코드>, "total_qty": int, "total_amt": float}}
+        odno_map = {}
         fk200, nk200 = "", ""
         
         for attempt in range(10): 
@@ -673,11 +675,30 @@ class KoreaInvestmentBroker:
                     try:
                         raw_qty = item.get('ft_ccld_qty') or '0'
                         raw_unpr = item.get('ft_ccld_unpr3') or '0'
-                        if float(raw_qty) > 0:
-                            unique_key = f"{item.get('odno')}_{item.get('ord_tmd')}_{raw_qty}_{raw_unpr}"
-                            if unique_key not in seen_keys:
-                                seen_keys.add(unique_key)
-                                valid_execs.append(item)
+                        item_qty = float(raw_qty)
+                        item_price = float(raw_unpr)
+                        
+                        if item_qty > 0:
+                            odno = item.get('odno') or ''
+                            if not odno:
+                                # odno가 없거나 빈 문자열인 레코드는 집계에서 제외하고 독립 레코드로 직접 추가
+                                odno_map[f"__nk_{id(item)}"] = {
+                                    "item": dict(item),
+                                    "total_qty": item_qty,
+                                    "total_amt": item_qty * item_price
+                                }
+                            elif odno not in odno_map:
+                                # 최초 진입: 원본 레코드를 보존하고 집계 카운터 초기화
+                                odno_map[odno] = {
+                                    "item": dict(item),
+                                    "total_qty": item_qty,
+                                    "total_amt": item_qty * item_price
+                                }
+                            else:
+                                # 재진입(분할 체결): 수량 및 총 금액 누적 합산 (가중 평균 계산용)
+                                odno_map[odno]["total_qty"] += item_qty
+                                odno_map[odno]["total_amt"] += (item_qty * item_price)
+                                
                     except (TypeError, ValueError) as e:
                         print(f"⚠️ [Broker] 체결내역 파싱 중 Safe Casting 예외 발생 (스킵): {e}")
                         continue
@@ -694,6 +715,15 @@ class KoreaInvestmentBroker:
                 error_msg = resp_json.get('msg1') if resp_json else "응답 없음"
                 print(f"❌ [{ticker} 체결내역 오류] {error_msg}")
                 break
+
+        # MODIFIED: odno_map에 집계된 결과를 valid_execs로 변환 (수량 갱신 및 체결가 가중 평균 계산)
+        for key, data in odno_map.items():
+            merged_item = data["item"]
+            merged_item["ft_ccld_qty"] = str(data["total_qty"])
+            avg_price = data["total_amt"] / data["total_qty"] if data["total_qty"] > 0 else 0.0
+            merged_item["ft_ccld_unpr3"] = str(avg_price)
+            valid_execs.append(merged_item)
+            
         return valid_execs
 
     def get_genesis_ledger(self, ticker, limit_date_str=None):
