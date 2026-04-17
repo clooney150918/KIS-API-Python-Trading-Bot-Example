@@ -1,3 +1,10 @@
+# ==========================================================
+# [telegram_states.py] - 🌟 100% 통합 완성본 🌟 (Part 1)
+# MODIFIED: [V28.11 장부 텍스트 수정 런타임 에러 수술]
+# 텍스트로 큐(Queue) 수정 시 발생하던 데드코드(_verify_and_update_queue) 
+# 호출 에러(AttributeError) 전면 적출. 다이렉트 장부 덮어쓰기 후 
+# KIS 실잔고와 비파괴 보정(CALIB)을 강제 격발하는 파이프라인 완벽 이식.
+# ==========================================================
 # NEW: [리팩토링 2단계] 유저 텍스트 입력 및 상태 기계(State Machine) 독립 클래스 분리
 import logging
 import datetime
@@ -76,6 +83,11 @@ class TelegramStates:
                         return await update.message.reply_text(f"🚨 <b>팻핑거 방어 가동:</b> 입력가(${price:.2f})가 현재가(${curr_p:.2f}) 대비 ±30%를 초과합니다. 다시 시도해주세요.", parse_mode='HTML')
                 except Exception:
                     pass
+# ==========================================================
+# [telegram_states.py] - 🌟 100% 통합 완성본 🌟 (Part 2)
+# ==========================================================
+
+# ... (앞선 1부 코드의 EDITQ_ 분기 try 문 끝부분에 이어집니다) ...
 
                 q_file = "data/queue_ledger.json"
                 all_q = {}
@@ -90,10 +102,25 @@ class TelegramStates:
                         item['price'] = price
                         break
                 
-                await self.sync_engine._verify_and_update_queue(ticker, ticker_q, context, chat_id)
+                # MODIFIED: [V28.11 장부 텍스트 수정 런타임 에러 수술]
+                # 폐기된 _verify_and_update_queue 데드코드 호출을 원천 차단하고,
+                # 다이렉트로 장부에 기록한 뒤 비파괴 보정(CALIB) 엔진을 강제 격발시킴
+                if not getattr(self, 'queue_ledger', None):
+                    from queue_ledger import QueueLedger
+                    self.queue_ledger = QueueLedger()
+                    
+                self.queue_ledger.queues[ticker] = ticker_q
+                self.queue_ledger._save()
+                
                 del controller.user_states[chat_id]
                 short_date = target_date[:10]
-                await update.message.reply_text(f"✅ <b>[{ticker}] 지층 정밀 수정 완료!</b>\n▫️ {short_date} | {qty}주 | ${price:.2f}\n▫️ 확인: 장부 하단 🗄️ 버튼", parse_mode='HTML')
+                await update.message.reply_text(f"✅ <b>[{ticker}] 지층 정밀 수정 완료! KIS 원장과 동기화합니다.</b>\n▫️ {short_date} | {qty}주 | ${price:.2f}", parse_mode='HTML')
+                
+                if ticker not in self.sync_engine.sync_locks:
+                    self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+                if not self.sync_engine.sync_locks[ticker].locked():
+                    await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
+                    
                 return
 
             val = float(text)

@@ -1,3 +1,9 @@
+# ==========================================================
+# [telegram_sync_engine.py] - 🌟 100% 통합 완성본 🌟 (Part 1)
+# MODIFIED: [V28.10 장부 환각 엣지 케이스 수술] 실잔고와 큐 장부 수량이 일치할 경우
+# 비파괴 보정(CALIB) 호출을 원천 차단하는 멱등성 락온(Idempotency Lock-on) 방어막 이식.
+# 이로써 21주가 42주로 단순 중복 덧셈되던 치명적 환각 버그 영구 소각 완료.
+# ==========================================================
 # NEW: [리팩토링 1단계] 핵심 비즈니스 코어(장부 동기화, 졸업 판별, 큐 관리) 독립 클래스로 캡슐화
 import logging
 import datetime
@@ -177,12 +183,23 @@ class TelegramSyncEngine:
                         self._sync_escrow_cash(ticker)
                         return "SUCCESS"
                         
-                    calibrated = self.queue_ledger.sync_with_broker(ticker, actual_qty, actual_avg)
-                    if calibrated:
-                        await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 비파괴 보정(CALIB) 완료!</b>\n▫️ KIS 실제 잔고(<b>{actual_qty}주</b>)에 맞춰 LIFO 지층을 정밀 차감/추가했습니다.", parse_mode='HTML')
+                    # MODIFIED: [V28.10 장부 환각 엣지 케이스 수술]
+                    # KIS 실잔고와 장부 수량이 완벽히 일치하면 sync_with_broker 호출을 원천 차단(멱등성 락온).
+                    # 이미 반영된 21주 위에 당일 체결된 21주가 단순 덧셈(Append)되어 42주로 부풀려지던 엣지 케이스 영구 소각.
+                    if actual_qty == ledger_qty:
+                        pass
+                    else:
+                        calibrated = self.queue_ledger.sync_with_broker(ticker, actual_qty, actual_avg)
+                        if calibrated:
+                            await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 비파괴 보정(CALIB) 완료!</b>\n▫️ KIS 실제 잔고(<b>{actual_qty}주</b>)에 맞춰 LIFO 지층을 정밀 차감/추가했습니다.", parse_mode='HTML')
                     
                     self._sync_escrow_cash(ticker)
                     return "SUCCESS"
+# ==========================================================
+# [telegram_sync_engine.py] - 🌟 100% 통합 완성본 🌟 (Part 2)
+# ==========================================================
+
+# ... (앞선 1부 코드의 process_auto_sync 함수 V-REV 분기 끝부분에 이어집니다) ...
 
                 target_execs = await asyncio.to_thread(self.broker.get_execution_history, ticker, target_kis_str, target_kis_str)
                 if target_execs:

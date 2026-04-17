@@ -1,4 +1,10 @@
-# NEW: [리팩토링 3단계] 인라인 키보드 콜백 분배기 적출 및 도메인 캡슐화
+# ==========================================================
+# [telegram_callbacks.py] - 🌟 100% 통합 완성본 🌟 (Part 1)
+# MODIFIED: [V28.12 통이관(SET_INIT) 및 큐 삭제 런타임 에러 팩트 수술]
+# V-REV 자동 물량 이관(SET_INIT) 시 발생하던 _verify_and_update_queue 
+# 데드코드 의존성(AttributeError) 100% 적출. 다이렉트 큐 저장 및 
+# process_auto_sync 강제 격발 파이프라인으로 아키텍처 통일 완료.
+# ==========================================================
 import logging
 import datetime
 import pytz
@@ -145,10 +151,24 @@ class TelegramCallbacks:
                 
                 if action == "DEL_Q":
                     new_q = [item for item in ticker_q if item.get('date') != target_date]
-                    await self.sync_engine._verify_and_update_queue(ticker, new_q, context, query.message.chat_id)
-                    await query.answer("✅ 삭제 완료.", show_alert=False)
                     
-                    msg, markup = self.view.get_queue_management_menu(ticker, new_q)
+                    # MODIFIED: [V28.12 런타임 에러 팩트 수술] 데드코드 _verify_and_update_queue 제거 및 다이렉트 처리
+                    if not getattr(self, 'queue_ledger', None):
+                        from queue_ledger import QueueLedger
+                        self.queue_ledger = QueueLedger()
+                        
+                    self.queue_ledger.queues[ticker] = new_q
+                    self.queue_ledger._save()
+                    
+                    await query.answer("✅ 지층 삭제 완료. KIS 원장과 동기화합니다.", show_alert=False)
+                    
+                    if ticker not in self.sync_engine.sync_locks:
+                        self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+                    if not self.sync_engine.sync_locks[ticker].locked():
+                        await self.sync_engine.process_auto_sync(ticker, query.message.chat_id, context, silent_ledger=True)
+                        
+                    final_q = self.queue_ledger.get_queue(ticker)
+                    msg, markup = self.view.get_queue_management_menu(ticker, final_q)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                     
                 elif action == "EDIT_Q":
@@ -164,6 +184,11 @@ class TelegramCallbacks:
                     await query.edit_message_text(prompt, parse_mode='HTML')
             except Exception as e:
                 await query.answer(f"❌ 처리 중 에러 발생: {e}", show_alert=True)
+# ==========================================================
+# [telegram_callbacks.py] - 🌟 100% 통합 완성본 🌟 (Part 2)
+# ==========================================================
+
+# ... (앞선 1부 코드의 EDITQ_ 예외 처리 끝부분에 이어집니다) ...
 
         elif action == "VERSION":
             history_data = self.cfg.get_full_version_history()
@@ -174,6 +199,7 @@ class TelegramCallbacks:
                 page_idx = int(data[2])
                 msg, markup = self.view.get_version_message(history_data, page_index=page_idx)
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                
         elif action == "RESET":
             if sub == "MENU":
                 active_tickers = self.cfg.get_active_tickers()
@@ -297,7 +323,6 @@ class TelegramCallbacks:
             ver = self.cfg.get_version(t)
             
             if ver == "V_REV" and getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t):
-                # MODIFIED: 수동 VWAP 개념 변경(한투 자체 VWAP 위임)에 따른 텍스트 수정
                 await query.answer("🚨 [격발 차단] 수동(한투 알고리즘) 모드가 가동 중입니다. 지시서를 참고하여 한투 앱(V앱)에서 직접 매매를 걸어주십시오.", show_alert=True)
                 return
             
@@ -506,7 +531,6 @@ class TelegramCallbacks:
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
                     self.cfg.set_avwap_hybrid_mode(ticker, False)
                     
-                # MODIFIED: 수동 VWAP 개념 변경에 따른 문구 수정 (한투 자체 알고리즘 / 자체 U-Curve 엔진)
                 if mode_type == "MANUAL":
                     self.cfg.set_manual_vwap_mode(ticker, True)
                     mode_txt = "🖐️ 수동 모드 (한투 VWAP 알고리즘 위임)"
@@ -582,8 +606,20 @@ class TelegramCallbacks:
                         "type": "INIT_TRANSFERRED" 
                     }]
                     try:
-                        await self.sync_engine._verify_and_update_queue(ticker, new_q, context, query.message.chat_id)
-                        await query.edit_message_text(f"✅ <b>[{ticker}] 자동 물량 이관 및 초기화 완료!</b>\n\n<b>{qty}주</b>(평단 <b>${avg:.2f}</b>)의 단일 기초 블록으로 완벽히 재구성되었습니다.", parse_mode='HTML')
+                        # MODIFIED: [V28.12 통이관 에러 수술] 데드코드 100% 적출 및 다이렉트 처리 
+                        if not getattr(self, 'queue_ledger', None):
+                            from queue_ledger import QueueLedger
+                            self.queue_ledger = QueueLedger()
+                            
+                        self.queue_ledger.queues[ticker] = new_q
+                        self.queue_ledger._save()
+                        
+                        await query.edit_message_text(f"✅ <b>[{ticker}] 자동 물량 이관 및 초기화 완료! KIS 원장과 동기화합니다.</b>\n\n<b>{qty}주</b>(평단 <b>${avg:.2f}</b>)의 단일 기초 블록으로 완벽히 재구성되었습니다.", parse_mode='HTML')
+                        
+                        if ticker not in self.sync_engine.sync_locks:
+                            self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+                        if not self.sync_engine.sync_locks[ticker].locked():
+                            await self.sync_engine.process_auto_sync(ticker, query.message.chat_id, context, silent_ledger=False)
                     except Exception as e:
                         await query.edit_message_text(f"❌ 쓰기 오류 발생: {e}", parse_mode='HTML')
                 else:
