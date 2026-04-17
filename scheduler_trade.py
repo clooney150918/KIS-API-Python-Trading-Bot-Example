@@ -1,27 +1,10 @@
 # ==========================================================
-# [scheduler_trade.py] - 🌟 100% 통합 완성본 🌟 (Part 1)
-# ⚠️ 수술 내역: 
-# 🚨 [V25.03 긴급 수술] 타임존 Glitch 방어 및 상대적 시간 윈도우(Relative Time Window) 도입
-# 💡 하드코딩된 '15시' 비교를 폐기하고 '장 마감(market_close) 30분 전' 앵커 시스템으로 전면 교체
-# 🚨 [V25.04 패치] 듀얼 레퍼런싱 데이터(SOXX/SOXL) 이원화 호출 및 파이프라인 연동
-# 🚨 [V25.19 핫픽스] 서머타임(DST) 경계일 프리마켓 시간 연산 에러(NonExistentTimeError) 수학적 교정
-# 🚨 [V25.19 핫픽스] 듀얼 레퍼런싱 base_map 매핑 누락 시 파생상품 오호출 맹점 방어
-# 🚨 [V25.20 핫픽스] 잭팟 스윕 피니셔 MOC 락다운 충돌 방어 및 순수 매도 가능 잔량 디커플링 연산 이식
-# 🚨 [V25.24 타임라인 시프트] VWAP 슬라이싱 시간을 3분 앞당겨(장 마감 33분 전~4분 전) 막판 미체결 맹점 원천 차단
-# 🚨 [V25.25 에러 팩트 보고] 애프터마켓 로터리 덫 거절 사유 텔레그램 타전 방어막 신설
-# 🚨 [V25.26 락다운 확장] 당일 0주 졸업 후 유령 매수(Phantom Buy) 방지를 위한 Daily Buy-Lock 완벽 이식
-# 🚀 [V26.02 핵심 수술] V14 무매 오리지널의 VWAP 슬라이싱 스케줄러 통합 확장
-# 🚨 [V26.03 핫픽스] V-REV 자동매매 시 줍줍(Grid) 누락 복원 및 수동 모드 스케줄러 100% 락다운 이식
-# 🚨 [V26.04 스위프 패치] VWAP 엔진 데드존(15:56~15:58) 철거 및 3분간(15:57~16:00)의 지속적 클린업 스윕 피니셔로 통합
-# 🚀 [V27.01 지시서 스냅샷] 매일 17:05 확정 지시서를 박제하고, 16:05 EST에 초기화하는 파이프라인 이식 완료
-# 🚨 [V27.13 그랜드 수술] 코파일럿 합작 - all_success 딕셔너리 붕괴 차단, 상위 평단가 음수 오류 해결, 스냅샷 은폐 사고(finally) 방어 및 0주 새출발 확정 매수(/ 0.935) 원본 완벽 복구
-# 🚨 [V27.14 핫픽스] AVWAP 예산 중복 소진 차단, 스윕 잔여 주문 취소, VWAP 예외 전파 붕괴 방어막 이식
-# 🚀 [V28.01 핫픽스] 정규장 스케줄러 타임 윈도우 15분 확장 (APScheduler 지연 붕괴 원천 차단)
-# 🚀 [V28.02 그랜드 수술] 코파일럿 엣지 케이스 3대 결함(DST 데드락 65분 확장, prev_c 결측 텔레그램 타전, tx_lock 콜드스타트 가드) 전면 수술 완료
-# 🚀 [V28.03 그랜드 수술] 엣지 케이스 4대 결함(이중 매도 방지, 클램핑 수학 모순 교정, 큐 증발 폴백, 잠금 스킵 타전) 및 UX 렌더링 충돌 교정 완비
-# 🚀 [V28.04 그랜드 수술] VWAP 엔진 내 prev_c 앵커(Lock-on) 고정 및 was_holding 영속성 듀얼 캐싱 방어막 이식 완비
-# 🚨 [V28.07 그랜드 수술] 장중 스냅샷 강제 은폐(Hide) 및 파괴 레거시 전면 적출 (0주 새출발 기억상실 하극상 버그 영구 차단)
-# MODIFIED: [V28.08 세션 오염 방어] 내일 날짜 스냅샷 복사(Copy) 레거시 100% 영구 적출. 야간 청소 스케줄러 기절 시 발생하는 어제의 0주 스냅샷 환각 버그 차단 완료.
+# [scheduler_trade.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
+# MODIFIED: [V28.18 V14 오리지널 스냅샷 저장 배선 개통]
+# 1) 17:05 정규장 스케줄러(scheduled_regular_trade) 내 V14 모드 분기에서
+#    새로 이식된 v14_plugin.save_daily_snapshot() 함수를 호출하도록 배선 추가.
+# 2) 애프터마켓 스케줄러(scheduled_after_market_lottery)의 스냅샷 소각 로직에
+#    V14 오리지널 스냅샷 파일(daily_snapshot_V14_*.json)도 함께 정리되도록 클린업 확장.
 # ==========================================================
 import os
 import logging
@@ -542,11 +525,6 @@ async def scheduled_vwap_trade(context):
         await asyncio.wait_for(_do_vwap(), timeout=45.0)
     except Exception as e:
         logging.error(f"🚨 VWAP 스케줄러 에러: {e}")
-# ==========================================================
-# [scheduler_trade.py] - 🌟 100% 통합 완성본 🌟 (Part 2)
-# ==========================================================
-
-# ... (앞선 1부 코드의 scheduled_vwap_trade 함수 끝부분에 이어집니다) ...
 
 # ==========================================================
 # 4. 🌅 정규장 오픈 (17:05) 전송 (V14 통합 & V-REV 예방 방어선)
@@ -731,7 +709,6 @@ async def scheduled_regular_trade(context):
                             "trigger_loc": True,
                             "total_q": v_rev_q_qty
                         }
-                        # MODIFIED: [V28.08 세션 오염 방어] 내일 날짜로 스냅샷을 강제 복사하던 레거시 로직 전면 삭제
                         if hasattr(strategy_rev, 'save_daily_snapshot'):
                             strategy_rev.save_daily_snapshot(t, plan_result)
 
@@ -750,7 +727,6 @@ async def scheduled_regular_trade(context):
                         )
                         loc_orders = v14_plan.get('core_orders', [])
                         
-                        # MODIFIED: [V28.08 세션 오염 방어] V14 분기 내일 날짜 스냅샷 복사 레거시 전면 삭제
                         msgs[t] += f"🛡️ <b>[{t}] 무매4(VWAP) 예방적 LOC 덫 장전 완료</b>\n"
 
                     sell_success_count = 0
@@ -781,8 +757,15 @@ async def scheduled_regular_trade(context):
                     v_rev_tickers.append((t, version))
                     continue
                 
+                # MODIFIED: [V28.18 V14 오리지널 스냅샷 저장 배선 개통]
+                # 17:05 정규장 스케줄러가 순수 V14 모드일 때도 스냅샷을 파일에 강제로 박제(Lock-on)하여 
+                # 장중 타점 변동(공수 붕괴) 엣지 케이스 원천 차단
                 ma_5day = float(await asyncio.to_thread(broker.get_5day_ma, t) or 0.0)
-                plan = strategy.get_plan(t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0))
+                plan = strategy.get_plan(t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True)
+                
+                if hasattr(strategy, 'v14_plugin') and hasattr(strategy.v14_plugin, 'save_daily_snapshot'):
+                    strategy.v14_plugin.save_daily_snapshot(t, plan)
+                    
                 plans[t] = plan
                 
                 if plan.get('core_orders', []) or plan.get('orders', []):
@@ -910,7 +893,8 @@ async def scheduled_after_market_lottery(context):
                     
             try:
                 for t in cfg.get_active_tickers():
-                    for prefix in ["REV", "V14VWAP"]:
+                    # MODIFIED: [V28.18 클린업 확장] 애프터마켓 종료 시 V14 오리지널 스냅샷도 함께 청소하도록 패턴 추가
+                    for prefix in ["REV", "V14VWAP", "V14"]:
                         for f in glob.glob(f"data/daily_snapshot_{prefix}_*_{t}.json"):
                             try: os.remove(f)
                             except: pass

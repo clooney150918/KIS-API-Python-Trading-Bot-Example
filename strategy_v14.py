@@ -1,9 +1,12 @@
 # ==========================================================
-# [strategy_v14.py]
+# [strategy_v14.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
 # ⚠️ 오리지널 V14(무매4) & 클래식 리버스 모드 독립 플러그인
-# 💡 V17 및 VWAP 등 타 모드 간섭 로직 100% 적출 완료
-# 🚨 [긴급 수술] 대박익절(리버스 생략) 로직 누수 방어 및 100% 스윕 피니셔 탑재 완료
-# 🚨 [V27.08 그랜드 수술] 코파일럿 합작 - 리버스 예산 0원 붕괴 차단, 참조 오염(Mutation) 방어 및 명시적 Int 캐스팅 적용
+# MODIFIED: [V28.17 V14 오리지널 스냅샷 앵커 및 디커플링 이식]
+# 1) V14 모드에도 save_daily_snapshot / load_daily_snapshot 함수 신설 이식.
+# 2) get_plan() 진입 시 is_snapshot_mode 파라미터를 추가하여, 
+#    텔레그램 지시서 조회 시 박제된 스냅샷을 우선 반환하도록 디커플링 배선 완비.
+#    (이로써 장중 매수/매도 체결 시 지시서 타점이 실시간으로 뒤틀려
+#    공수가 교대되는 하극상 엣지 케이스를 원천 차단함)
 # ==========================================================
 import math
 import os
@@ -17,6 +20,52 @@ class V14Strategy:
 
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
     def _floor(self, val): return math.floor(val * 100) / 100.0
+
+    # NEW: [V28.17 스냅샷 엔진 이식] V14 오리지널 모드 스냅샷 저장(Lock-on) 로직
+    def save_daily_snapshot(self, ticker, plan_data):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        snap_file = f"data/daily_snapshot_V14_{ticker}.json"
+        
+        # 🚨 [치명적 경고 1 준수] 세션 간 오염 방지: 당일 날짜로 단 1회만 멱등성 박제
+        data = {
+            "date": today_str,
+            "total_q": int(plan_data.get('total_q', 0)),
+            "avg_price": float(plan_data.get('avg_price', 0.0)),
+            "one_portion": float(plan_data.get('one_portion', 0.0)),
+            "star_price": float(plan_data.get('star_price', 0.0)),
+            "star_ratio": float(plan_data.get('star_ratio', 0.0)),
+            "t_val": float(plan_data.get('t_val', 0.0)),
+            "is_reverse": bool(plan_data.get('is_reverse', False)),
+            "orders": plan_data.get('orders', []),
+            "core_orders": plan_data.get('core_orders', []),
+            "bonus_orders": plan_data.get('bonus_orders', []),
+            "process_status": plan_data.get('process_status', '')
+        }
+        
+        os.makedirs(os.path.dirname(snap_file), exist_ok=True)
+        try:
+            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(snap_file))
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, snap_file)
+        except Exception as e:
+            pass
+
+    # NEW: [V28.17 스냅샷 엔진 이식] V14 오리지널 모드 스냅샷 로드(Decoupling) 로직
+    def load_daily_snapshot(self, ticker):
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        snap_file = f"data/daily_snapshot_V14_{ticker}.json"
+        if os.path.exists(snap_file):
+            try:
+                with open(snap_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if data.get("date") == today_str:
+                        return data
+            except Exception:
+                pass
+        return None
 
     def _mark_quarter_sell_completed(self, ticker):
         flag_file = f"cache_sniper_sell_{ticker}.json"
@@ -42,9 +91,6 @@ class V14Strategy:
         except Exception:
             pass
 
-    # ==========================================================
-    # 🛡️ KIS 자전거래(Wash-Trade) 원천 차단 방어벽 엔진
-    # ==========================================================
     def _apply_wash_trade_shield(self, c_orders, b_orders):
         all_o = c_orders + b_orders
         
@@ -56,7 +102,6 @@ class V14Strategy:
         def _clean(lst):
             res = []
             for o in lst:
-                # 🚨 [수술 완료] 참조 오염(In-place Mutation) 방지를 위한 독립된 딕셔너리 복사본 생성
                 new_o = o.copy()
                 if new_o['side'] == 'BUY':
                     if has_sell_moc and new_o['type'] in ['LOC', 'MOC']: 
@@ -74,7 +119,15 @@ class V14Strategy:
 
         return _clean(c_orders), _clean(b_orders)
 
-    def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, **kwargs):
+    # MODIFIED: [V28.17 디커플링 배선] 텔레그램 지시서 조회 시 스냅샷 우선 반환을 위한 is_snapshot_mode 파라미터 추가
+    def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, is_snapshot_mode=False, **kwargs):
+        
+        # 🚨 [치명적 경고 3 준수] 텔레그램 지시서 조회(/sync) 등 스냅샷 모드일 경우 박제된 앵커를 최우선으로 반환하여 장중 가격 변동(공수 붕괴) 원천 차단
+        if not is_snapshot_mode:
+            snap = self.load_daily_snapshot(ticker)
+            if snap:
+                return snap
+                
         core_orders = []
         bonus_orders = []
         process_status = "" 
@@ -144,9 +197,8 @@ class V14Strategy:
             else:
                 one_portion_amt = base_portion
                 
-            # 🚨 [수술 완료] 리버스 예산 0원 산출 시 런타임 붕괴(ZeroDivision) 원천 차단 방어막
             if one_portion_amt <= 0:
-                return {"orders": [], "core_orders": [], "bonus_orders": [], "t_val": t_val, "one_portion": 0.0, "process_status": "⛔리버스예산오류(0원)", "is_reverse": True, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
+                return {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": 0.0, "process_status": "⛔리버스예산오류(0원)", "is_reverse": True, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
         else:
             star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
             
@@ -157,14 +209,14 @@ class V14Strategy:
 
         base_price = current_price if current_price > 0 else prev_close
         if base_price <= 0: 
-            return {"orders": [], "core_orders": [], "bonus_orders": [], "t_val": t_val, "one_portion": one_portion_amt, "process_status": "⛔가격오류", "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
+            return {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": "⛔가격오류", "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
             
         if market_type == "PRE_CHECK":
             process_status = "🌅프리마켓"
             if qty > 0 and target_price > 0 and current_price >= target_price and not is_reverse:
                 core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
             orders = core_orders + bonus_orders
-            return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
+            return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
 
         if market_type == "REG":
             if qty == 0:
@@ -174,7 +226,7 @@ class V14Strategy:
                 if buy_qty > 0:
                     core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty, "type": "LOC", "desc": "🆕새출발"})
                 orders = core_orders + bonus_orders
-                return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
+                return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
 
             if is_reverse:
                 sell_divisor = 10 if split <= 20 else 20
@@ -214,18 +266,14 @@ class V14Strategy:
                             capped_jup_price = min(raw_jup_price, buy_price - 0.01)
                             jup_price = max(0.01, round(capped_jup_price, 2))
                             if jup_price > 0:
-                                # 🚨 [수술 완료] API 거절 방지 명시적 int() 처리
                                 bonus_orders.append({"side": "BUY", "price": jup_price, "qty": int(1), "type": "LOC", "desc": f"🧹리버스줍줍({i})" })
                 
                 if lock_s_sell: process_status = "🔫리버스(명중)"
 
                 core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
                 orders = core_orders + bonus_orders
-                return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
+                return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
 
-            # ==========================================================
-            # 🚨 [긴급 수술] 대박익절(리버스 생략) 누수 방어 및 스윕 피니셔 발사
-            # ==========================================================
             if is_jackpot_reached and (t_val > (split - 1) or is_money_short):
                 process_status = "🎉대박익절(리버스생략)"
                 if qty > 0:
@@ -233,7 +281,7 @@ class V14Strategy:
                 core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
                 orders = core_orders + bonus_orders
                 return {
-                    "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders,
+                    "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price,
                     "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status,
                     "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio,
                     "real_cash_used": real_available_cash,
@@ -304,7 +352,7 @@ class V14Strategy:
             orders = core_orders + bonus_orders
             
             return {
-                "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders,
+                "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price,
                 "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status,
                 "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio,
                 "real_cash_used": real_available_cash,

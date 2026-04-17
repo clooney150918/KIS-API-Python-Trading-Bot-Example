@@ -8,6 +8,8 @@
 # 3) V14-VWAP 모드 스냅샷 수량 Key('initial_qty') 불일치 팩트 교정.
 # 4) [2차 보완] 하드코딩된 '[1층 단독]' 문자열 의존성 100% 소각 및 
 #    유연한 동적 번호 부여(Pop1, Pop2...) 파싱 아키텍처 이식.
+# 5) [3차 보완] V-REV 잭팟 타점 실시간 변이 방어를 위해 actual_avg 대신
+#    스냅샷에 박제된 avg_price 앵커 최우선 적용.
 # ==========================================================
 import logging
 import datetime
@@ -351,7 +353,7 @@ class TelegramController:
                 if is_manual_vwap:
                     cached_snap = self.strategy.v14_vwap_plugin.load_daily_snapshot(t)
                 else:
-                    if hasattr(self.strategy, 'v14_plugin'):
+                    if hasattr(self.strategy, 'v14_plugin') and hasattr(self.strategy.v14_plugin, 'load_daily_snapshot'):
                         cached_snap = self.strategy.v14_plugin.load_daily_snapshot(t)
             
             logic_qty = actual_qty
@@ -403,8 +405,6 @@ class TelegramController:
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
                 
-                # MODIFIED: [맹점 1 수술 2차 보완] 스냅샷 디커플링 (유연한 파싱 도입)
-                # 하드코딩된 '[1층 단독]' 등의 문자열에 의존하지 않고 배열 순서대로 Pop1, Pop2 매핑
                 if cached_snap and "orders" in cached_snap and logic_qty > 0:
                     sell_idx = 1
                     for o in cached_snap["orders"]:
@@ -413,10 +413,11 @@ class TelegramController:
                             sell_idx += 1
                             
                     if not is_manual_vwap:
-                        target_jackpot = round(actual_avg * 1.01, 2)
+                        # MODIFIED: [3차 보완] 잭팟 타점 연산 시 실시간 actual_avg 오염을 방어하고 스냅샷 avg_price를 최우선 적용
+                        snap_avg = cached_snap.get('avg_price', actual_avg)
+                        target_jackpot = round(snap_avg * 1.01, 2)
                         v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} 돌파 시 <b>{logic_qty}주</b> (옵션)\n"
                 
-                # 스냅샷이 없거나 17:05 KST 이전(0주 새출발 대기 등)인 경우에만 실시간 연산 폴백(Fallback) 가동
                 elif q_list and logic_qty > 0:
                     l1_qty = q_list[-1].get('qty', 0)
                     l1_price = q_list[-1].get('price', safe_prev_close)
