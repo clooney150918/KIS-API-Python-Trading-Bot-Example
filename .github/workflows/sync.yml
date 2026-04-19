@@ -1,0 +1,27 @@
+name: Upstream Sync
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # 매일 새벽에 자동으로 한 번씩 확인해요
+  workflow_dispatch: # 내가 원할 때 바로 버튼 눌러서 할 수도 있어요
+
+jobs:
+  sync_latest_from_upstream:
+    name: Sync latest commits from upstream repo
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v3
+
+      - name: Sync upstream changes
+        id: sync
+        uses: a2021lv/fork-sync@v1.6.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          upstream_repository: sngsng-ju/KIS-API-Python-Trading-Bot-Example # 원본 주소
+          target_branch: main
+          upstream_branch: main
