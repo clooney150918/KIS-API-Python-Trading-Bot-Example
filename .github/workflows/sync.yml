@@ -18,10 +18,7 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Sync upstream changes
-        id: sync
-        uses: a2021lv/fork-sync@v1.6.3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          upstream_repository: sngsng-ju/KIS-API-Python-Trading-Bot-Example # 원본 주소
-          target_branch: main
-          upstream_branch: main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh repo sync ${{ github.repository }} -b main
