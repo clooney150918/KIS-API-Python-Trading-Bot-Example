@@ -19,6 +19,7 @@
 # MODIFIED: [V28.19 타임존 락온] datetime.now()를 EST(미국 동부) 기준으로 강제 고정하여 KST 자정 경계 스냅샷 증발 버그 완벽 수술
 # MODIFIED: [V28.20 무조건 진입 투트랙] 0주 새출발 시 VWAP 런타임 타격에서 Buy1 상한선 방어막 철거 (스냅샷 락온과 완벽한 디커플링 이식)
 # NEW: [V28.22 AI 환각 방어 백신 이식] 공수 교대 로직에 AI 에이전트 오판 차단 경고 주석 하드코딩
+# NEW: [V28.27 자전거래 락온 방어막] 매도 단가 역전 시 매수 단가 강제 캡핑(Capping) 적용하여 API Reject 엣지 케이스 완벽 수술
 # ==========================================================
 import math
 import os
@@ -222,6 +223,16 @@ class ReversionStrategy:
             p1_trigger = round(prev_c * 0.995, 2)
             p2_trigger = round(prev_c * 0.9725, 2)
 
+        # NEW: [V28.27 자전거래 락온 방어막] 독립 산출된 매수 타점이 매도 타점을 위로 뚫어 API 리젝이 발생하는 패러독스 원천 차단
+        if total_q > 0:
+            active_sell_targets = [t for t in [trigger_jackpot, trigger_l1, trigger_upper] if t > 0]
+            if active_sell_targets:
+                min_sell = min(active_sell_targets)
+                if p1_trigger >= min_sell:
+                    p1_trigger = max(0.01, round(min_sell - 0.01, 2))
+                if p2_trigger >= min_sell:
+                    p2_trigger = max(0.01, round(min_sell - 0.01, 2))
+
         is_strong_up = vwap_status.get('is_strong_up', False)
         is_strong_down = vwap_status.get('is_strong_down', False)
         trigger_loc = is_strong_up or is_strong_down 
@@ -335,4 +346,3 @@ class ReversionStrategy:
 
         self._save_state(ticker)
         return {"orders": orders, "trigger_loc": False, "total_q": total_q}
-
