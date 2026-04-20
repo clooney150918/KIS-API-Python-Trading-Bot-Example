@@ -934,3 +934,94 @@ async def scheduled_regular_trade(context):
                 for o in target_bonus:
                     res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
                     msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주: {'✅' if res.get('
+            for t in sorted_tickers:
+                if t not in plans: continue
+                target_bonus = plans[t].get('bonus_orders', [])
+                for o in target_bonus:
+                    res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
+                    msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주: {'✅' if res.get('rt_cd')=='0' else '❌(잔금패스)'}\n"
+                    await asyncio.sleep(0.2) 
+
+            for t in sorted_tickers:
+                if t not in plans: continue
+                target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
+                target_bonus = plans[t].get('bonus_orders', [])
+                if not target_orders and not target_bonus: continue
+                
+                if all_success_map[t] and len(target_orders) > 0:
+                    cfg.set_lock(t, "REG")
+                    msgs[t] += "\n🔒 <b>필수 주문 정상 전송 완료 (잠금 설정됨)</b>"
+                elif not all_success_map[t] and len(target_orders) > 0:
+                    msgs[t] += "\n⚠️ <b>일부 필수 주문 실패 (매매 잠금 보류)</b>"
+                elif len(target_bonus) > 0:
+                    cfg.set_lock(t, "REG")
+                    msgs[t] += "\n🔒 <b>보너스 주문만 전송 완료 (잠금 설정됨)</b>"
+                    
+                if not any(tx[0] == t for tx in v_rev_tickers): 
+                    await context.bot.send_message(chat_id=chat_id, text=msgs[t], parse_mode='HTML')
+
+            return True, "SUCCESS"
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            success, fail_reason = await asyncio.wait_for(_do_regular_trade(), timeout=300.0)
+            if success:
+                if attempt > 1:
+                    await context.bot.send_message(chat_id=chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 전송을 완수했습니다!</b>", parse_mode='HTML')
+                return 
+        except Exception as e:
+            logging.error(f"정규장 전송 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
+
+        if attempt < MAX_RETRIES:
+            if attempt == 1 or attempt % 5 == 0:
+                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️", parse_mode='HTML')
+            await asyncio.sleep(RETRY_DELAY)
+
+    await context.bot.send_message(chat_id=chat_id, text="🚨 <b>[긴급 에러] 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')
+
+# ==========================================================
+# 5. 🌙 애프터마켓 로터리 덫 (16:05 EST / 05:05 KST)
+# ==========================================================
+async def scheduled_after_market_lottery(context):
+    if not is_market_open(): return
+    
+    app_data = context.job.data
+    cfg, broker, tx_lock = app_data['cfg'], app_data['broker'], app_data['tx_lock']
+    chat_id = context.job.chat_id
+
+    async def _do_lottery():
+        async with tx_lock:
+            cash, holdings = await asyncio.to_thread(broker.get_account_balance)
+            if holdings is None: return
+            
+            safe_holdings = holdings if isinstance(holdings, dict) else {}
+
+            for t in cfg.get_active_tickers():
+                version = cfg.get_version(t)
+                if version != "V_REV": continue
+
+                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+                if is_manual_vwap: continue
+
+                h = safe_holdings.get(t) or {}
+                qty = int(float(h.get('qty') or 0))
+                avg_price = float(h.get('avg') or 0.0)
+
+                if qty > 0 and avg_price > 0:
+                    target_price = math.ceil(avg_price * 1.030 * 100) / 100.0
+                    await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                    await asyncio.sleep(0.5)
+
+                    res = broker.send_order(t, "SELL", qty, target_price, "AFTER_LIMIT")
+                    if res.get('rt_cd') == '0':
+                        msg = f"🌙 <b>[{t}] 애프터마켓 3% 로터리 덫(Lottery Trap) 장전 완료</b>\n▫️ 대상 물량: <b>{qty}주</b>\n▫️ 타겟 가격: <b>${target_price:.2f}</b>"
+                        await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
+                    else:
+                        fail_msg = f"❌ <b>[{t}] 애프터마켓 덫 장전 실패:</b> {res.get('msg1', '에러')}"
+                        await context.bot.send_message(chat_id=chat_id, text=fail_msg, parse_mode='HTML')
+
+                    await asyncio.sleep(0.2)
+    try:
+        await asyncio.wait_for(_do_lottery(), timeout=60.0)
+    except Exception as e:
+        logging.error(f"🚨 애프터마켓 로터리 덫 에러: {e}", exc_info=True)
