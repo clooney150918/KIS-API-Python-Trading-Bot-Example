@@ -763,7 +763,7 @@ async def scheduled_regular_trade(context):
                 is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
 
                 if version == "V_REV" and is_manual_vwap:
-                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모드 가동 중</b>\n"
+                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모 가동 중</b>\n"
                     msgs[t] += "▫️ 봇 자동 주문이 락다운되었습니다. V앱에서 장 마감 30분 전 세팅으로 수동 장전하십시오.\n"
                     await context.bot.send_message(chat_id, msgs[t], parse_mode='HTML')
                     continue
@@ -928,12 +928,6 @@ async def scheduled_regular_trade(context):
                     msgs[t] += f"└ 1차 필수: {o['desc']} {o['qty']}주: {'✅' if res.get('rt_cd')=='0' else f'❌({res.get('msg1')})'}\n"
                     await asyncio.sleep(0.2) 
 
-            for t in sorted_tickers:
-                if t not in plans: continue
-                target_bonus = plans[t].get('bonus_orders', [])
-                for o in target_bonus:
-                    res = broker.send_order(t, o['side'], o['qty'], o['price'], o['type'])
-                    msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주: {'✅' if res.get('
             for t in sorted_tickers:
                 if t not in plans: continue
                 target_bonus = plans[t].get('bonus_orders', [])
