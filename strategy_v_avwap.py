@@ -193,6 +193,10 @@ class VAvwapHybridPlugin:
         if not context_data:
             return {'action': 'WAIT', 'reason': '매크로_데이터_수집대기', 'vwap': base_vwap}
 
+        # MODIFIED: 당일 시가(base_day_open) 결측 시 SHUTDOWN 오발탄 방어를 위한 WAIT 멱등성 보장 루프
+        if base_day_open <= 0:
+            return {'action': 'WAIT', 'reason': '시가_데이터_결측_대기', 'vwap': base_vwap}
+
         prev_c = context_data['prev_close']
         ma_20 = context_data['ma_20']
         avg_vol_20 = context_data['avg_vol_20']
