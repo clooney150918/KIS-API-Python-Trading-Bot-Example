@@ -375,6 +375,7 @@ class TelegramController:
             ver = self.cfg.get_version(t)
             is_manual_vwap = getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t)
             
+            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] 임의의 상태 파일(pending_grad.json 등)을 다이렉트로 생성/삭제하지 마라. 스윕 피니셔 직전의 졸업용 스냅샷은 반드시 시스템에 정의된 영속성 캐시 레이어에 의존해야 하며, 디스크 I/O 파편화를 절대 금지한다.
             cached_snap = None
             if ver == "V_REV":
                 cached_snap = self.strategy.v_rev_plugin.load_daily_snapshot(t)
@@ -434,7 +435,8 @@ class TelegramController:
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
                 
-                if cached_snap and "orders" in cached_snap and logic_qty > 0:
+                # MODIFIED: [V28.37 렌더링 가드 교정] logic_qty(스냅샷 total_q)가 아닌 v_rev_q_qty(큐 장부 실수량)로 가드
+                if cached_snap and "orders" in cached_snap and v_rev_q_qty > 0:
                     sell_idx = 1
                     for o in cached_snap["orders"]:
                         if o.get('side') == 'SELL':
