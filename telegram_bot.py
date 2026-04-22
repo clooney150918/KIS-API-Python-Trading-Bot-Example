@@ -17,6 +17,7 @@
 # /sync 핸들러 내부에서 get_account_balance() 동기 함수가 이벤트 루프를 
 # 영구 점유하던 치명적 버그를 asyncio.to_thread() 래핑으로 완벽 교정.
 # NEW: [V28.31] 하단 고정 키보드 한글 신호 무응답 맹점 완벽 수술 (라우팅 복구)
+# 🚨 [V28.50 NEW] AVWAP 암살자 전용 '조기퇴근/타겟설정' 독립 UI 라우터 개통
 # ==========================================================
 import logging
 import datetime
@@ -137,6 +138,9 @@ class TelegramController:
         application.add_handler(CommandHandler("reset", self.cmd_reset))
         application.add_handler(CommandHandler("update", self.cmd_update))
         
+        # 🚨 [V28.50 NEW] 암살자 전용 명령어 신설
+        application.add_handler(CommandHandler("avwap", self.cmd_avwap))
+        
         application.add_handler(CallbackQueryHandler(self.handle_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
 
@@ -144,13 +148,11 @@ class TelegramController:
         await self.callbacks_handler.handle_callback(update, context, self)
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # 🚨 [수술 1: 텔레그램 하단 고정 키보드 텍스트 신호 무응답 맹점 완벽 수술]
         if not self._is_admin(update):
             return
             
         text = update.message.text
         
-        # user_states 대기열에 막혀 증발하던 키보드 텍스트 신호를 다이렉트 패스(Direct Pass)로 우회 개통
         if "장부 조회" in text:
             return await self.cmd_record(update, context)
         elif "시드 변경" in text:
@@ -163,9 +165,51 @@ class TelegramController:
             return await self.cmd_mode(update, context)
         elif "명예의 전당" in text or "졸업" in text:
             return await self.cmd_history(update, context)
+        # 🚨 [V28.50 NEW] 다이렉트 패스에 암살자 키워드 이식
+        elif "암살자" in text or "조기" in text:
+            return await self.cmd_avwap(update, context)
             
-        # 일반 입력 상태(user_states) 처리 라우터로 위임
         await self.states_handler.handle_message(update, context, self)
+
+    # 🚨 [V28.50 NEW] 암살자 전용 조기퇴근 UI 라우터
+    async def cmd_avwap(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not self._is_admin(update):
+            return
+            
+        t = "SOXL"
+        is_hybrid_on = self.cfg.get_avwap_hybrid_mode(t)
+        
+        if not is_hybrid_on:
+            msg = f"⚠️ <b>[AVWAP 암살자 오프라인]</b>\n"
+            msg += f"▫️ 현재 {t}의 AVWAP 하이브리드 모드가 꺼져있습니다.\n"
+            msg += f"▫️ <code>/settlement</code> 메뉴에서 먼저 활성화해주세요."
+            return await update.message.reply_text(msg, parse_mode='HTML')
+
+        early_mode = self.cfg.get_avwap_early_exit_mode(t)
+        early_target = self.cfg.get_avwap_early_target(t)
+        
+        msg = f"🔫 <b>[ {t} AVWAP 암살자 제어 콘솔 ]</b>\n\n"
+        
+        if early_mode:
+            msg += "🏃‍♂️ <b>현재 모드: [조기 퇴근 (사용자 맞춤형)]</b>\n"
+            msg += f"▫️ 장중 시간에 구애받지 않고 <b>+{early_target}%</b> 수익 도달 시 즉각 전량 익절하고 퇴근합니다.\n"
+            msg += "▫️ 장막판 변동성 리스크를 회피하고 일일 수익을 확정 짓는 데 유리합니다.\n"
+        else:
+            msg += "🦅 <b>현재 모드: [오리지널 스퀴즈 타겟팅]</b>\n"
+            msg += "▫️ 수익이 나도 기다렸다가 <b>오후 2시 30분(EST)</b> 이후 발생하는 기관 숏커버링 스퀴즈(+3% 이상)를 노립니다.\n"
+            msg += "▫️ 휩소 장세에서는 종가에 수익을 반납할 리스크가 있습니다.\n"
+
+        keyboard = [
+            [
+                InlineKeyboardButton(f"⚪ 오리지널 모드로 전환" if early_mode else "🎯 오리지널 모드 (현재 적용)", callback_data=f"AVWAP:EARLY:OFF:{t}"),
+                InlineKeyboardButton(f"🎯 조기 퇴근 모드 (현재 적용)" if early_mode else "🏃‍♂️ 조기 퇴근 모드로 전환", callback_data=f"AVWAP:EARLY:ON:{t}")
+            ],
+            [
+                InlineKeyboardButton(f"⚙️ 목표 수익률 설정 (현재: {early_target}%)", callback_data=f"AVWAP:TARGET_SET:{t}")
+            ]
+        ]
+        
+        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):
@@ -297,7 +341,6 @@ class TelegramController:
             
         await update.message.reply_text("🔄 시장 분석 및 지시서 작성 중...")
         
-        # MODIFIED: [V28.28 이벤트 루프 직접 차단 원천 방어] 동기 블로킹 호출을 asyncio.to_thread로 래핑.
         async with self.tx_lock:
             cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
             
@@ -375,7 +418,6 @@ class TelegramController:
             ver = self.cfg.get_version(t)
             is_manual_vwap = getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t)
             
-            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] 임의의 상태 파일(pending_grad.json 등)을 다이렉트로 생성/삭제하지 마라. 스윕 피니셔 직전의 졸업용 스냅샷은 반드시 시스템에 정의된 영속성 캐시 레이어에 의존해야 하며, 디스크 I/O 파편화를 절대 금지한다.
             cached_snap = None
             if ver == "V_REV":
                 cached_snap = self.strategy.v_rev_plugin.load_daily_snapshot(t)
@@ -435,7 +477,6 @@ class TelegramController:
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
                 
-                # MODIFIED: [V28.37 렌더링 가드 교정] logic_qty(스냅샷 total_q)가 아닌 v_rev_q_qty(큐 장부 실수량)로 가드
                 if cached_snap and "orders" in cached_snap and v_rev_q_qty > 0:
                     sell_idx = 1
                     for o in cached_snap["orders"]:

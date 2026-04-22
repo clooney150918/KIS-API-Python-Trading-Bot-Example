@@ -7,6 +7,7 @@
 # MODIFIED: [V28.25 동적 수수료율 텍스트 입력 라우터 수술] 
 # 사용자가 텔레그램 창에 입력한 수수료(%)를 파싱하여 config에 저장하는 CONF_FEE 상태 처리 로직 완벽 이식.
 # NEW: [V28.31] 텔레그램 하단 고정 키보드 텍스트 라우팅 복구 (코파일럿 방식 채택)
+# 🚨 [V28.50 NEW] 암살자 조기 퇴근 목표 수익률(AVWAP_TARGET) 텍스트 입력/저장 라우터 개통
 # ==========================================================
 # NEW: [리팩토링 2단계] 유저 텍스트 입력 및 상태 기계(State Machine) 독립 클래스 분리
 import logging
@@ -38,8 +39,6 @@ class TelegramStates:
             return await controller.cmd_record(update, context)
         elif "명예의 전당" in text:
             return await controller.cmd_history(update, context)
-        # 🚨 [수술 1: 코파일럿 방식 텍스트 키보드 버튼 라우팅 복구]
-        # "모드변환" 및 "분할변경" 키워드를 cmd_settlement로 다이렉트 라우팅
         elif "코어 스위칭" in text or "전술 설정" in text or "모드변환" in text or "분할변경" in text:
             return await controller.cmd_settlement(update, context)
         elif "시드머니" in text or "시드 변경" in text or "시드 관리" in text:
@@ -127,6 +126,22 @@ class TelegramStates:
                     await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
                     
                 return
+
+            # 🚨 [V28.50 NEW] 사용자 조기 퇴근 목표 수익률 텍스트 입력 라우터
+            if state.startswith("AVWAP_TARGET_"):
+                val = float(text)
+                if val <= 0:
+                    del controller.user_states[chat_id]
+                    return await update.message.reply_text("❌ 오류: 목표 수익률은 0보다 커야 합니다. (입력 취소됨)")
+                
+                ticker = state.split("_")[2]
+                self.cfg.set_avwap_early_target(ticker, val)
+                
+                msg = f"🏃‍♂️ <b>[{ticker}] 조기 퇴근 목표 수익률 {val}% 락온 완료!</b>\n"
+                msg += f"▫️ 다음 스나이핑 적중 시부터 이 목표 수익에 도달하면 장중 언제라도 즉각 전량 익절합니다."
+                
+                del controller.user_states[chat_id]
+                return await update.message.reply_text(msg, parse_mode='HTML')
 
             val = float(text)
             parts = state.split("_")

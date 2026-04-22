@@ -1,5 +1,5 @@
 # ==========================================================
-# [scheduler_trade.py] - 🌟 100% 통합 무결점 완성본 (V28.41) 🌟
+# [scheduler_trade.py] - 🌟 100% 통합 무결점 완성본 (V28.50) 🌟
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # MODIFIED: [V28.18] V14 오리지널 스냅샷 저장 배선 개통
 # NEW: [V28.21] 스냅샷 소각 맹점 적출 및 디커플링 무결성 확보
@@ -8,6 +8,7 @@
 # 🚀 [V28.36 API 병목 영구 적출] 미체결 명단 소멸 시 '100% 전량 체결' 간주. 타임아웃 원천 차단!
 # 🛡️ [V28.37] 스윕 피니셔 발화 후 '잔고 증발' 오발탄 원천 차단: sweep_msg_sent 플래그 교차 참조 바이패스 가드 이식 (sniper_monitor + vwap_trade 2중 수술)
 # MODIFIED: [V28.41] U_CURVE_WEIGHTS 배열 합산 불일치(0.9596)로 인한 예산 누수 버그 완벽 수술 (합산 1.0 멱등성 동기화)
+# 🚨 [V28.50 NEW] AVWAP 조기퇴근 모드(Early Exit) 파이프라인 배선 개통 및 타겟 수익률 팩트 캐스팅
 # ==========================================================
 import os
 import logging
@@ -138,8 +139,13 @@ async def scheduled_sniper_monitor(context):
                     try: df_1min_base = await asyncio.to_thread(broker.get_1min_candles_df, target_base)
                     except: pass
                     
+                    # 🚨 [V28.50 NEW] 조기 퇴근 설정 스캔 및 코어 파라미터 팩트 캐스팅
+                    early_exit_mode = cfg.get_avwap_early_exit_mode(t)
+                    early_target_profit = cfg.get_avwap_early_target(t) / 100.0
+                    
                     decision = strategy.get_avwap_decision(
-                        target_base, t, base_curr_p, exec_curr_p, base_day_open, avwap_avg, avwap_qty, avwap_free_cash, ctx_data, df_1min_base, now_est
+                        target_base, t, base_curr_p, exec_curr_p, base_day_open, avwap_avg, avwap_qty, avwap_free_cash, ctx_data, df_1min_base, now_est,
+                        early_exit_mode=early_exit_mode, early_target_profit=early_target_profit
                     )
                     
                     action, reason = decision.get('action'), decision.get('reason')
@@ -165,7 +171,12 @@ async def scheduled_sniper_monitor(context):
                         res = broker.send_order(t, "SELL", avwap_qty, bid_p, "LIMIT")
                         if res.get('rt_cd') == '0':
                             tracking_cache[f"AVWAP_SHUTDOWN_{t}"], tracking_cache[f"AVWAP_QTY_{t}"], tracking_cache[f"AVWAP_AVG_{t}"] = True, 0, 0.0
-                            await context.bot.send_message(chat_id=chat_id, text=f"🏆 <b>[{t}] 하이브리드 AVWAP 독립물량 청산 완료!</b>", parse_mode='HTML')
+                            
+                            # MODIFIED: 조기퇴근 알림과 일반 스퀴즈 알림 분리
+                            if 'EARLY_PROFIT_TAKE' in reason:
+                                await context.bot.send_message(chat_id=chat_id, text=f"🏃‍♂️ <b>[{t}] 하이브리드 AVWAP 조기 퇴근 완료!</b>\n▫️ 설정된 타겟 수익률 달성으로 전량 시장가 덤핑 후 매매를 종료합니다. 🏆", parse_mode='HTML')
+                            else:
+                                await context.bot.send_message(chat_id=chat_id, text=f"🏆 <b>[{t}] 하이브리드 AVWAP 독립물량 청산 완료!</b>\n▫️ 사유: {reason}", parse_mode='HTML')
                     continue
 
                 if version != "V14":
@@ -1032,7 +1043,7 @@ async def scheduled_after_market_lottery(context):
 
                     res = broker.send_order(t, "SELL", qty, target_price, "AFTER_LIMIT")
                     if res.get('rt_cd') == '0':
-                        msg = f"🌙 <b>[{t}] 애프터마켓 3% 로터리 덫(Lottery Trap) 장전 완료</b>\n▫️ 대상 물량: <b>{qty}주</b>\n▫️ 타겟 가격: <b>${target_price:.2f}</b>"
+                        msg = f"🌙 <b>[{t}] 애프터마켓 3% 로터리 덫(Lottery Trap) 장전 완료</b>\n▫️ 대상 물량: <b>{qty}주</b>\n▫️ 타겟 타겟 가격: <b>${target_price:.2f}</b>"
                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                     else:
                         fail_msg = f"❌ <b>[{t}] 애프터마켓 덫 장전 실패:</b> {res.get('msg1', '에러')}"

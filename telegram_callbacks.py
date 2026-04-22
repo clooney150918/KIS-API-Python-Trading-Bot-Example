@@ -14,6 +14,7 @@
 # MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
 # MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
 # MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
+# 🚨 [V28.50 NEW] AVWAP 조기 퇴근 모드(EARLY ON/OFF) 및 타겟 수익률(TARGET_SET) 콜백 라우터 개통
 # ==========================================================
 import logging
 import datetime
@@ -666,6 +667,35 @@ class TelegramCallbacks:
                     mode_txt = "📉 LOC 단일 타격 (초안정성)"
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ <b>집행 방식:</b> {mode_txt}\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
+
+        # 🚨 [V28.50 NEW] 암살자 전용 조기퇴근 콜백 라우터
+        elif action == "AVWAP":
+            if sub == "EARLY":
+                mode = data[2]
+                ticker = data[3]
+                
+                is_on = (mode == "ON")
+                self.cfg.set_avwap_early_exit_mode(ticker, is_on)
+                
+                target = self.cfg.get_avwap_early_target(ticker)
+                
+                if is_on:
+                    msg = f"🏃‍♂️ <b>[{ticker}] 하이브리드 AVWAP 조기 퇴근 모드 ON!</b>\n"
+                    msg += f"▫️ 이제 시간에 구애받지 않고 <b>+{target}%</b> 도달 시 즉시 시장가 덤핑하고 퇴근합니다."
+                else:
+                    msg = f"🦅 <b>[{ticker}] 하이브리드 AVWAP 오리지널 모드 복귀!</b>\n"
+                    msg += f"▫️ 장막판 14:30 숏커버링 스퀴즈 전까지 강력하게 홀딩합니다."
+                    
+                await query.edit_message_text(msg, parse_mode='HTML')
+                
+            elif sub == "TARGET_SET":
+                ticker = data[2]
+                controller.user_states[update.effective_chat.id] = f"AVWAP_TARGET_{ticker}"
+                await context.bot.send_message(
+                    update.effective_chat.id, 
+                    f"⚙️ <b>[{ticker}] 조기 퇴근 목표 수익률(%)을 입력하세요.</b>\n▫️ 숫자만 입력 (예: 2.5 또는 3.0)",
+                    parse_mode='HTML'
+                )
 
         elif action == "MODE":
             mode_val = sub
