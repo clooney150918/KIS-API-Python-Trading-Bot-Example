@@ -14,7 +14,7 @@
 # MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
 # MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
 # MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
-# 🚨 [V29.00 NEW] AVWAP 조기 퇴근 모드(EARLY ON/OFF) 및 타겟 수익률(TARGET_SET) 콜백 라우터 전면 개통 완료
+# 🚨 [V29.00 NEW] AVWAP 조기 퇴근 모드 동적 렌더링 및 팝업 안내 UX 팩트 수술 완료
 # ==========================================================
 import logging
 import datetime
@@ -666,10 +666,17 @@ class TelegramCallbacks:
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ <b>집행 방식:</b> {mode_txt}\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
 
-        # 🚨 [V29.00 NEW] 암살자 전용 조기퇴근 콜백 라우터 및 콘솔 렌더링
+        # 🚨 [V29.00 NEW] 암살자 전용 조기퇴근 콜백 라우터 및 동적 콘솔 렌더링
         elif action == "AVWAP":
-            if sub == "MENU":
-                ticker = data[2]
+            if sub in ["MENU", "EARLY"]:
+                from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+                
+                ticker = data[2] if sub == "MENU" else data[3]
+                
+                if sub == "EARLY":
+                    is_on = (data[2] == "ON")
+                    self.cfg.set_avwap_early_exit_mode(ticker, is_on)
+                
                 is_hybrid_on = self.cfg.get_avwap_hybrid_mode(ticker)
                 
                 if not is_hybrid_on:
@@ -694,34 +701,26 @@ class TelegramCallbacks:
                     [
                         InlineKeyboardButton(f"⚪ 오리지널 모드로 전환" if early_mode else "🎯 오리지널 모드 (현재 적용)", callback_data=f"AVWAP:EARLY:OFF:{ticker}"),
                         InlineKeyboardButton(f"🎯 조기 퇴근 모드 (현재 적용)" if early_mode else "🏃‍♂️ 조기 퇴근 모드로 전환", callback_data=f"AVWAP:EARLY:ON:{ticker}")
-                    ],
-                    [
-                        InlineKeyboardButton(f"⚙️ 목표 수익률 설정 (현재: {early_target}%)", callback_data=f"AVWAP:TARGET_SET:{ticker}")
                     ]
                 ]
+                
+                # 🚨 [UI 은폐 팩트 수술] 조기퇴근 모드(early_mode)가 ON일 때만 수익률 설정 버튼을 노출시킵니다!
+                if early_mode:
+                    keyboard.append([
+                        InlineKeyboardButton(f"⚙️ 목표 수익률 설정 (현재: {early_target}%)", callback_data=f"AVWAP:TARGET_SET:{ticker}")
+                    ])
+                
+                keyboard.append([InlineKeyboardButton("❌ 콘솔 닫기", callback_data="RESET:CANCEL")])
+                
                 await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
-            elif sub == "EARLY":
-                mode = data[2]
-                ticker = data[3]
-                
-                is_on = (mode == "ON")
-                self.cfg.set_avwap_early_exit_mode(ticker, is_on)
-                
-                target = self.cfg.get_avwap_early_target(ticker)
-                
-                if is_on:
-                    msg = f"🏃‍♂️ <b>[{ticker}] 하이브리드 AVWAP 조기 퇴근 모드 ON!</b>\n"
-                    msg += f"▫️ 이제 시간에 구애받지 않고 <b>+{target}%</b> 도달 시 즉시 시장가 덤핑하고 퇴근합니다."
-                else:
-                    msg = f"🦅 <b>[{ticker}] 하이브리드 AVWAP 오리지널 모드 복귀!</b>\n"
-                    msg += f"▫️ 장막판 14:30 숏커버링 스퀴즈 전까지 강력하게 홀딩합니다."
-                    
-                await query.edit_message_text(msg, parse_mode='HTML')
-                
             elif sub == "TARGET_SET":
                 ticker = data[2]
                 controller.user_states[update.effective_chat.id] = f"AVWAP_TARGET_{ticker}"
+                
+                # 🚨 [UX 팩트 패치] 팝업으로 입력창 위치 안내
+                await query.answer("👇 확인을 누르시고, 화면 맨 아래 채팅창에 목표 수익률(숫자)을 쳐주세요!", show_alert=True)
+                
                 await context.bot.send_message(
                     update.effective_chat.id, 
                     f"⚙️ <b>[{ticker}] 조기 퇴근 목표 수익률(%)을 입력하세요.</b>\n▫️ 숫자만 입력 (예: 2.5 또는 3.0)",
