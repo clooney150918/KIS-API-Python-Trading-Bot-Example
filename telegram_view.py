@@ -30,6 +30,9 @@
 # MODIFIED: [V28.29 그랜드 수술] TQQQ V-REV 렌더링 맹점 차단 (SOXL 전용 락온 이식)
 # MODIFIED: [V28.34 UX 팩트 패치] V14 무매4 VWAP 모드의 settlement UI 렌더링 텍스트 맹점(수동 위임 표기) 팩트 교정 완료
 # MODIFIED: [V28.35] 0주 새출발 락온 시 엔진에서 누수된 잭팟/상방 가이던스 UI 렌더링 강제 은폐 및 스나이퍼 텍스트 디커플링 (상태 전이 맹점 방어)
+# 🚨 [V29.00 NEW] AVWAP 암살자 조기퇴근 제어 콘솔 진입 버튼 및 실시간 상태 텍스트 렌더링 파이프라인 이식 완료
+# 🚨 [V29.01 MODIFIED] GIF 화질 저하 팩트 진단: 애니메이션 병합 로직 100% 소각 및 background.png 기반 무손실 고화질(Quality 100) PNG 렌더링 엔진 원상 복구 완료
+# 🚨 [V29.07 UX 팩트 패치] AVWAP 암살자 제어 콘솔 진입 버튼 텍스트 통일화 (직관성 강화)
 # ==========================================================
 import os
 import math
@@ -229,7 +232,7 @@ class TelegramView:
         msg += "⚠️ <b>[ 파괴적 제약 사항 ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
         msg += "2. 당일 -1% 하드스탑(손절) 또는 +1% 스퀴즈(익절) 또는 15:55 타임스탑 강제 덤핑이 적용됩니다.\n"
-        msg += "3. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 시스템 메모리 단독으로 연산됩니다.\n\n"
+        msg += "3. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 시스템 메모 단독으로 연산됩니다.\n\n"
         msg += "포트폴리오 매니저의 최종 승인을 대기합니다."
         
         keyboard = [
@@ -317,7 +320,6 @@ class TelegramView:
             v_mode = t_info['version']
             
             is_manual_vwap = t_info.get('is_manual_vwap', False)
-            # NEW: 0주 새출발 상태 팩트 추출 (상태 전이 맹점 차단용)
             is_zero_start = t_info.get('is_zero_start', False)
             
             if t_info.get('t_val', 0.0) > (t_info.get('split', 40.0) * 1.1):
@@ -384,7 +386,6 @@ class TelegramView:
             
             sniper_status_txt = t_info.get('upward_sniper', 'OFF')
             
-            # MODIFIED: [V28.35] 0주 락온 상태면 UI 레벨에서 상방 스나이퍼 텍스트 강제 차단 (디커플링)
             if is_zero_start and sniper_status_txt == "ON":
                 sniper_status_txt = "OFF (0주 락온)"
             
@@ -422,7 +423,6 @@ class TelegramView:
                 
                 raw_guidance = t_info.get('v_rev_guidance', " (가이던스 대기 중)")
                 
-                # MODIFIED: [V28.35] 0주 락온 상태일 때 엔진에서 렌더링 누수된 '잭팟' 관련 텍스트 강제 소각
                 if is_zero_start:
                     filtered_lines = [line for line in raw_guidance.split('\n') if "잭팟" not in line and "상위층" not in line]
                     raw_guidance = '\n'.join(filtered_lines)
@@ -502,6 +502,7 @@ class TelegramView:
             
         return final_msg, InlineKeyboardMarkup(keyboard) if keyboard else None
 
+    # 🚨 [V29.00 NEW] 조기퇴근 실시간 텍스트 및 전용 콘솔 버튼 렌더링 
     def get_settlement_message(self, active_tickers, config, atr_data, dynamic_target_data=None):
         msg = "⚙️ <b>[ 현재 설정 및 복리 상태 ]</b>\n\n"
         keyboard = []
@@ -511,7 +512,6 @@ class TelegramView:
             is_manual_vwap = getattr(config, 'get_manual_vwap_mode', lambda x: False)(t)
             fee_rate = getattr(config, 'get_fee', lambda x: 0.25)(t)
             
-            # MODIFIED: [V28.34] V14 모드일 때 수동 위임이라는 잘못된 텍스트 렌더링 팩트 교정
             if ver == "V_REV":
                 icon = "⚖️"
                 ver_display = "V_REV 역추세"
@@ -531,12 +531,20 @@ class TelegramView:
                 msg += "              [상위층] 평단가+0.5% (디커플링)\n"
                 msg += f"▫️ 자동복리: {comp_rate}%\n"
                 msg += f"▫️ 증권사 수수료: <b>{fee_rate}%</b>\n"
+                
+                if hasattr(config, 'get_avwap_hybrid_mode') and config.get_avwap_hybrid_mode(t):
+                    is_early = config.get_avwap_early_exit_mode(t)
+                    target = config.get_avwap_early_target(t)
+                    status_label = f"🏃‍♂️ 조기퇴근 (+{target}%)" if is_early else "🦅 오리지널 스퀴즈"
+                    msg += f"▫️ AVWAP 암살자: <b>{status_label}</b>\n"
+                elif hasattr(config, 'get_avwap_hybrid_mode'):
+                    msg += f"▫️ AVWAP 암살자: <b>비활성 (OFF)</b>\n"
+                    
                 msg += "⚖️ <b>역추세(Reversion) 하이브리드 엔진 스탠바이:</b>\n"
                 msg += "▫️ 전일 종가 앵커 기준 LIFO 큐 교차 매매 대기 중\n\n"
             else:
                 msg += f"▫️ 분할: {split_cnt}회\n▫️ 목표: {target_pct}%\n▫️ 자동복리: {comp_rate}%\n"
                 msg += f"▫️ 증권사 수수료: <b>{fee_rate}%</b>\n"
-                # MODIFIED: [V28.34] V14 VWAP의 렌더링 텍스트를 V-REV와 분리하여 직관적으로 교정
                 v14_mode_txt = "🕒 VWAP 1분 타임 슬라이싱 (자체엔진)" if is_manual_vwap else "📉 LOC 단일 타격 (초안정성)"
                 msg += f"▫️ 집행: <b>{v14_mode_txt}</b>\n\n"
                 
@@ -562,6 +570,10 @@ class TelegramView:
                     avwap_cb = f"MODE:AVWAP_OFF:{t}" 
                 
                 keyboard.append([InlineKeyboardButton(avwap_txt, callback_data=avwap_cb)])
+                
+                if is_avwap and t == "SOXL":
+                    # 🟢 팩트 패치 완료: 콘솔 타이틀과 버튼 텍스트를 직관적으로 100% 통일!
+                    keyboard.append([InlineKeyboardButton(f"🔫 {t} AVWAP 암살자 제어 콘솔", callback_data=f"AVWAP:MENU:{t}")])
             
             if ver == "V_REV":
                 row2 = [
@@ -694,6 +706,7 @@ class TelegramView:
 
         return msg, InlineKeyboardMarkup(keyboard)
 
+    # 🚨 V29.01 MODIFIED: GIF Fallback 제거 및 고화질 PNG 렌더링 원복
     def create_profit_image(self, ticker, profit, yield_pct, invested, revenue, end_date):
         W, H = 600, 920 
         IMG_H = 430 
@@ -742,28 +755,7 @@ class TelegramView:
                 bg_res = bg_frame.resize((W, new_h), Image.Resampling.LANCZOS)
                 return bg_res.crop((0, (new_h - IMG_H) // 2, W, (new_h + IMG_H) // 2))
 
-        if os.path.exists("background.gif"):
-            try:
-                bg_gif = Image.open("background.gif")
-                duration = bg_gif.info.get('duration', 100)
-                loop = bg_gif.info.get('loop', 0)
-                
-                frames = []
-                for frame in ImageSequence.Iterator(bg_gif):
-                    frame_rgba = frame.convert("RGBA")
-                    canvas = Image.new('RGB', (W, H), color='#1E222D')
-                    bg_cropped = resize_and_crop(frame_rgba)
-                    canvas.paste(bg_cropped.convert("RGB"), (0, 0))
-                    canvas = apply_overlay(canvas)
-                    frames.append(canvas)
-                
-                fname = f"data/profit_{ticker}.gif"
-                if frames:
-                    frames[0].save(fname, save_all=True, append_images=frames[1:], duration=duration, loop=loop)
-                    return fname
-            except Exception as e:
-                logging.error(f"🚨 GIF 렌더링 실패, PNG로 강제 폴백: {e}")
-
+        # 🟢 [수정 완료: GIF 로직 100% 소각, 고화질 정지화면 PNG 강제 렌더링]
         img = Image.new('RGB', (W, H), color='#1E222D')
         try:
             if os.path.exists("background.png"):
@@ -773,13 +765,14 @@ class TelegramView:
             else:
                 draw = ImageDraw.Draw(img)
                 draw.rectangle([0, 0, W, IMG_H], fill="#111217")
-        except Exception:
+        except Exception as e:
+            logging.error(f"🚨 배경 이미지 로드 실패: {e}")
             draw = ImageDraw.Draw(img)
             draw.rectangle([0, 0, W, IMG_H], fill="#111217")
             
         img = apply_overlay(img)
         fname = f"data/profit_{ticker}.png"
-        img.save(fname)
+        img.save(fname, format="PNG", quality=100)
         return fname
 
     def get_ticker_menu(self, current_tickers):

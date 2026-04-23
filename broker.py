@@ -258,6 +258,7 @@ class KoreaInvestmentBroker:
                         else:
                             prev = holdings[ticker]
                             
+                            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
                             # MODIFIED: [V28.15 장부 뻥튀기 팩트 수술] KIS API가 동일 수량/동일 평단가의 데이터를 다른 거래소 응답으로 
                             # 한 번 더 보내는 경우(유령 중복 응답), 무지성으로 합산(+=)하지 않고 무시하도록 멱등성 필터링 이식.
                             if prev['qty'] == qty and abs(prev['avg'] - avg) < 0.001:
