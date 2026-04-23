@@ -613,9 +613,9 @@ class TelegramController:
                         time_1400 = datetime.time(14, 0)
                         
                         if curr_time < time_1000:
-                            avwap_status_txt = "⏳ 대기 (10:00 EST 기상 대기중)"
+                            avwap_status_txt = "⏳ 대기(10시EST 기상 )"
                         elif curr_time >= time_1400:
-                            avwap_status_txt = "⛔ 감시 종료 (10:00~14:00 EST 제한)"
+                            avwap_status_txt = "⛔ 감시종료(10~14시EST제한)"
 
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
