@@ -1,5 +1,5 @@
 # ==========================================================
-# [scheduler_trade.py] - 🌟 100% 통합 전투 사령부 (V29.10) 🌟
+# [scheduler_trade.py] - 🌟 100% 통합 전투 사령부 (V29.11) 🌟
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 🚨 [V27.13 그랜드 수술] 코파일럿 합작 5대 엣지 케이스 완벽 수술 완료
 # 🚀 [V28.01 그랜드 수술] 서머타임 데드락 방어 윈도우 65분 확장, 결측치 락온 차단, tx_lock 런타임 붕괴 가드 완비
@@ -18,6 +18,7 @@
 # MODIFIED: [V29.08 핫픽스] AVWAP 암살자 런타임 라우팅 누수(AttributeError) 팩트 교정 완료
 # MODIFIED: [V29.09 핫픽스] 0주 새출발 예방적 LOC 덫 타점 역배선(Swap) 팩트 교정 완료
 # MODIFIED: [V29.10 핫픽스] 스나이퍼 모니터링 들여쓰기(Indentation) 붕괴 복구 및 SyntaxError 원천 차단
+# MODIFIED: [V29.11 핫픽스] AVWAP 엔진 get_decision() 매개변수 불일치(TypeError) 팩트 교정 완료 (ticker 인자 제거)
 # ==========================================================
 import logging
 import datetime
@@ -171,9 +172,8 @@ async def scheduled_sniper_monitor(context):
                     early_exit_mode = cfg.get_avwap_early_exit_mode(t)
                     early_target_profit = cfg.get_avwap_early_target(t) / 100.0
                     
-                    # MODIFIED: [V29.08] 플러그인 캡슐화 라우팅 누수 팩트 교정
+                    # MODIFIED: [V29.11 핫픽스] AVWAP 엔진 get_decision() 매개변수 불일치(TypeError) 팩트 교정 완료 (ticker 인자 제거)
                     decision = strategy.v_avwap_plugin.get_decision(
-                        ticker=t,
                         base_df=df_1min_base,
                         target_df=None,
                         context_data=ctx_data,

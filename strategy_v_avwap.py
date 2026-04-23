@@ -10,6 +10,7 @@
 # 🚨 [V27.07 그랜드 수술] 코파일럿 합작 - 20MA NaN 붕괴, VWAP 침묵, 10시 누수, 소수점 주문 4대 맹점 전면 철거
 # 🚨 [V27.16 핫픽스] 20MA 시차 왜곡 차단, RVOL 정수 파싱, 소수점 매도 차단 및 ZeroDivision 영구 차단 완비
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막: 서버 재부팅 시 AVWAP 상태(매수/셧다운)가 증발하는 현상을 원천 차단하기 위해 파일 기반 영속성 저장(Persistence) 엔진 탑재.
+# MODIFIED: [V29.12 핫픽스] 스케줄러 매개변수 불일치 런타임 붕괴 원천 차단 및 Safe Casting 다형성(Polymorphism) 지원
 # ==========================================================
 import logging
 import datetime
@@ -114,8 +115,22 @@ class VAvwapHybridPlugin:
             logging.error(f"🚨 [V_AVWAP] YF 기초자산 매크로 컨텍스트 추출 실패 ({base_ticker}): {e}")
             return None
 
-    # 🚨 [수술 부위 1] 파라미터 추가: early_exit_mode(조기퇴근 활성화 여부), early_target_profit(유저 목표수익률)
-    def get_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avwap_avg_price, avwap_qty, avwap_alloc_cash, context_data, df_1min_base, now_est, early_exit_mode=False, early_target_profit=0.025):
+    # MODIFIED: [V29.12 핫픽스] 스케줄러 매개변수 불일치 런타임 붕괴 원천 차단 및 Safe Casting 다형성(Polymorphism) 지원
+    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, early_exit_mode=False, early_target_profit=0.025, **kwargs):
+        
+        # NEW: 스케줄러(scheduler_trade.py) 측 파라미터명 불일치 대응 멱등성 맵핑
+        df_1min_base = df_1min_base if df_1min_base is not None else kwargs.get('base_df')
+        avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
+        
+        # NEW: 타임존 누락 방어막 (EST 락온)
+        if now_est is None:
+            now_est = datetime.datetime.now(pytz.timezone('US/Eastern'))
+            
+        # NEW: 현재가 결측(0.0) 시 1분봉 데이터에서 최근 종가를 추출하여 Fallback 연산
+        if base_curr_p <= 0.0 and df_1min_base is not None and not df_1min_base.empty:
+            try: base_curr_p = float(df_1min_base['close'].iloc[-1])
+            except Exception: pass
+            
         curr_time = now_est.time()
         
         time_1000 = datetime.time(10, 0)
@@ -175,7 +190,7 @@ class VAvwapHybridPlugin:
                 return {'action': 'SELL', 'qty': safe_qty, 'target_price': 0.0, 'reason': 'HARD_STOP_DUAL'}
             
             # ==========================================================
-            # 🚨 [수술 부위 2: 사용자 맞춤형 조기 퇴근 모드 격발기]
+            # 🚨 [수술 부위 2: 사용자 맞춤 조기 퇴근 모드 격발기]
             # 스케줄러가 early_exit_mode=True를 던져주면 14:30 시간제한을 무시하고
             # 언제든 유저가 설정한 수익률(예: 2.5%) 도달 시 시장가 전량 익절!
             # ==========================================================
@@ -193,7 +208,6 @@ class VAvwapHybridPlugin:
         if not context_data:
             return {'action': 'WAIT', 'reason': '매크로_데이터_수집대기', 'vwap': base_vwap}
 
-        # MODIFIED: 당일 시가(base_day_open) 결측 시 SHUTDOWN 오발탄 방어를 위한 WAIT 멱등성 보장 루프
         if base_day_open <= 0:
             return {'action': 'WAIT', 'reason': '시가_데이터_결측_대기', 'vwap': base_vwap}
 
