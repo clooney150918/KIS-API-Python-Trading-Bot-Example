@@ -14,6 +14,7 @@
 # MODIFIED: [V28.27 그랜드 수술] 로그 파일명 생성 시 KST(서버 시간) 의존성 전면 소각 및 EST(미국 동부) 타임존 락온으로 디버깅 파편화 영구 차단
 # MODIFIED: [V30.00 그랜드 리팩토링] 비대해진 scheduler_trade.py를 4개의 정예 코어(sniper, vwap, regular, aftermarket)로 100% 분할 및 의존성 주입 완료.
 # MODIFIED: [V30.08 스케줄러 디커플링 수술] 17시/17시05분 스케줄 증발을 유발한 KST 의존성(TARGET_HOUR) 전면 소각 및 EST 04:00 / 04:05 절대 락온
+# MODIFIED: [V30.09 핫픽스] pytz의 LMT(Local Mean Time) 버그를 원천 차단하기 위해 zoneinfo 도입 및 적용
 # ==========================================================
 
 import os
@@ -22,6 +23,8 @@ import datetime
 import pytz
 import asyncio
 import math # 🚨 [수술 완료] NaN 검증용 math 모듈 추가
+# NEW: [V30.09 핫픽스] LMT 버그 방어를 위한 zoneinfo 명시적 도입
+from zoneinfo import ZoneInfo
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 from dotenv import load_dotenv
 
@@ -172,6 +175,10 @@ def main():
     kst = pytz.timezone('Asia/Seoul')
     est = pytz.timezone('America/New_York')
     
+    # NEW: [V30.09 핫픽스] LMT 오차를 원천 차단하는 스케줄러(datetime.time) 전용 ZoneInfo 객체 생성
+    zi_kst = ZoneInfo('Asia/Seoul')
+    zi_est = ZoneInfo('America/New_York')
+    
     app_data = {
         'cfg': cfg, 'broker': broker, 'strategy': strategy, 
         'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,  
@@ -209,33 +216,40 @@ def main():
     jq = app.job_queue
     
     # 1. 시스템 관리 스케줄러 (core)
-    for tt in [datetime.time(7,0,tzinfo=kst), datetime.time(11,0,tzinfo=kst), datetime.time(16,30,tzinfo=kst), datetime.time(22,0,tzinfo=kst)]:
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_kst 교체 주입
+    for tt in [datetime.time(7,0,tzinfo=zi_kst), datetime.time(11,0,tzinfo=zi_kst), datetime.time(16,30,tzinfo=zi_kst), datetime.time(22,0,tzinfo=zi_kst)]:
         jq.run_daily(scheduled_token_check, time=tt, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # NEW: [V30.08 스케줄러 디커플링 수술] KST TARGET_HOUR 의존성 전면 소각 및 EST 팩트 기반 서머타임 실시간 판별 이식
     est_now = datetime.datetime.now(est)
     is_dst = bool(est_now.dst())
     SYNC_FUNC = scheduled_auto_sync_summer if is_dst else scheduled_auto_sync_winter
-    jq.run_daily(SYNC_FUNC, time=datetime.time(10, 0, 5, tzinfo=kst), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_kst 교체 주입
+    jq.run_daily(SYNC_FUNC, time=datetime.time(10, 0, 5, tzinfo=zi_kst), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # MODIFIED: [V30.08 스케줄러 디커플링 수술] KST 연산 패러독스 방어를 위해 EST 04:00 AM 단일 슬롯으로 락온 (17시/18시 멱등성 자동 보장)
-    jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_est 교체 주입
+    jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=zi_est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
         
-    jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 20, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
+    jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 20, tzinfo=zi_est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 2. 실전 전투 매매 스케줄러 (trade)
     # MODIFIED: [V30.08 스케줄러 디커플링 수술] 정규장 타격 스케줄 역시 KST 변수를 소각하고 EST 04:05 AM 으로 절대 락온
-    jq.run_daily(scheduled_regular_trade, time=datetime.time(4, 5, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_est 교체 주입
+    jq.run_daily(scheduled_regular_trade, time=datetime.time(4, 5, tzinfo=zi_est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 30, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_est 교체 주입
+    jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 30, tzinfo=zi_est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
 
     # 🚨 [수술 완료] 콜드 스타트 폭풍 방어: 봇 구동 후 30초 뒤 첫 실행(first=30)
     jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    jq.run_daily(scheduled_after_market_lottery, time=datetime.time(16, 5, tzinfo=est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_est 교체 주입
+    jq.run_daily(scheduled_after_market_lottery, time=datetime.time(16, 5, tzinfo=zi_est), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
 
-    jq.run_daily(scheduled_self_cleaning, time=datetime.time(6, 0, tzinfo=kst), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # MODIFIED: [V30.09 핫픽스] LMT 버그 제거를 위해 tzinfo=zi_kst 교체 주입
+    jq.run_daily(scheduled_self_cleaning, time=datetime.time(6, 0, tzinfo=zi_kst), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
         
     app.run_polling()
 
