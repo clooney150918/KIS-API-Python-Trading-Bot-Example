@@ -18,6 +18,9 @@
 # MODIFIED: [V28.19 타임존 락온] datetime.now()를 EST(미국 동부) 기준으로 강제 고정하여 KST 자정 경계 스냅샷 증발 버그 완벽 수술
 # NEW: [V28.20 무조건 진입] 0주 새출발 시 VWAP 런타임 타격에서 상한선 방어막 철거 (스냅샷 락온 디커플링 이식)
 # NEW: [V29.04] 스냅샷 중복 덮어쓰기 원천 차단 멱등성 가드 이식 및 AI 환각 방어막 하드코딩 완료
+# 🚨 [V30.07 NEW] 0주 새출발 당일 매도 영구 동결 락온 이식:
+# 0주로 스냅샷이 박제된 세션(is_zero_start_fact=True)에서는
+# 정규장(market_type="REG") 내 모든 SELL 주문을 100% 강제 소각하고 홀딩을 강제함.
 # ==========================================================
 import math
 import logging
@@ -163,6 +166,7 @@ class V14VwapStrategy:
             self.executed["SELL_QTY"][ticker] = int(self.executed["SELL_QTY"].get(ticker, 0)) + int(qty)
         self._save_state(ticker)
 
+    # 🚨 [V30.07] market_type 파라미터 추가 (기본값 "REG")
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, is_snapshot_mode=False):
         if not is_snapshot_mode:
             cached_plan = self.load_daily_snapshot(ticker)
@@ -184,8 +188,10 @@ class V14VwapStrategy:
         
         core_orders = []
         process_status = "예방적방어선"
+        is_zero_start_fact = False
         
         if qty == 0:
+            is_zero_start_fact = True
             # 0주 진입 스냅샷 락온용 1.15배 캡 보존 (수동 Fail-Safe 대응)
             p_buy = self._ceil(prev_close * 1.15)
             buy_star_price = p_buy 
@@ -210,6 +216,10 @@ class V14VwapStrategy:
                 if qty - q_sell > 0:
                     core_orders.append({"side": "SELL", "price": target_price, "qty": qty - q_sell, "type": "LIMIT", "desc": "🎯목표매도(V)"})
 
+        # 🚨 [V30.07 팩트 수술] 0주 새출발 세션 시 정규장 매도 영구 동결
+        if is_zero_start_fact and market_type != "AFTER":
+            core_orders = [o for o in core_orders if o.get("side") != "SELL"]
+
         plan_result = {
             'core_orders': core_orders, 'bonus_orders': [], 'orders': core_orders,
             't_val': t_val, 'one_portion': dynamic_budget, 'star_price': star_price,
@@ -218,14 +228,16 @@ class V14VwapStrategy:
             'target_price': target_price, 'is_reverse': False,
             'process_status': process_status,
             'tracking_info': {},
-            'initial_qty': int(qty)
+            'initial_qty': int(qty),
+            'is_zero_start': is_zero_start_fact # 팩트 박제
         }
         
         self.save_daily_snapshot(ticker, plan_result)
             
         return plan_result
 
-    def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, min_idx, alloc_cash, qty, avg_price):
+    # 🚨 [V30.07] market_type 파라미터 추가
+    def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, min_idx, alloc_cash, qty, avg_price, market_type="REG"):
         self._load_state_if_needed(ticker)
         
         plan_static = self.get_plan(
@@ -236,7 +248,8 @@ class V14VwapStrategy:
             prev_close=prev_c,
             available_cash=alloc_cash,
             is_simulation=True,
-            is_snapshot_mode=False
+            is_snapshot_mode=False,
+            market_type=market_type
         )
         star_price = float(plan_static['star_price'])
         buy_star_price = float(plan_static.get('buy_star_price', round(star_price - 0.01, 2) if star_price > 0.01 else 0.0))
@@ -244,6 +257,7 @@ class V14VwapStrategy:
         total_budget = float(plan_static['one_portion'])
         
         initial_qty = int(plan_static.get('initial_qty', qty))
+        is_zero_start_session = plan_static.get('is_zero_start', initial_qty == 0)
         
         # NEW: [V28.20 방어막] min_idx가 유효하지 않을 경우(텔레그램 조회 시점 등) 조기 반환 
         min_idx = int(min_idx) if min_idx is not None else -1
@@ -276,6 +290,10 @@ class V14VwapStrategy:
                 self.residual["SELL_STAR"][ticker] = float(exact_s_qty - alloc_s_qty)
                 if alloc_s_qty > 0:
                     orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절"})
+
+        # 🚨 [V30.07 팩트 수술] 0주 새출발 세션 시 정규장 매도 영구 동결
+        if is_zero_start_session and market_type != "AFTER":
+            orders = [o for o in orders if o.get("side") != "SELL"]
 
         self._save_state(ticker)
         return {"orders": orders, "trigger_loc": False}

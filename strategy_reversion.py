@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_reversion.py] - 🌟 V29.09 0주 새출발 팩트 교정 완결본 🌟
+# [strategy_reversion.py] - 🌟 V30.07 0주 새출발 매도 영구 동결 완결본 🌟
 # ⚠️ V-REV 하이브리드 엔진 전용 수학적 타격 모듈
 # 💡 5년 백테스트 기반 VWAP 유동성 정밀 가중치(U_CURVE_WEIGHTS) 적용 완료
 # 💡 [V24.16 팩트 동기화] 0주 새출발 디커플링 타점 (Buy1: 0.999, Buy2: /0.935) 원본 유지
@@ -27,6 +27,10 @@
 # 🚨 [V29.06 팩트 증명] 한투 평단가 하방 오염 100% 영구 차단 검증. 본 엔진은 외부 평단가(actual_avg) 개입을 일절 불허하며 오직 큐(q_data) 기반 순수 역산 평단가만 사용함이 검증됨.
 # MODIFIED: [V29.07] 0주 새출발 VWAP 타점 붕괴 및 호가 스프레드(Ask) 스킵 맹점 100% 영구 차단 (스냅샷 앵커 복원)
 # MODIFIED: [V29.09] 0주 새출발 시각적 디커플링 차단 (스냅샷 강제 덮어쓰기) 및 0주 타점 역배선(Swap) 팩트 교정 수술 완료
+# 🚨 [V30.07 NEW] 0주 새출발 당일 매도 영구 동결 락온:
+# 당일 0주로 스냅샷이 박제된 세션(is_zero_start=True)에서는 1주가 부분 체결되더라도
+# 정규장(REG) 내의 모든 SELL 지시를 100% 강제 소각하고 오직 애프터마켓(AFTER)에서만 덫을 놓도록
+# get_dynamic_plan 렌더링 파이프라인에 강력한 필터링 방어막 이식.
 # ==========================================================
 import math
 import os
@@ -179,7 +183,8 @@ class ReversionStrategy:
             self.executed["SELL_QTY"][ticker] = int(self.executed.get("SELL_QTY", {}).get(ticker, 0)) + safe_qty
         self._save_state(ticker)
 
-    def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, vwap_status, min_idx, alloc_cash, q_data, is_snapshot_mode=False):
+    # 🚨 [V30.07] market_type 파라미터 추가 (기본값 "REG")
+    def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, vwap_status, min_idx, alloc_cash, q_data, is_snapshot_mode=False, market_type="REG"):
         min_idx = int(min_idx) if min_idx is not None else -1
 
         self._load_state_if_needed(ticker)
@@ -206,7 +211,12 @@ class ReversionStrategy:
         trigger_upper = round(upper_avg * 1.005, 2) if upper_qty > 0 else 0.0
 
         cached_plan = self.load_daily_snapshot(ticker)
-        is_zero_start_session = (cached_plan and cached_plan.get("total_q", -1) == 0)
+        
+        # 🚨 [V30.07 팩트 수술] 0주 새출발 세션 팩트 절대 락온
+        if is_snapshot_mode:
+            is_zero_start_session = (total_q == 0)
+        else:
+            is_zero_start_session = cached_plan.get("is_zero_start", cached_plan.get("snapshot_total_q", cached_plan.get("total_q", -1)) == 0) if cached_plan else (total_q == 0)
 
         # 🚨 MODIFIED: [V29.09 수술] 0주 팩트 스캔 시 낡은 스냅샷 디커플링 락온
         if not is_snapshot_mode and min_idx < 0:
@@ -246,8 +256,13 @@ class ReversionStrategy:
                             sell_orders.append({"side": "SELL", "qty": available_upper, "price": trigger_upper})
                     
                     cached_plan["orders"] = buy_orders + sell_orders
-                    cached_plan["snapshot_total_q"] = cached_plan.get("total_q", 0) 
+                    cached_plan["snapshot_total_q"] = cached_plan.get("snapshot_total_q", cached_plan.get("total_q", 0)) 
                     cached_plan["total_q"] = total_q
+                
+                # 🚨 [V30.07 팩트 수술] 0주 새출발 세션 시 정규장 매도 영구 동결
+                if is_zero_start_session and market_type != "AFTER":
+                    cached_plan["orders"] = [o for o in cached_plan.get("orders", []) if o.get("side") != "SELL"]
+                    
                 return cached_plan
 
         if min_idx < 0 or min_idx >= 30:
@@ -320,7 +335,16 @@ class ReversionStrategy:
                     if available_upper > 0 and trigger_upper > 0 and curr_p >= trigger_upper:
                         orders.append({"side": "SELL", "qty": available_upper, "price": trigger_upper})
             
-            plan_result = {"orders": orders, "trigger_loc": True, "total_q": total_q}
+            plan_result = {
+                "orders": orders, 
+                "trigger_loc": True, 
+                "total_q": total_q,
+                "is_zero_start": is_zero_start_session # 🚨 팩트 박제
+            }
+            
+            # 🚨 [V30.07 팩트 수술] 0주 새출발 세션 시 정규장 매도 영구 동결
+            if is_zero_start_session and market_type != "AFTER":
+                plan_result["orders"] = [o for o in plan_result.get("orders", []) if o.get("side") != "SELL"]
             
             if is_snapshot_mode:
                 self.save_daily_snapshot(ticker, plan_result)
@@ -386,6 +410,9 @@ class ReversionStrategy:
                     if alloc_upper > 0:
                         orders.append({"side": "SELL", "qty": alloc_upper, "price": trigger_upper})
 
+        # 🚨 [V30.07 팩트 수술] 0주 새출발 세션 시 정규장 매도 영구 동결
+        if is_zero_start_session and market_type != "AFTER":
+            orders = [o for o in orders if o.get("side") != "SELL"]
+
         self._save_state(ticker)
         return {"orders": orders, "trigger_loc": False, "total_q": total_q}
-

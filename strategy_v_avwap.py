@@ -10,6 +10,10 @@
 # 🚨 [V27.07 그랜드 수술] 코파일럿 합작 - 20MA NaN 붕괴, VWAP 침묵, 10시 누수, 소수점 주문 4대 맹점 전면 철거
 # 🚨 [V27.16 핫픽스] 20MA 시차 왜곡 차단, RVOL 정수 파싱, 소수점 매도 차단 및 ZeroDivision 영구 차단 완비
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막: 서버 재부팅 시 AVWAP 상태(매수/셧다운)가 증발하는 현상을 원천 차단하기 위해 파일 기반 영속성 저장(Persistence) 엔진 탑재.
+# MODIFIED: [V29.12 핫픽스] 스케줄러 매개변수 불일치 런타임 붕괴 원천 차단 및 Safe Casting 다형성(Polymorphism) 지원
+# MODIFIED: [V29.13 핫픽스] 데이터 기아(Data Starvation) 방어막 이식 및 다형성 맵핑 2차 강화
+# NEW: [UI 패치] 텔레그램 /sync 실시간 레이더 렌더링을 위한 팩트 데이터(gap_pct) 반환 패키징
+# 🚨 [V30.05 팩트 수술] AVWAP 암살자 모니터링 타임라인 1시간 연장 (14:00 -> 15:00 EST) 및 조건문 교정 완비.
 # ==========================================================
 import logging
 import datetime
@@ -70,7 +74,6 @@ class VAvwapHybridPlugin:
             df_daily = tkr.history(period="2mo", interval="1d", timeout=5)
             df_30m = tkr.history(period="60d", interval="30m", timeout=5)
 
-            # MODIFIED: [과거 캔들 참조 오류(iloc[-2] 맹점) 방어] EST 기준 당일(Today) 데이터를 명시적으로 제외하여 어제 종가 기준을 완벽 고정
             today_est = datetime.datetime.now(pytz.timezone('US/Eastern')).date()
             if df_daily.index.tz is None:
                 df_daily.index = df_daily.index.tz_localize('UTC').tz_convert('US/Eastern')
@@ -85,7 +88,6 @@ class VAvwapHybridPlugin:
             prev_close = float(df_past['Close'].iloc[-1])
             ma_20 = float(df_past['Close'].rolling(window=20).mean().iloc[-1])
 
-            # 🚨 [수술 완료] 연산 결과가 NaN일 경우 컨텍스트 무효화
             if math.isnan(ma_20) or math.isnan(prev_close):
                 return None
 
@@ -114,12 +116,29 @@ class VAvwapHybridPlugin:
             logging.error(f"🚨 [V_AVWAP] YF 기초자산 매크로 컨텍스트 추출 실패 ({base_ticker}): {e}")
             return None
 
-    # 🚨 [수술 부위 1] 파라미터 추가: early_exit_mode(조기퇴근 활성화 여부), early_target_profit(유저 목표수익률)
-    def get_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avwap_avg_price, avwap_qty, avwap_alloc_cash, context_data, df_1min_base, now_est, early_exit_mode=False, early_target_profit=0.025):
+    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, early_exit_mode=False, early_target_profit=0.025, **kwargs):
+        
+        df_1min_base = df_1min_base if df_1min_base is not None else kwargs.get('base_df')
+        avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
+        
+        base_curr_p = base_curr_p if base_curr_p > 0 else kwargs.get('base_curr_p', 0.0)
+        exec_curr_p = exec_curr_p if exec_curr_p > 0 else kwargs.get('exec_curr_p', 0.0)
+        base_day_open = base_day_open if base_day_open > 0 else kwargs.get('base_day_open', 0.0)
+        avwap_avg_price = avwap_avg_price if avwap_avg_price > 0 else kwargs.get('avwap_avg_price', kwargs.get('avg_price', 0.0))
+        avwap_alloc_cash = avwap_alloc_cash if avwap_alloc_cash > 0 else kwargs.get('alloc_cash', kwargs.get('avwap_alloc_cash', 0.0))
+        
+        if now_est is None:
+            now_est = datetime.datetime.now(pytz.timezone('US/Eastern'))
+            
+        if base_curr_p <= 0.0 and df_1min_base is not None and not df_1min_base.empty:
+            try: base_curr_p = float(df_1min_base['close'].iloc[-1])
+            except Exception: pass
+            
         curr_time = now_est.time()
         
         time_1000 = datetime.time(10, 0)
-        time_1400 = datetime.time(14, 0)
+        # 🚨 [V30.05 팩트 수술] 매수 윈도우 시간 연장 (14:00 -> 15:00)
+        time_1500 = datetime.time(15, 0)
         time_1430 = datetime.time(14, 30)
         time_1555 = datetime.time(15, 55)
 
@@ -157,8 +176,20 @@ class VAvwapHybridPlugin:
             except Exception as e:
                 logging.error(f"🚨 [V_AVWAP] 기초자산 1분봉 VWAP 연산 실패: {e}")
 
+        def _build_res(action, reason, qty=0, target_price=0.0):
+            gap_pct = ((base_curr_p - base_vwap) / base_vwap * 100.0) if base_vwap > 0 else 0.0
+            return {
+                'action': action,
+                'reason': reason,
+                'qty': qty,
+                'target_price': target_price,
+                'vwap': base_vwap,
+                'base_curr_p': base_curr_p,
+                'gap_pct': gap_pct
+            }
+
         if not vwap_success and avwap_qty == 0:
-            return {'action': 'WAIT', 'reason': 'VWAP_데이터_결측_동결', 'vwap': base_vwap}
+            return _build_res('WAIT', 'VWAP_데이터_결측_동결')
 
         safe_qty = int(math.floor(float(avwap_qty)))
         if safe_qty > 0:
@@ -166,36 +197,30 @@ class VAvwapHybridPlugin:
             
             if safe_avg <= 0:
                 logging.error("🚨 [V_AVWAP] safe_avg <= 0: 가격 데이터 결측, 하드스탑 강제 집행")
-                return {'action': 'SELL', 'qty': safe_qty, 'target_price': 0.0, 'reason': 'CORRUPT_PRICE_HARD_STOP'}
+                return _build_res('SELL', 'CORRUPT_PRICE_HARD_STOP', qty=safe_qty, target_price=0.0)
                 
             exec_return = (exec_curr_p - safe_avg) / safe_avg
             base_equivalent_return = exec_return / self.leverage
             
             if base_equivalent_return <= -self.base_stop_loss_pct:
-                return {'action': 'SELL', 'qty': safe_qty, 'target_price': 0.0, 'reason': 'HARD_STOP_DUAL'}
+                return _build_res('SELL', 'HARD_STOP_DUAL', qty=safe_qty, target_price=0.0)
             
-            # ==========================================================
-            # 🚨 [수술 부위 2: 사용자 맞춤형 조기 퇴근 모드 격발기]
-            # 스케줄러가 early_exit_mode=True를 던져주면 14:30 시간제한을 무시하고
-            # 언제든 유저가 설정한 수익률(예: 2.5%) 도달 시 시장가 전량 익절!
-            # ==========================================================
             if early_exit_mode and (exec_return >= early_target_profit):
-                return {'action': 'SELL', 'qty': safe_qty, 'target_price': 0.0, 'reason': f'EARLY_PROFIT_TAKE_DUAL_{early_target_profit*100:.1f}%'}
+                return _build_res('SELL', f'EARLY_PROFIT_TAKE_DUAL_{early_target_profit*100:.1f}%', qty=safe_qty, target_price=0.0)
 
             if curr_time >= time_1555:
-                return {'action': 'SELL', 'qty': safe_qty, 'target_price': 0.0, 'reason': 'TIME_STOP'}
+                return _build_res('SELL', 'TIME_STOP', qty=safe_qty, target_price=0.0)
                 
             if vwap_success and curr_time >= time_1430 and base_curr_p >= base_vwap * (1 + self.base_target_pct):
-                return {'action': 'SELL', 'qty': safe_qty, 'target_price': 0.0, 'reason': 'SQUEEZE_TARGET_DUAL'}
+                return _build_res('SELL', 'SQUEEZE_TARGET_DUAL', qty=safe_qty, target_price=0.0)
                 
-            return {'action': 'HOLD', 'reason': '보유중_관망', 'vwap': base_vwap}
+            return _build_res('HOLD', '보유중_관망')
 
         if not context_data:
-            return {'action': 'WAIT', 'reason': '매크로_데이터_수집대기', 'vwap': base_vwap}
+            return _build_res('WAIT', '매크로_데이터_수집대기')
 
-        # MODIFIED: 당일 시가(base_day_open) 결측 시 SHUTDOWN 오발탄 방어를 위한 WAIT 멱등성 보장 루프
         if base_day_open <= 0:
-            return {'action': 'WAIT', 'reason': '시가_데이터_결측_대기', 'vwap': base_vwap}
+            return _build_res('WAIT', '시가_데이터_결측_대기')
 
         prev_c = context_data['prev_close']
         ma_20 = context_data['ma_20']
@@ -203,21 +228,22 @@ class VAvwapHybridPlugin:
 
         is_bull_regime = (prev_c > ma_20) and (base_day_open > ma_20)
         if not is_bull_regime:
-            return {'action': 'SHUTDOWN', 'reason': '기초자산_역배열_하락장_영구동결', 'vwap': base_vwap}
+            return _build_res('SHUTDOWN', '기초자산_역배열_하락장_영구동결')
             
         if base_day_open <= prev_c * (1 - self.base_dip_buy_pct):
-            return {'action': 'SHUTDOWN', 'reason': '기초자산_시가_갭하락_영구동결', 'vwap': base_vwap}
+            return _build_res('SHUTDOWN', '기초자산_시가_갭하락_영구동결')
             
         if curr_time >= time_1000:
             if avg_vol_20 > 0 and base_current_30m_vol >= (avg_vol_20 * 2.0) and base_curr_p < base_vwap:
-                return {'action': 'SHUTDOWN', 'reason': '기초자산_RVOL_스파이크_영구동결', 'vwap': base_vwap}
+                return _build_res('SHUTDOWN', '기초자산_RVOL_스파이크_영구동결')
                 
-        if time_1000 <= curr_time <= time_1400:
+        # 🚨 [V30.05 팩트 수술] 매수 윈도우 스캔 구간 조건문 교정
+        if time_1000 <= curr_time <= time_1500:
             if base_curr_p <= base_vwap * (1 - self.base_dip_buy_pct):
                 if exec_curr_p > 0 and avwap_alloc_cash > 0:
                     buy_qty = int(math.floor(avwap_alloc_cash / exec_curr_p))
                     if buy_qty > 0:
-                        return {'action': 'BUY', 'qty': buy_qty, 'target_price': exec_curr_p, 'reason': 'VWAP_BOUNCE_DUAL', 'vwap': base_vwap}
-                return {'action': 'WAIT', 'reason': '예산_부족_관망', 'vwap': base_vwap}
+                        return _build_res('BUY', 'VWAP_BOUNCE_DUAL', qty=buy_qty, target_price=exec_curr_p)
+                return _build_res('WAIT', '예산_부족_관망')
                     
-        return {'action': 'WAIT', 'reason': '타점_대기중', 'vwap': base_vwap}
+        return _build_res('WAIT', '타점_대기중')
