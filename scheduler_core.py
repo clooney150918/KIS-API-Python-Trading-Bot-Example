@@ -1,5 +1,5 @@
 # ==========================================================
-# [scheduler_core.py] - 🌟 100% 통합 완성본 (V29.06) 🌟
+# [scheduler_core.py] - 🌟 100% 통합 완성본 (V30.09) 🌟
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 💡 [V24.09 패치] API 결측치(None) 방어용 Safe Casting 전면 이식 완료
 # 💡 [V24.10 수술] V_REV 동적 에스크로 차감 방어 (이중 차감 방지)
@@ -12,11 +12,12 @@
 # 🛠️ [V27.26 긴급 패치] 17시 잔고 조회 시 증권사 API의 빈 리스트([]) 응답으로 인한 '.get' 에러(크래시) 원천 차단 방어막 이식
 # 🚀 [V29.05 그랜드 수술] 4대 엣지 케이스 완벽 차단! (비동기 데드락 방어, TOCTOU 락온, 결측치 누적 차단, 10시 정각 EST 멱등성 락)
 # MODIFIED: [V29.06 핫픽스] 얼리 웨이크업 타임 패러독스 원천 차단 (정산 딜레이 안전 마진 5.0초 강제 주입)
+# MODIFIED: [V30.08 그랜드 수술] 스마트 딜레이(Shift) 엔진 영구 철거. 콜드 스타트 시 RAM 휘발로 인한 10시 정산 누락 엣지 케이스를 원천 차단하고 다이렉트 타격 배선 완비.
+# MODIFIED: [V30.09 그랜드 수술] pytz 전면 적출 및 ZoneInfo 도입, KST 의존성 로직(get_target_hour 등) 영구 철거로 EST 100% 종속 달성
 # ==========================================================
 import os
 import logging
 import datetime
-import pytz
 import time
 import math
 import asyncio
@@ -26,17 +27,15 @@ import pandas_market_calendars as mcal
 # NEW: [멱등성 락온 및 다이렉트 I/O 제어를 위한 필수 내장 모듈 탑재]
 import json
 import tempfile
+# NEW: [V30.09] LMT 오차 방어를 위한 ZoneInfo 도입 및 pytz 적출
+from zoneinfo import ZoneInfo
 
-def is_dst_active():
-    est = pytz.timezone('US/Eastern')
-    return datetime.datetime.now(est).dst() != datetime.timedelta(0)
-
-def get_target_hour():
-    return (17, "🌞 서머타임 적용(여름)") if is_dst_active() else (18, "❄️ 서머타임 해제(겨울)")
+# MODIFIED: [V30.09] KST 종속적인 is_dst_active 및 get_target_hour 함수 영구 소각 (main.py에서 EST 팩트로 처리)
 
 def is_market_open():
     try:
-        est = pytz.timezone('US/Eastern')
+        # MODIFIED: [V30.09] pytz 적출 및 ZoneInfo('America/New_York') 락온
+        est = ZoneInfo('America/New_York')
         today = datetime.datetime.now(est)
         if today.weekday() >= 5: 
             return False
@@ -166,18 +165,7 @@ async def scheduled_token_check(context):
 # ==========================================================
 
 async def scheduled_force_reset(context):
-    kst = pytz.timezone('Asia/Seoul')
-    now = datetime.datetime.now(kst)
-    target_hour, _ = get_target_hour()
-    
-    now_minutes = now.hour * 60 + now.minute
-    target_minutes = target_hour * 60
-    
-    diff = min((now_minutes - target_minutes) % 1440, (target_minutes - now_minutes) % 1440)
-    
-    if diff > 65:
-        return
-        
+    # MODIFIED: [V30.09] 스케줄러 자체(main.py)에서 EST 04:00에 정확히 격발되므로 KST 시간 검증(diff > 65) 맹점 로직 전면 소각
     if not is_market_open():
         await context.bot.send_message(chat_id=context.job.chat_id, text="⛔ <b>오늘은 미국 증시 휴장일입니다. 금일 시스템 매매 잠금 해제 및 정규장 주문 스케줄을 모두 건너뜁니다.</b>", parse_mode='HTML')
         return
@@ -256,52 +244,33 @@ async def scheduled_force_reset(context):
                     # MODIFIED: [이벤트 루프 블로킹 방어]
                     await asyncio.to_thread(cfg.increment_reverse_day, t)
                 
-        final_msg = f"🔓 <b>[{target_hour}:00] 시스템 일일 초기화 완료 (매매 잠금 해제 & 팩트 스캔)</b>" + msg_addons
+        # MODIFIED: [V30.09] 메세지 하드코딩된 KST 타겟시간 제거 및 EST 04:00 락온 텍스트로 치환
+        final_msg = f"🔓 <b>[04:00 EST] 시스템 일일 초기화 완료 (매매 잠금 해제 & 팩트 스캔)</b>" + msg_addons
         await context.bot.send_message(chat_id=chat_id, text=final_msg, parse_mode='HTML')
         
     except Exception as e:
         await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> {e}", parse_mode='HTML')
 
 # ==========================================================
-# 🚀 [V27.24] 스마트 딜레이 엔진: 모든 아침 정산을 KIS 배치 완료 시점인 10:00 KST로 강제 시프트
+# 🚀 [V30.08] 스마트 딜레이 엔진 영구 철거: main.py의 10:00:05 KST 다이렉트 배선에 맞춰 
+# 콜드 스타트 기억상실(Amnesia)을 유발하던 RAM 휘발성 딜레이(Shift) 로직 전면 소각
 # ==========================================================
 
-async def delayed_auto_sync(context):
-    """10:00 KST에 최종 격발되는 실질적 정산 엔진"""
-    await run_auto_sync(context, "10:00")
-
 async def scheduled_auto_sync_summer(context):
-    kst = pytz.timezone('Asia/Seoul')
-    now = datetime.datetime.now(kst)
-    
-    if now.hour < 10:
-        target_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
-        # MODIFIED: [얼리 웨이크업 타임 패러독스 방어] OS 비동기 스케줄링 오차로 인한 09:59:59.998 기상 및 렌더링 가드 오판을 원천 차단하기 위해 수학적 안전 마진 5.0초 강제 주입
-        delay = (target_time - now).total_seconds() + 5.0
-        context.job_queue.run_once(delayed_auto_sync, delay, data=context.job.data, chat_id=context.job.chat_id)
-        logging.info(f"⏳ [정산 지연 엔진 가동] 100% 확정 결제 데이터 스캔을 위해 동기화 스케줄을 10:00로 시프트합니다. ({delay}초 뒤 격발)")
-        return
-        
+    # MODIFIED: [콜드 스타트 기억상실 원천 차단] 복잡한 지연(Delay) 로직 소각 후 다이렉트 타격
+    logging.info("🌞 [여름 정산] 10:00 KST 확정 정산 엔진 다이렉트 가동")
     await run_auto_sync(context, "10:00")
 
 async def scheduled_auto_sync_winter(context):
-    kst = pytz.timezone('Asia/Seoul')
-    now = datetime.datetime.now(kst)
-    
-    if now.hour < 10:
-        target_time = now.replace(hour=10, minute=0, second=0, microsecond=0)
-        # MODIFIED: [얼리 웨이크업 타임 패러독스 방어] OS 비동기 스케줄링 오차로 인한 09:59:59.998 기상 및 렌더링 가드 오판을 원천 차단하기 위해 수학적 안전 마진 5.0초 강제 주입
-        delay = (target_time - now).total_seconds() + 5.0
-        context.job_queue.run_once(delayed_auto_sync, delay, data=context.job.data, chat_id=context.job.chat_id)
-        logging.info(f"⏳ [정산 지연 엔진 가동] 100% 확정 결제 데이터 스캔을 위해 동기화 스케줄을 10:00로 시프트합니다. ({delay}초 뒤 격발)")
-        return
-        
+    # MODIFIED: [콜드 스타트 기억상실 원천 차단] 복잡한 지연(Delay) 로직 소각 후 다이렉트 타격
+    logging.info("❄️ [겨울 정산] 10:00 KST 확정 정산 엔진 다이렉트 가동")
     await run_auto_sync(context, "10:00")
 
 async def run_auto_sync(context, time_str):
     # NEW: [타임존 락온(EST) 및 10시 정각 중복 발급(Double Fire) 방어용 다이렉트 I/O 멱등성 락]
     def _check_and_set_lock():
-        est_tz = pytz.timezone('US/Eastern')
+        # MODIFIED: [V30.09] pytz 적출 및 ZoneInfo 락온
+        est_tz = ZoneInfo('America/New_York')
         today_est = datetime.datetime.now(est_tz).strftime("%Y-%m-%d")
         lock_file = "data/sync_lock.json"
         os.makedirs("data", exist_ok=True)

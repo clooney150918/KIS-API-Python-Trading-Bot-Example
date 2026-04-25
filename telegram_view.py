@@ -36,12 +36,17 @@
 # MODIFIED: [V29.09] 0주 팩트 스캔 시 낡은 스냅샷의 렌더링 디커플링 누수를 원천 차단하는 동적 오버라이드(Overwrite) 락온 이식
 # MODIFIED: [V29.11 UX 팩트 패치] 스냅샷 안내 문구 렌더링 디커플링 (프리마켓/정규장 진입 시 자동 은폐 및 장마감 전용 표출)
 # MODIFIED: [V30.00 실시간 레이더 수술] /sync 지시서에 AVWAP 기초자산 팩트(현재가, VWAP, Gap) 시각화 엔진 이식
+# MODIFIED: [V30.08 스케줄러 디커플링 수술] 외부 주입 KST 오판 변수(target_hour) 무시 및 EST 팩트 스캔을 통한 시각적 렌더링 강제 동기화
+# MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
 # ==========================================================
 import os
 import math
 import logging
+import datetime 
+# MODIFIED: [V30.09 핫픽스] LMT 오차 방어를 위해 pytz 적출 및 ZoneInfo 도입
+from zoneinfo import ZoneInfo
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from PIL import Image, ImageDraw, ImageFont, ImageSequence
+from PIL import Image, ImageDraw, ImageFont
 
 class TelegramView:
     def __init__(self):
@@ -85,7 +90,12 @@ class TelegramView:
                 pass
 
     def get_start_message(self, target_hour, season_icon, latest_version):
-        dst_state = "🌞서머타임 ON" if target_hour == 17 else "❄️서머타임 OFF"
+        # MODIFIED: [V30.09 핫픽스] pytz 적출 및 ZoneInfo 이식
+        est_tz = ZoneInfo('America/New_York')
+        is_dst = bool(datetime.datetime.now(est_tz).dst())
+        
+        fact_hour = 17 if is_dst else 18
+        dst_state = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
         
         msg = f"🌌 [ 인피니트 스노우볼 {latest_version} ]\n"
         msg += "💠 무결성 V-REV & 타임 슬라이싱\n\n"
@@ -93,8 +103,8 @@ class TelegramView:
         msg += f"🕒 [ 운영 스케줄 ({dst_state}) ]\n"
         msg += "🔹 6시간 간격 : 🔑 API 토큰 자동 갱신\n"
         msg += "🔹 10:00 : 📝 확정 정산 스캔 & 졸업 발급\n"
-        msg += f"🔹 {target_hour}:00 : 🔐 매매 초기화 및 변동성 락온\n"
-        msg += f"🔹 {target_hour}:05 : 🌃 통합 주문 자동 실행\n\n"
+        msg += f"🔹 {fact_hour}:00 : 🔐 매매 초기화 및 변동성 락온\n"
+        msg += f"🔹 {fact_hour}:05 : 🌃 통합 주문 자동 실행\n\n"
         
         msg += "🛠 [ 주요 명령어 ]\n"
         msg += "▶️ /sync : 📜 통합 지시서 조회\n"
@@ -235,7 +245,7 @@ class TelegramView:
         msg += "⚠️ <b>[ 파괴적 제약 사항 ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
         msg += "2. 당일 -1% 하드스탑(손절) 또는 +1% 스퀴즈(익절) 또는 15:55 타임스탑 강제 덤핑이 적용됩니다.\n"
-        msg += "3. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 시스템 메모리 단독으로 연산됩니다.\n\n"
+        msg += "3. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 시스템 메모 단독으로 연산됩니다.\n\n"
         msg += "포트폴리오 매니저의 최종 승인을 대기합니다."
         
         keyboard = [
@@ -456,7 +466,6 @@ class TelegramView:
                     avwap_status = t_info.get('avwap_status', '👀 장초반 필터 스캔 대기')
                     avwap_budget = t_info.get('avwap_budget', 0.0)
                     
-                    # MODIFIED: [V30.00 실시간 레이더 시각화 팩트 주입]
                     base_tkr = t_info.get('avwap_base_ticker', 'N/A')
                     base_p = t_info.get('avwap_base_price', 0.0)
                     base_vwap = t_info.get('avwap_base_vwap', 0.0)
@@ -810,4 +819,3 @@ class TelegramView:
             [InlineKeyboardButton("💎 SOXL + TQQQ 통합", callback_data="TICKER:ALL")]
         ]
         return f"🔄 <b>[ 운용 종목 선택 ]</b>\n현재: <b>{', '.join(current_tickers)}</b>", InlineKeyboardMarkup(keyboard)
-
