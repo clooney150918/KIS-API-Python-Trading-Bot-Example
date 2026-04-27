@@ -5,6 +5,7 @@
 # 🚨 MODIFIED: [V31.50] 1분봉 고정 현재가 탈피, 롤링 5분 TP 팩트 스캔 엔진 지시서에 시각화 표출 
 # 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 락온. 동적 파라미터 렌더링 소각 및 하드코딩 룰(2%/-6% 셧다운) 고정 표출.
 # NEW: [V40.XX 옴니 매트릭스] SOXS 듀얼 모멘텀 전용 버튼 및 옴니 매트릭스 셧다운 알림 렌더링 엔진 이식
+# NEW: [V40.XX 옴니 매트릭스 절대 헌법] TQQQ(V14 전용) / SOXS(V-REV 전용) 렌더링 버튼 락다운(은폐) 적용
 # ==========================================================
 import os
 import math
@@ -62,7 +63,6 @@ class TelegramView:
         fact_hour = 17 if is_dst else 18
         dst_state = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
         
-        # MODIFIED: [V40.XX] 시작 브리핑 시스템 명칭 격상
         msg = f"🌌 [ 옴니 매트릭스 퀀트 엔진 {latest_version} ]\n"
         msg += "💠 무결성 듀얼 모멘텀 (SOXL/SOXS) & V-REV 갭 스위칭\n\n"
         
@@ -456,7 +456,6 @@ class TelegramView:
             if v_mode == "V_REV":
                 body_msg += "📋 <b>[주문 가이던스 - ⚖️다중 LIFO 제어]</b>\n"
                 
-                # NEW: [V40.XX 옴니 매트릭스] 셧다운 텍스트 파싱 및 렌더링 오버라이드
                 plan_info = t_info.get('plan', {})
                 omni_msg = plan_info.get('omni_msg', '')
                 if omni_msg:
@@ -627,15 +626,19 @@ class TelegramView:
                 v14_mode_txt = "🕒 VWAP 1분 타임 슬라이싱 (자체엔진)" if is_manual_vwap else "📉 LOC 단일 타격 (초안정성)"
                 msg += f"▫️ 집행: <b>{v14_mode_txt}</b>\n\n"
                 
-            # MODIFIED: [V40.XX] SOXS 티커 옵션 확장 
-            if t in ["SOXL", "SOXS"]:
+            # 🚨 NEW: [V40.XX 절대 헌법] 티커별 렌더링 버튼 락다운
+            if t == "SOXL":
                 row1 = [
                     InlineKeyboardButton("💎 V14 (무매4)", callback_data=f"SET_VER:V14:{t}"),
                     InlineKeyboardButton("⚖️ V_REV (역추세)", callback_data=f"SET_VER:V_REV:{t}")
                 ]
-            else:
+            elif t == "TQQQ":
                 row1 = [
                     InlineKeyboardButton("💎 V14 (무매4)", callback_data=f"SET_VER:V14:{t}")
+                ]
+            elif t == "SOXS":
+                row1 = [
+                    InlineKeyboardButton("⚖️ V_REV (역추세)", callback_data=f"SET_VER:V_REV:{t}")
                 ]
             keyboard.append(row1)
 
@@ -866,7 +869,6 @@ class TelegramView:
         return fname
 
     def get_ticker_menu(self, current_tickers):
-        # MODIFIED: [V40.XX] SOXS 단독 및 하이브리드 조합을 위한 키보드 배열 확장
         keyboard = [
             [InlineKeyboardButton("🔥 SOXL 전용 (상승장)", callback_data="TICKER:SOXL")],
             [InlineKeyboardButton("❄️ SOXS 전용 (하락장)", callback_data="TICKER:SOXS")],

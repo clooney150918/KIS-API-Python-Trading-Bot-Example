@@ -3,6 +3,7 @@
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 🚨 MODIFIED: [V32.00 그랜드 수술] 불필요한 AVWAP 동적 파라미터 수신 배선 완전 소각
 # NEW: [V40.XX 옴니 매트릭스] 60MA/120MA 기반 SOXL/SOXS 듀얼 모멘텀 중앙 라우팅 락온 엔진 탑재
+# NEW: [V40.XX 옴니 매트릭스 절대 헌법] TQQQ(V14) / SOXS(V-REV) 런타임 강제 라우팅(Bypass) 쉴드 이식
 # ==========================================================
 import logging
 import pandas as pd
@@ -75,7 +76,6 @@ class InfiniteStrategy:
         except Exception as e:
             return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
 
-    # NEW: [V40.XX 옴니 매트릭스] 시장 국면(Regime) 기반 듀얼 타겟 라우팅 및 락온 필터
     def apply_omni_matrix_filter(self, ticker, qty, regime_data):
         """
         60MA/120MA 기반의 국면 데이터(regime_data)를 해석하여,
@@ -98,10 +98,19 @@ class InfiniteStrategy:
         else:
             return {"allow_buy": False, "allow_sell": qty > 0, "msg": f"{regime}장 - {ticker.upper()} 진입 차단 (타겟: {target_ticker})"}
 
-    # MODIFIED: [V40.XX] 옴니 매트릭스 국면 데이터(regime_data) 수신 파라미터 추가
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, vwap_status=None, is_snapshot_mode=False, regime_data=None):
         version = self.cfg.get_version(ticker)
         
+        # 🚨 NEW: [V40.XX 절대 헌법] SOXS = V-REV 전용, TQQQ = V14 전용 강제 락온(Bypass)
+        if ticker.upper() == "SOXS" and version != "V_REV":
+            logging.warning(f"🚨 [{ticker}] 절대 헌법 위반 감지. V_REV 모드로 강제 라우팅합니다.")
+            self.cfg.set_version(ticker, "V_REV")
+            version = "V_REV"
+        elif ticker.upper() == "TQQQ" and version != "V14":
+            logging.warning(f"🚨 [{ticker}] 절대 헌법 위반 감지. V14 모드로 강제 라우팅합니다.")
+            self.cfg.set_version(ticker, "V14")
+            version = "V14"
+
         if version in ["V13", "V17", "V_VWAP", "V_AVWAP"]:
             logging.warning(f"[{ticker}] 폐기된 레거시 모드({version}) 감지. V14 엔진으로 강제 라우팅합니다.")
             self.cfg.set_version(ticker, "V14")
@@ -129,11 +138,10 @@ class InfiniteStrategy:
                 available_cash=available_cash, is_simulation=is_simulation, vwap_status=vwap_status
             )
             
-        # NEW: [V40.XX] 옴니 매트릭스 필터 적용 (매수 락온 및 청산 패스)
+        # [V40.XX] 옴니 매트릭스 필터 적용 (매수 락온 및 청산 패스)
         if regime_data is not None:
             omni_filter = self.apply_omni_matrix_filter(ticker, qty, regime_data)
             if not omni_filter["allow_buy"]:
-                # 매수(BUY) 주문 100% 소각, 청산(SELL) 주문만 보존 (리스트 컴프리헨션)
                 plan['core_orders'] = [o for o in plan.get('core_orders', []) if o.get('side') != 'BUY']
                 plan['bonus_orders'] = [o for o in plan.get('bonus_orders', []) if o.get('side') != 'BUY']
                 plan['orders'] = [o for o in plan.get('orders', []) if o.get('side') != 'BUY']
@@ -176,14 +184,11 @@ class InfiniteStrategy:
     def fetch_avwap_macro(self, base_ticker):
         return self.v_avwap_plugin.fetch_macro_context(base_ticker)
 
-    # MODIFIED: [V40.XX] 옴니 매트릭스 국면 데이터(regime_data) 연동 파라미터 추가
     def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None):
         
-        # NEW: [V40.XX] 옴니 매트릭스 횡보장 암살자 퇴직 및 역방향 차단 방어막
         if regime_data is not None:
             omni_filter = self.apply_omni_matrix_filter(exec_ticker, qty, regime_data)
             if not omni_filter["allow_buy"] and qty == 0:
-                # 보유 수량이 0주인데 진입이 차단된 경우, 즉시 타격 프로세스 종료 (Bypass)
                 return {
                     "action": "HOLD",
                     "qty": 0,
