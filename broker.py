@@ -23,6 +23,8 @@
 #    20종목 초과 시 발생하는 잔고 스캔 데이터 기아(Data Starvation) 맹점 완벽 교정.
 # 3) 논리적 앵커 통일을 위해 America/New_York을 US/Eastern으로 100% 락온(Lock-on) 형변환.
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo 도입으로 LMT 버그 차단 및 타임존 무결성 100% 확보
+# MODIFIED: [V40.XX 옴니 매트릭스] 거래소 동적 탐색 실패 시 SOXS 티커 AMEX Fallback 이식 및 타겟 인덱스 방어막 락온
+# NEW: [V40.XX 옴니 매트릭스] 전일 팩트 VWAP 및 당일 실시간 VWAP 듀얼 파싱 엔진(get_daily_vwap_info) 탑재
 # ==========================================================
 
 import requests
@@ -32,15 +34,13 @@ import datetime
 import os
 import math
 import yfinance as yf
-# MODIFIED: [V30.09 핫픽스] LMT 오차 방어를 위해 pytz 적출 및 ZoneInfo 도입
-# import pytz
 from zoneinfo import ZoneInfo
 import tempfile
 import shutil  
 import pandas as pd   
 import numpy as np
 import volatility_engine as ve
-import logging  # NEW: 예외 발생 시 침묵 방지를 위한 로깅 모듈 추가
+import logging  
 
 class KoreaInvestmentBroker:
     def __init__(self, app_key, app_secret, cano, acnt_prdt_cd="01"):
@@ -56,7 +56,6 @@ class KoreaInvestmentBroker:
         self._get_access_token()
 
     def _get_access_token(self, force=False):
-        # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo 이식
         kst = ZoneInfo('Asia/Seoul')
         
         if not force and os.path.exists(self.token_file):
@@ -205,7 +204,7 @@ class KoreaInvestmentBroker:
             print(f"⚠️ [Broker] 거래소 동적 획득 실패: {ticker} - {e}")
 
         if not dynamic_success:
-            if ticker == "SOXL": price_cd, order_cd = "AMS", "AMEX"
+            if ticker in ["SOXL", "SOXS"]: price_cd, order_cd = "AMS", "AMEX"
             elif ticker == "TQQQ": price_cd, order_cd = "NAS", "NASD"
 
         self._excg_cd_cache[ticker] = {'PRICE': price_cd, 'ORDER': order_cd}
@@ -235,12 +234,9 @@ class KoreaInvestmentBroker:
 
         target_excgs = ["NASD", "AMEX", "NYSE"] 
         
-        # MODIFIED: [V29.18 잔고 스캔 데이터 기아(Data Starvation) 원천 차단] 
-        # 페이징(Pagination) 누락으로 20종목 이상 보유 시 발생하는 잔고 증발 맹점을 해결하기 위해 
-        # _api_request 다이렉트 호출 및 tr_cont 기반 무한 루프 페이징 락온 이식.
         for excg in target_excgs:
             fk200, nk200 = "", ""
-            for attempt in range(20): # 최대 20페이지 스캔 방어막
+            for attempt in range(20): 
                 params_hold = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg, "TR_CRCY_CD": "USD", "CTX_AREA_FK200": fk200, "CTX_AREA_NK200": nk200}
                 headers = self._get_header("TTTS3012R")
                 url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-balance"
@@ -273,9 +269,6 @@ class KoreaInvestmentBroker:
                             else:
                                 prev = holdings[ticker]
                                 
-                                # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-                                # MODIFIED: KIS API가 동일 수량/동일 평단가의 데이터를 다른 거래소 응답으로 
-                                # 한 번 더 보내는 경우(유령 중복 응답), 무지성으로 합산(+=)하지 않고 무시하도록 멱등성 필터링 이식.
                                 if prev['qty'] == qty and abs(prev['avg'] - avg) < 0.001:
                                     continue 
                                     
@@ -287,7 +280,6 @@ class KoreaInvestmentBroker:
                                 holdings[ticker]['avg'] = new_avg
 
                     tr_cont = res_hold.headers.get('tr_cont', '') if hasattr(res_hold, 'headers') else ''
-                    # MODIFIED: [V29.18 결측치 Safe Casting 방어막]
                     fk200 = (resp_json.get('ctx_area_fk200', '') or '').strip()
                     nk200 = (resp_json.get('ctx_area_nk200', '') or '').strip()
 
@@ -302,6 +294,61 @@ class KoreaInvestmentBroker:
         if api_success: return cash, holdings
         else: return cash, None
 
+    # NEW: [V40.XX 옴니 매트릭스] 전일 최종 VWAP 및 당일 실시간 VWAP 듀얼 파싱 엔진
+    def get_daily_vwap_info(self, ticker):
+        """
+        최근 5일간의 1분봉 데이터를 로드하여 정규장(09:30~15:59) 거래 내역만 추출,
+        일자별 순수 VWAP을 계산하여 반환합니다.
+        return: (prev_vwap, curr_vwap)
+        """
+        try:
+            stock = yf.Ticker(ticker)
+            df = stock.history(period="5d", interval="1m", prepost=False, timeout=10)
+            if df.empty: return 0.0, 0.0
+
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.droplevel(1)
+
+            est = ZoneInfo('America/New_York')
+            if df.index.tz is None:
+                df.index = df.index.tz_localize('UTC').tz_convert(est)
+            else:
+                df.index = df.index.tz_convert(est)
+
+            # 정규장 데이터만 100% 필터링하여 프리/애프터마켓 노이즈 원천 차단
+            regular_market = df.between_time('09:30', '15:59').copy()
+            if regular_market.empty: return 0.0, 0.0
+
+            regular_market['Typical_Price'] = (regular_market['High'] + regular_market['Low'] + regular_market['Close']) / 3.0
+            regular_market['Vol_x_Price'] = regular_market['Typical_Price'] * regular_market['Volume']
+
+            regular_market['Date'] = regular_market.index.date
+            daily_stats = regular_market.groupby('Date').agg(
+                Total_Vol_Price=('Vol_x_Price', 'sum'),
+                Total_Vol=('Volume', 'sum')
+            )
+
+            daily_stats['VWAP'] = np.where(daily_stats['Total_Vol'] > 0,
+                                           daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'],
+                                           np.nan)
+
+            daily_stats = daily_stats.dropna(subset=['VWAP'])
+
+            if len(daily_stats) >= 2:
+                prev_vwap = float(daily_stats['VWAP'].iloc[-2])
+                curr_vwap = float(daily_stats['VWAP'].iloc[-1])
+            elif len(daily_stats) == 1:
+                prev_vwap = 0.0
+                curr_vwap = float(daily_stats['VWAP'].iloc[-1])
+            else:
+                prev_vwap = 0.0
+                curr_vwap = 0.0
+
+            return round(prev_vwap, 4), round(curr_vwap, 4)
+        except Exception as e:
+            logging.error(f"⚠️ [Broker] 일별 VWAP 파싱 실패 ({ticker}): {e}")
+            return 0.0, 0.0
+
     def get_current_5min_candle(self, ticker):
         try:
             stock = yf.Ticker(ticker)
@@ -312,7 +359,6 @@ class KoreaInvestmentBroker:
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.droplevel(1)
                 
-            # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo('America/New_York') 이식
             est = ZoneInfo('America/New_York')
             
             if df.index.tz is None:
@@ -422,7 +468,6 @@ class KoreaInvestmentBroker:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="5d", timeout=5)
             if not hist.empty:
-                # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo('America/New_York') 이식
                 est = ZoneInfo('America/New_York')
                 now_est = datetime.datetime.now(est)
                 
@@ -475,7 +520,6 @@ class KoreaInvestmentBroker:
             if df.empty: return None
             if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
                 
-            # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo('America/New_York') 이식
             est = ZoneInfo('America/New_York')
             if df.index.tz is None: df.index = df.index.tz_localize('UTC').tz_convert(est)
             else: df.index = df.index.tz_convert(est)
@@ -506,7 +550,6 @@ class KoreaInvestmentBroker:
                 valid_orders.extend([item for item in output if item.get('pdno') == ticker])
                 
                 tr_cont = res.headers.get('tr_cont', '') if hasattr(res, 'headers') else ''
-                # MODIFIED: [V29.18 결측치(None) 유입에 따른 AttributeError 런타임 붕괴 방어막] Safe Casting 이식
                 fk200 = (resp_json.get('ctx_area_fk200', '') or '').strip()
                 nk200 = (resp_json.get('ctx_area_nk200', '') or '').strip()
                 
@@ -710,7 +753,6 @@ class KoreaInvestmentBroker:
                         continue
                         
                 tr_cont = res.headers.get('tr_cont', '') if hasattr(res, 'headers') else ''
-                # MODIFIED: [V29.18 결측치(None) 유입에 따른 AttributeError 런타임 붕괴 방어막] Safe Casting 이식
                 fk200 = (resp_json.get('ctx_area_fk200', '') or '').strip()
                 nk200 = (resp_json.get('ctx_area_nk200', '') or '').strip()
                 
@@ -742,7 +784,6 @@ class KoreaInvestmentBroker:
         if curr_qty == 0: return [], 0, 0.0
             
         ledger_records = []
-        # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo('America/New_York') 이식
         est = ZoneInfo('America/New_York')
         target_date = datetime.datetime.now(est)
         genesis_reached = False
@@ -802,7 +843,6 @@ class KoreaInvestmentBroker:
             splits = stock.splits
             if splits is not None and not splits.empty:
                 if last_date_str == "":
-                    # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo('America/New_York') 이식
                     est = ZoneInfo('America/New_York')
                     seven_days_ago = datetime.datetime.now(est) - datetime.timedelta(days=7)
                     safe_last_date = seven_days_ago.strftime('%Y-%m-%d')
@@ -819,10 +859,15 @@ class KoreaInvestmentBroker:
         return 0.0, ""
 
     def get_dynamic_sniper_target(self, index_ticker):
+        if index_ticker in ["SOXX", "SOXL", "SOXS"]:
+            target_index = "SOXX"
+        else:
+            target_index = index_ticker
+            
         try:
             class TargetFloat(float): pass
             
-            if index_ticker == "SOXX":
+            if target_index == "SOXX":
                 hv_val, weight, target_drop, base_amp = ve.get_soxl_target_drop_full()
                 ret = TargetFloat(target_drop)
                 ret.metric_val, ret.weight, ret.base_amp, ret.metric_name = hv_val, weight, base_amp, "SOXX HV"
@@ -838,9 +883,9 @@ class KoreaInvestmentBroker:
             return ret
             
         except Exception as e:
-            fallback_val = -8.79 if index_ticker == "SOXX" else -4.95
+            fallback_val = -8.79 if target_index == "SOXX" else -4.95
             ret = TargetFloat(fallback_val)
-            ret.metric_val, ret.weight, ret.base_amp, ret.metric_name, ret.metric_base = 0.0, 1.0, fallback_val, "통신오류(기본값)", 25.0 if index_ticker == "SOXX" else 20.0
+            ret.metric_val, ret.weight, ret.base_amp, ret.metric_name, ret.metric_base = 0.0, 1.0, fallback_val, "통신오류(기본값)", 25.0 if target_index == "SOXX" else 20.0
             ret.is_panic, ret.gap_pct = False, 0.0
             return ret
 

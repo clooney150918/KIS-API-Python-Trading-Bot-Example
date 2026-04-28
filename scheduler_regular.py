@@ -8,7 +8,6 @@
 # ==========================================================
 import logging
 import datetime
-# MODIFIED: [V30.09 핫픽스] LMT 오차 방어를 위해 pytz 적출 및 ZoneInfo 도입
 from zoneinfo import ZoneInfo
 import asyncio
 import traceback
@@ -19,7 +18,6 @@ import json
 import random
 import pandas_market_calendars as mcal
 
-# MODIFIED: [V30.09 핫픽스] 소각된 get_target_hour 임포트 영구 철거 (ImportError 원천 차단)
 from scheduler_core import is_market_open, get_budget_allocation
 
 # ==========================================================
@@ -30,9 +28,6 @@ from scheduler_core import is_market_open, get_budget_allocation
 # asyncio 루프 내에서 requests나 동기 함수를 직접 호출하면 전체 스케줄러가 100% 교착(Deadlock)에 빠집니다.
 # 반드시 기존의 asyncio.to_thread 래핑과 내부 broker.py 엔진만을 사용해 비동기 무결성을 유지하세요.
 async def scheduled_regular_trade(context):
-    # MODIFIED: [V30.09 핫픽스] 런타임 붕괴를 유발하던 KST 기반 65분 윈도우 가드 로직 전면 소각
-    # main.py의 run_daily에서 04:05 EST에 정확히 1회 격발되므로 시간 검증이 불필요합니다.
-        
     if not is_market_open():
         return
     
@@ -48,7 +43,6 @@ async def scheduled_regular_trade(context):
     
     jitter_seconds = random.randint(0, 180)
 
-    # MODIFIED: [V30.09 핫픽스] 메시지의 target_hour 의존성을 04:05 EST 절대 텍스트로 치환
     await context.bot.send_message(
         chat_id=context.job.chat_id, 
         text=f"🌃 <b>[04:05 EST] 통합 주문 장전 및 스냅샷 박제!</b>\n"
@@ -62,7 +56,6 @@ async def scheduled_regular_trade(context):
     RETRY_DELAY = 60
 
     async def _do_regular_trade():
-        # MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo 이식
         est = ZoneInfo('America/New_York')
         _now_est = datetime.datetime.now(est)
         today_str_est = _now_est.strftime("%Y-%m-%d")
@@ -163,7 +156,7 @@ async def scheduled_regular_trade(context):
                                 l1_inv = l1_qty * l1_price
                                 upper_invested = total_inv - l1_inv
                                 upper_avg = upper_invested / upper_qty if upper_invested > 0 else safe_avg
-                                    
+                                
                                 target_upper = round(upper_avg * 1.005, 2)
                                 loc_orders.append({'side': 'SELL', 'qty': upper_qty, 'price': target_upper, 'type': 'LOC', 'desc': '[상위 재고]'})
                                 
@@ -210,7 +203,8 @@ async def scheduled_regular_trade(context):
                         ma_5day = float(await asyncio.to_thread(broker.get_5day_ma, t) or 0.0)
                         v14_vwap_plugin = strategy.v14_vwap_plugin
                         
-                        v14_plan = v14_vwap_plugin.get_dynamic_plan(
+                        # MODIFIED: [V32.01 핫픽스] TypeError 런타임 붕괴 방어. get_dynamic_plan이 아닌 get_plan으로 올바르게 팩트 호출
+                        v14_plan = v14_vwap_plugin.get_plan(
                             ticker=t, current_price=curr_p, avg_price=safe_avg, qty=safe_qty, 
                             prev_close=prev_c, ma_5day=ma_5day, market_type="REG", 
                             available_cash=allocated_cash.get(t, 0.0), is_simulation=False,
