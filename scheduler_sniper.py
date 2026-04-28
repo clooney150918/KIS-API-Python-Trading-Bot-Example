@@ -2,6 +2,7 @@
 # [scheduler_sniper.py] - 🌟 100% 분할 캡슐화 완성본 (V32.00) 🌟
 # 🚨 MODIFIED: [V32.00 그랜드 수술] 불필요한 AVWAP 동적 파라미터 배선 전면 소각 및 클린 라우팅 적용
 # NEW: [V40.XX 옴니 매트릭스] 전역 국면 데이터(regime_data) 수신 및 스나이퍼(AVWAP/V14) 듀얼 라우팅 락온 탑재
+# 🚨 MODIFIED: [V41.XX 파격적 수술] AVWAP 쿨다운 및 손절 셧다운 동결 전면 소각 & 무제한 다중 타격 룰 이식
 # ==========================================================
 import logging
 import datetime
@@ -114,7 +115,6 @@ async def scheduled_sniper_monitor(context):
                                 tracking_cache[f"AVWAP_QTY_{t}"] = saved_state.get('qty', 0)
                                 tracking_cache[f"AVWAP_AVG_{t}"] = saved_state.get('avg_price', 0.0)
                                 tracking_cache[f"AVWAP_STRIKES_{t}"] = saved_state.get('strikes', 0)
-                                tracking_cache[f"AVWAP_COOLDOWN_{t}"] = saved_state.get('cooldown_active', False)
                         except Exception as e:
                             logging.error(f"AVWAP 상태 복구 실패: {e}")
                         tracking_cache[f"AVWAP_INIT_{t}"] = True
@@ -157,9 +157,9 @@ async def scheduled_sniper_monitor(context):
                     try: df_1min_base = await asyncio.to_thread(broker.get_1min_candles_df, target_base)
                     except: pass
                     
+                    # NEW: [V41.XX] 쿨다운 족쇄 해체 완료
                     avwap_state_dict = {
-                        "strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0),
-                        "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)
+                        "strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
                     }
                     
                     # MODIFIED: [V40.XX 옴니 매트릭스] 국면 데이터(regime_data) 파이프라인 주입 완료
@@ -181,27 +181,6 @@ async def scheduled_sniper_monitor(context):
                     
                     action = decision.get("action")
                     reason = decision.get("reason", "")
-                    
-                    if action == "COOLDOWN_RELEASE":
-                        if tracking_cache.get(f"AVWAP_COOLDOWN_{t}"):
-                            tracking_cache[f"AVWAP_COOLDOWN_{t}"] = False
-                            
-                            strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
-                            state_data = {
-                                "bought": False,
-                                "shutdown": False,
-                                "qty": 0,
-                                "avg_price": 0.0,
-                                "strikes": strikes,
-                                "cooldown_active": False
-                            }
-                            await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
-                            
-                            msg = f"🔄 <b>[AVWAP] 출장 후 복귀 완료 (자연 쿨다운 해제)</b>\n"
-                            msg += f"▫️ 타겟: {t}\n▫️ 기초자산 갭(Gap)이 정상 궤도로 회복되어 재장전(Reloading)을 시작합니다.\n"
-                            msg += f"▫️ 다음 <b>{strikes + 1}회차</b> 교전을 대기합니다."
-                            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                        continue
                     
                     if action == "BUY":
                         price = float(decision.get("target_price", decision.get("price", 0.0)))
@@ -263,7 +242,6 @@ async def scheduled_sniper_monitor(context):
 
                                     tracking_cache[f"AVWAP_BOUGHT_{t}"] = True
                                     tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = False
-                                    tracking_cache[f"AVWAP_COOLDOWN_{t}"] = False
                                     tracking_cache[f"AVWAP_QTY_{t}"] = new_qty
                                     tracking_cache[f"AVWAP_AVG_{t}"] = round(new_avg, 4)
                                     
@@ -272,12 +250,11 @@ async def scheduled_sniper_monitor(context):
                                         "shutdown": False,
                                         "qty": new_qty,
                                         "avg_price": round(new_avg, 4),
-                                        "strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0),
-                                        "cooldown_active": False
+                                        "strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
                                     }
                                     await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
                     
-                    elif action in ["SELL", "SHUTDOWN"]:
+                    elif action == "SELL":
                         price = float(decision.get("target_price", decision.get("price", 0.0)))
                         qty = int(decision.get("qty", 0))
                         
@@ -332,22 +309,23 @@ async def scheduled_sniper_monitor(context):
                                     new_qty = max(0, old_qty - ccld_qty)
                                     
                                     shutdown_flag = tracking_cache.get(f"AVWAP_SHUTDOWN_{t}", False)
-                                    cooldown_flag = False
                                     
                                     if new_qty == 0:
-                                        if action == "SHUTDOWN" or ("MULTI_STRIKE_TAKE" not in reason):
-                                            if "HARD_STOP" in reason or "손절" in reason:
-                                                msg += "\n🚨 손절(-6.0%) 피격 감지! 떨어지는 칼날 방어를 위해 당일 단타 매매를 영구 동결합니다."
-                                            elif "TIME_STOP" in reason:
-                                                msg += "\n🛡️ 금일 해당 종목의 15:55 타임스탑 청산 완료, 단타 작전을 영구 셧다운합니다."
-                                            else:
-                                                msg += "\n🛡️ 금일 해당 종목의 잔고 청산 완료, 단타 작전을 영구 셧다운합니다."
+                                        # NEW: [V41.XX] 무제한 다중 출장을 위해 strikes 무조건 증가
+                                        strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0) + 1
+                                        tracking_cache[f"AVWAP_STRIKES_{t}"] = strikes
+                                        
+                                        if "TIME_STOP" in reason:
+                                            msg += "\n🛡️ 금일 해당 종목의 15:55 타임스탑 청산 완료, 오버나이트 갭하락 방어를 위해 단타 작전을 영구 셧다운합니다."
                                             shutdown_flag = True
+                                        elif "HARD_STOP" in reason or "손절" in reason:
+                                            # NEW: [V41.XX] 당일 영구 동결 문구를 '즉각 타점 탐색'으로 교정 완료
+                                            msg += "\n🚨 손절(-6.0%) 피격 감지! <b>즉각 다음 모멘텀 타점 탐색</b>을 시작합니다."
+                                            shutdown_flag = False
                                         else:
-                                            strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0) + 1
-                                            tracking_cache[f"AVWAP_STRIKES_{t}"] = strikes
-                                            cooldown_flag = True
-                                            msg += f"\n🛡️ <b>[ {strikes}회차 출장 익절 완료 ]</b> 대기 모드(자연 쿨다운)로 롤백합니다."
+                                            msg += f"\n🛡️ <b>[ {strikes}회차 출장 익절 완료 ]</b> 즉각 다음 모멘텀 타점 탐색을 시작합니다."
+                                            shutdown_flag = False
+                                            
                                         new_avg = 0.0
                                     else:
                                         msg += f"\n⚠️ 잔량 {new_qty}주 발생 (미체결 강제 취소됨, 다음 1분봉 루프에서 재시도)"
@@ -357,34 +335,17 @@ async def scheduled_sniper_monitor(context):
                                     
                                     tracking_cache[f"AVWAP_BOUGHT_{t}"] = (new_qty > 0)
                                     tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = shutdown_flag
-                                    tracking_cache[f"AVWAP_COOLDOWN_{t}"] = cooldown_flag
                                     tracking_cache[f"AVWAP_QTY_{t}"] = new_qty
                                     tracking_cache[f"AVWAP_AVG_{t}"] = new_avg
                                     
                                     state_data = {
                                         'bought': tracking_cache[f"AVWAP_BOUGHT_{t}"],
                                         'shutdown': shutdown_flag,
-                                        'cooldown_active': cooldown_flag,
                                         'strikes': tracking_cache.get(f"AVWAP_STRIKES_{t}", 0),
                                         'qty': new_qty,
                                         'avg_price': new_avg
                                     }
                                     await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
-
-                        elif action == "SHUTDOWN" and qty == 0:
-                            if not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
-                                tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = True
-                                state_data = {
-                                    "bought": tracking_cache.get(f"AVWAP_BOUGHT_{t}", False),
-                                    "shutdown": True,
-                                    "cooldown_active": False,
-                                    "strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0),
-                                    "qty": tracking_cache.get(f"AVWAP_QTY_{t}", 0),
-                                    "avg_price": tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
-                                }
-                                await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
-                                msg = f"🛡️ <b>[AVWAP] 암살자 작전 영구 셧다운(동결)</b>\n▫️ 타겟: {t}\n▫️ 사유: {reason}"
-                                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
 
                 master_switch = getattr(cfg, 'get_master_switch', lambda x: "ALL")(t)
                 sniper_buy_locked = getattr(cfg, 'get_sniper_buy_locked', lambda x: False)(t)

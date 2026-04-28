@@ -6,7 +6,7 @@
 # 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 락온. 동적 파라미터 렌더링 소각 및 하드코딩 룰(2%/-6% 셧다운) 고정 표출.
 # NEW: [V40.XX 옴니 매트릭스] SOXS 듀얼 모멘텀 전용 버튼 및 옴니 매트릭스 셧다운 알림 렌더링 엔진 이식
 # NEW: [V40.XX 옴니 매트릭스 절대 헌법] TQQQ(V14 전용) / SOXS(V-REV 전용) 렌더링 버튼 락다운(은폐) 적용
-# 🚨 MODIFIED: [V40.04 핫픽스] AVWAP 인버스(SOXS) 거울 로직 UI 렌더링 팩트 교정 (Gap 타격 부등호 반전)
+# 🚨 MODIFIED: [V41.XX 파격적 수술] AVWAP 콘솔 및 지시서 렌더링 텍스트 전면 개조 (쿨다운 철거 및 5분 평균 VWAP 레이더 탑재)
 # ==========================================================
 import os
 import math
@@ -206,14 +206,15 @@ class TelegramView:
         ]
         return msg, InlineKeyboardMarkup(keyboard)
 
+    # MODIFIED: [V41.XX] AVWAP 경고 텍스트 교정 (셧다운 해제 팩트 반영)
     def get_avwap_warning_menu(self, ticker):
-        msg = f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리드 무장 해제 및 경고</b>\n\n"
-        msg += "현재 <b>AVWAP 하이브리드 암살자 모드</b> 가동을 지시하셨습니다.\n"
-        msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 갭 타격에 쏟아붓는 초공격형 옵션입니다.\n\n"
-        msg += "⚠️ <b>[ 파괴적 제약 사항 (12차 락온) ]</b>\n"
+        msg = f"🛑 <b>[{ticker}] V41 차세대 AVWAP 무장 해제 및 경고</b>\n\n"
+        msg += "현재 <b>AVWAP 암살자 모드</b> 가동을 지시하셨습니다.\n"
+        msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 모멘텀 타격에 쏟아붓는 초공격형 옵션입니다.\n\n"
+        msg += "⚠️ <b>[ 파괴적 제약 사항 (V41 락온) ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
-        msg += "2. 목표 +2.0% 도달 익절, -6.0% 피격 시 무조건 당일 영구 동결이 팩트 집행됩니다.\n"
-        msg += "3. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 독립 연산됩니다.\n\n"
+        msg += "2. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 독립 연산됩니다.\n"
+        msg += "3. 손절(-6.0%) 피격 시에도 당일 영구 동결이 해제되고 즉각 다음 타점을 탐색합니다.\n\n"
         msg += "포트폴리오 매니저의 최종 승인을 대기합니다."
         
         keyboard = [
@@ -222,15 +223,15 @@ class TelegramView:
         ]
         return msg, InlineKeyboardMarkup(keyboard)
 
+    # MODIFIED: [V41.XX] AVWAP 콘솔 텍스트 교정 (무제한 타격 팩트 반영)
     def get_avwap_console_menu(self, t):
-        msg = f"🔫 <b>[ {t} 12차 AVWAP 암살자 제어 콘솔 ]</b>\n\n"
-        msg += "💼 <b>현재 가동 모드: [ 다중 회전 출장 (Multi-Strike) 락온 ]</b>\n"
-        msg += f"▫️ 실시간 VWAP이 전일 VWAP을 상회하는 <b>진성 상승장</b>에서만 갭 하락을 노립니다.\n"
-        msg += f"▫️ 목표 수익 도달 시 익절 후, 갭(Gap < 0) 조건 재충족 시 자연 쿨다운을 거쳐 <b>다중 재장전 및 무제한 타격</b>을 반복 수행합니다.\n"
-        msg += f"▫️ <b>[생존 방어막]</b> 단 1회라도 -6.0% 하드스탑에 피격되면, <b>그 즉시 당일 다중 출장 모드가 영구 동결(Shut-down)</b>됩니다.\n\n"
+        msg = f"🔫 <b>[ {t} V41 파격적 VWAP 모멘텀 돌파 콘솔 ]</b>\n\n"
+        msg += "💼 <b>현재 가동 모드: [ 무제한 다중 타격 (Multi-Strike) 락온 ]</b>\n"
+        msg += f"▫️ 당일 실시간 VWAP이 전일 VWAP과 5분 평균 VWAP을 동시에 돌파하는 <b>강력한 모멘텀</b>에서만 타격합니다.\n"
+        msg += f"▫️ 목표 수익 도달 또는 손절(-6.0%) 피격 시에도 <b>쿨다운 없이 즉각 다음 타점을 무제한 스캔</b>합니다.\n"
+        msg += f"▫️ <b>[오버나이트 방어]</b> 15:55 EST 타임스탑 강제 청산 시에만 당일 매매가 영구 동결됩니다.\n\n"
         msg += f"🎯 <b>목표 익절가: 진입가 대비 +2.0% (고정)</b>\n"
         msg += f"🚨 <b>하드스탑 컷: 진입가 대비 -6.0% (고정)</b>\n"
-        msg += f"📉 <b>딥매수 타격: 롤링 5분 TP가 VWAP 하향 돌파 시 즉각 100% 스윕 (고정)</b>\n"
 
         keyboard = [
             [InlineKeyboardButton("🔙 닫기 (설정 락온 완료)", callback_data=f"RESET:CANCEL")]
@@ -444,7 +445,7 @@ class TelegramView:
                         else:
                             safe_floor = math.ceil(t_info['avg'] * 1.005 * 100) / 100.0
                             sn_target = max(t_info['star_price'], safe_floor)
-                            
+                        
                         if sn_target > 0:
                             body_msg += f"🎯 상방 스나이퍼: ${sn_target:.2f} 이상 대기\n"
             elif v_mode == "V_REV":
@@ -475,6 +476,7 @@ class TelegramView:
                 raw_guidance = raw_guidance.rstrip('\n')
                 body_msg += raw_guidance + "\n"
 
+                # 🚨 MODIFIED: [V41.XX] AVWAP 지시서 렌더링 파이프라인 (5분 평균 VWAP 레이더 표출)
                 if t_info.get('avwap_active', False):
                     avwap_qty = t_info.get('avwap_qty', 0)
                     avwap_avg = t_info.get('avwap_avg', 0.0)
@@ -484,40 +486,33 @@ class TelegramView:
                     base_tkr = t_info.get('avwap_base_ticker', 'N/A')
                     base_vwap = t_info.get('avwap_base_vwap', 0.0)
                     prev_vwap = t_info.get('avwap_prev_vwap', 0.0)
-                    rolling_tp = t_info.get('avwap_rolling_tp', 0.0)
-                    gap_pct = t_info.get('avwap_gap_pct', 0.0)
+                    avg_vwap_5m = t_info.get('avwap_avg_vwap_5m', 0.0) 
                     
-                    body_msg += f"\n⚔️ <b>[ 12차 AVWAP 암살자 감시망 ({t}) ]</b>\n"
+                    body_msg += f"\n⚔️ <b>[ V41 VWAP 모멘텀 돌파 암살자 ({t}) ]</b>\n"
                     if avwap_strikes > 0:
-                        body_msg += f"💼 <b>다중 출장 모드: {avwap_strikes}회차 수익 달성 (+{(avwap_strikes*2.0):.1f}%)</b>\n"
+                        body_msg += f"💼 <b>다중 출장 모드: {avwap_strikes}회차 교전 완료</b>\n"
                         
                     body_msg += f"▫️ 기초자산(Base): <b>{base_tkr}</b>\n"
                     
                     if prev_vwap > 0:
                         body_msg += f"▫️ 전일 VWAP: ${prev_vwap:,.2f}\n"
-                        # 🚨 [V40.04] 인버스(SOXS) 거울 로직 UI 렌더링 팩트 교정
-                        if t.upper() == "SOXS":
-                            trend_str = "🔴 하락장 (진입차단)" if base_vwap >= prev_vwap else "🟢 상승장 (진입허용)"
-                        else:
-                            trend_str = "🟢 상승장 (진입허용)" if base_vwap >= prev_vwap else "🔴 하락장 (진입차단)"
-                            
-                        body_msg += f"▫️ 당일 VWAP: ${base_vwap:,.2f}\n"
-                        body_msg += f" ↳ {trend_str}\n"
-                    else:
-                        body_msg += f"▫️ 당일 VWAP: ${base_vwap:,.2f}\n"
+                        if avg_vwap_5m > 0:
+                            body_msg += f"▫️ 당일 5분 평균 VWAP: ${avg_vwap_5m:,.2f}\n"
+
+                        body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
                         
-                    if rolling_tp > 0:
-                        body_msg += f"▫️ 롤링 5분 TP(현재가): ${rolling_tp:,.2f}\n"
-                    
-                    # 🚨 [V40.04] 인버스(SOXS) 거울 로직 UI 렌더링 팩트 교정 (Gap 타격 부등호 반전)
-                    if t.upper() == "SOXS":
-                        gap_color = "🟢" if gap_pct > 0 else "🔴"
-                        body_msg += f"▫️ 5분 이탈(Gap): {gap_color} {gap_pct:+.2f}%\n"
-                        body_msg += f" ↳ (타격: +0.01% 이상)\n"
+                        if t.upper() == "SOXS":
+                            momentum_color = "🟢" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "🔴"
+                            trend_str = "하락 돌파 (진입허용)" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "조건 미달 (대기)"
+                            body_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
+                            body_msg += f" ↳ (당일 < 전일 & 당일 < 5분평균)\n"
+                        else:
+                            momentum_color = "🟢" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "🔴"
+                            trend_str = "상승 돌파 (진입허용)" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "조건 미달 (대기)"
+                            body_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
+                            body_msg += f" ↳ (당일 > 전일 & 당일 > 5분평균)\n"
                     else:
-                        gap_color = "🔴" if gap_pct < 0 else "🟢"
-                        body_msg += f"▫️ 5분 이탈(Gap): {gap_color} {gap_pct:+.2f}%\n"
-                        body_msg += f" ↳ (타격: -0.01% 이하)\n"
+                        body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
                         
                     body_msg += f"▫️ 독립 물량/평단: {avwap_qty}주 / ${avwap_avg:.2f}\n"
                     body_msg += f"▫️ 작전 상태: <b>{avwap_status}</b>\n"
@@ -626,7 +621,7 @@ class TelegramView:
                     msg += "▫️ 막판 갭 스위칭: <b>🔴 비활성 (OFF)</b>\n"
                 
                 if hasattr(config, 'get_avwap_hybrid_mode') and config.get_avwap_hybrid_mode(t):
-                    status_label = f"💼 12차 다중 출장 락온 (+2% 고정)"
+                    status_label = f"💼 V41 다중 출장 락온 (+2% 고정)"
                     msg += f"▫️ AVWAP 암살자: <b>{status_label}</b>\n"
                 elif hasattr(config, 'get_avwap_hybrid_mode'):
                     msg += f"▫️ AVWAP 암살자: <b>비활성 (OFF)</b>\n"
@@ -658,11 +653,11 @@ class TelegramView:
                 is_avwap = config.get_avwap_hybrid_mode(t) if hasattr(config, 'get_avwap_hybrid_mode') else False
                 is_gap_switch = config.get_vrev_gap_switching_mode(t) if hasattr(config, 'get_vrev_gap_switching_mode') else False
                 
-                avwap_txt = "⚔️ 12차 AVWAP 암살자 [ OFF ]"
+                avwap_txt = "⚔️ 파격적 AVWAP 모멘텀 [ OFF ]"
                 avwap_cb = f"MODE:AVWAP_WARN:{t}" 
                 
                 if is_avwap:
-                    avwap_txt = "⚔️ 12차 AVWAP 암살자 [ 가동중 ]"
+                    avwap_txt = "⚔️ 파격적 AVWAP 모멘텀 [ 가동중 ]"
                     avwap_cb = f"MODE:AVWAP_OFF:{t}" 
                 
                 keyboard.append([InlineKeyboardButton(avwap_txt, callback_data=avwap_cb)])

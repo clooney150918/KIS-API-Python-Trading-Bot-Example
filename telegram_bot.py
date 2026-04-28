@@ -1,11 +1,10 @@
 # ==========================================================
 # [telegram_bot.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
-# 🚨 MODIFIED: [V31.00] AVWAP 암살자 제어 콘솔 모드 토글링 전면 소각 (다중 출장 100% 락온)
-# 🚨 MODIFIED: [V31.00] /sync 지시서 실시간 레이더 시각화를 위한 prev_vwap, rolling_tp 추출 파이프라인 개통
 # 🚨 MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo 이식을 통한 타임존 오차 차단.
 # 🚨 MODIFIED: [V30.18 그랜드 핫픽스] 스냅샷 렌더링 디커플링 무결성 확보 및 실시간 잔고 오염 원천 차단
 # 🚨 MODIFIED: [V32.00] 12차 팩트 반영. cmd_avwap 내부의 파라미터 조회 찌꺼기 완벽 소각.
 # NEW: [V40.XX 옴니 매트릭스] SOXS 티커 진입 시 기초자산을 QQQ로 오인하는 치명적 맹점 전면 수술 및 /avwap 듀얼 라우팅 개방
+# 🚨 MODIFIED: [V41.XX 파격적 수술] 지시서 실시간 레이더 시각화를 위한 avg_vwap_5m 추출 파이프라인 개통 및 낡은 롤링 TP, 갭 이탈률 소각
 # ==========================================================
 import logging
 import datetime
@@ -162,7 +161,6 @@ class TelegramController:
         if not self._is_admin(update):
             return
             
-        # MODIFIED: [V40.XX 옴니 매트릭스] 단일 티커 하드코딩("SOXL") 소각 및 다중 티커 동적 순회 이식
         active_tickers = self.cfg.get_active_tickers()
         avwap_tickers = [t for t in active_tickers if t in ["SOXL", "SOXS"]]
         
@@ -383,7 +381,6 @@ class TelegramController:
             if status_code == "CLOSE":
                 curr = safe_prev_close
 
-            # MODIFIED: [V40.XX 옴니 매트릭스] 기초자산 매핑 맹점 전면 수술 (SOXS -> SOXX)
             idx_ticker = "SOXX" if t in ["SOXL", "SOXS"] else "QQQ"
             dynamic_pct_obj = await asyncio.to_thread(self.broker.get_dynamic_sniper_target, idx_ticker)
             dynamic_pct = float(dynamic_pct_obj) if dynamic_pct_obj is not None else (8.79 if t in ["SOXL", "SOXS"] else 4.95)
@@ -416,7 +413,6 @@ class TelegramController:
                     logic_qty = cached_snap["initial_qty"]
                 is_zero_start_fact = cached_snap.get("is_zero_start", logic_qty == 0)
 
-            # NEW: [V40.XX] 옴니 매트릭스 국면 데이터 지시서 렌더링 파이프라인 개통
             try:
                 jobs = context.job_queue.jobs() if context.job_queue else []
                 job_data = jobs[0].data if jobs and jobs[0].data is not None else {}
@@ -427,7 +423,7 @@ class TelegramController:
             plan = self.strategy.get_plan(
                 t, curr, actual_avg, logic_qty, safe_prev_close, ma_5day=ma_5day,
                 market_type="REG", available_cash=allocated_cash[t],
-                is_simulation=True, regime_data=regime_data # 파라미터 주입 완료
+                is_simulation=True, regime_data=regime_data
             )
             
             split = self.cfg.get_split_count(t)
@@ -456,8 +452,7 @@ class TelegramController:
             avwap_base_price = 0.0
             avwap_base_vwap = 0.0
             avwap_prev_vwap = 0.0
-            avwap_rolling_tp = 0.0
-            avwap_gap_pct = 0.0
+            avwap_avg_vwap_5m = 0.0 # NEW: [V41.XX] 5분 평균 VWAP 파이프라인
 
             if ver == "V_REV":
                 if not getattr(self, 'queue_ledger', None):
@@ -581,12 +576,9 @@ class TelegramController:
                         avwap_status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
                     elif tracking_cache.get(f"AVWAP_BOUGHT_{t}"):
                         avwap_status_txt = "🎯 딥매수 완료 (익절/손절 감시중)"
-                    elif tracking_cache.get(f"AVWAP_COOLDOWN_{t}"):
-                        avwap_status_txt = "⏳ 자연 쿨다운 (VWAP 갭 회복 대기중)"
                     else:
-                        avwap_status_txt = "👀 상승장 필터 스캔 및 갭 타점 대기"
+                        avwap_status_txt = "👀 상승장 필터 스캔 및 모멘텀 타점 대기"
 
-                    # MODIFIED: [V40.XX 옴니 매트릭스] SOXS 티커 AVWAP 기초자산 매핑(SOXX) 락온
                     avwap_base_ticker = 'SOXX' if t in ['SOXL', 'SOXS'] else ('QQQ' if t == 'TQQQ' else t)
                     
                     avwap_ctx = tracking_cache.get(f"AVWAP_CTX_{t}")
@@ -602,7 +594,7 @@ class TelegramController:
                             base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, avwap_base_ticker), timeout=3.0) or 0.0)
                             
                             if hasattr(self.strategy, 'v_avwap_plugin'):
-                                avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0), "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)}
+                                avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)}
                                 
                                 decision = self.strategy.v_avwap_plugin.get_decision(
                                     base_ticker=avwap_base_ticker, exec_ticker=t,
@@ -614,8 +606,7 @@ class TelegramController:
                                 avwap_base_price = decision.get('base_curr_p', base_curr_p)
                                 avwap_base_vwap = decision.get('vwap', 0.0)
                                 avwap_prev_vwap = decision.get('prev_vwap', 0.0)
-                                avwap_rolling_tp = decision.get('rolling_tp', 0.0)
-                                avwap_gap_pct = decision.get('gap_pct', 0.0)
+                                avwap_avg_vwap_5m = decision.get('avg_vwap_5m', 0.0)
                                 
                                 if "대기" in avwap_status_txt:
                                     reason = decision.get('reason', '타점 계산중')
@@ -625,13 +616,13 @@ class TelegramController:
 
                     if not tracking_cache.get(f"AVWAP_BOUGHT_{t}") and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
                         curr_time = now_est.time()
-                        time_1000 = datetime.time(10, 0)
+                        time_1020 = datetime.time(10, 20)
                         time_1500 = datetime.time(15, 0)
                         
-                        if curr_time < time_1000:
-                            avwap_status_txt = "⏳ 10시 장초반 노이즈 대기"
+                        if curr_time < time_1020:
+                            avwap_status_txt = "⏳ 10:20 이전 타임쉴드 대기"
                         elif curr_time >= time_1500:
-                            avwap_status_txt = "⛔ 금일 감시 종료"
+                            avwap_status_txt = "⛔ 15:00 이후 신규진입 차단"
 
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
@@ -667,8 +658,7 @@ class TelegramController:
                 'avwap_base_price': avwap_base_price if is_avwap_active else 0.0,
                 'avwap_base_vwap': avwap_base_vwap if is_avwap_active else 0.0,
                 'avwap_prev_vwap': avwap_prev_vwap if is_avwap_active else 0.0,
-                'avwap_rolling_tp': avwap_rolling_tp if is_avwap_active else 0.0,
-                'avwap_gap_pct': avwap_gap_pct if is_avwap_active else 0.0,
+                'avwap_avg_vwap_5m': avwap_avg_vwap_5m if is_avwap_active else 0.0,
                 'avwap_gap_thresh': getattr(self.cfg, 'get_avwap_gap_threshold', lambda x: -0.67)(t) if is_avwap_active else -0.67,
                 'vrev_gap_switch': getattr(self.cfg, 'get_vrev_gap_switching_mode', lambda x: False)(t),
                 'vrev_gap_thresh': getattr(self.cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(t),
