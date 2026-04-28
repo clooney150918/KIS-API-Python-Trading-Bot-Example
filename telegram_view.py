@@ -10,6 +10,7 @@
 # 🚨 MODIFIED: [V42.02 핫픽스] 텔레그램 HTML 파싱 에러(Can't parse entities) 완벽 수술. 부등호(<, >) 및 앰퍼샌드(&) 이스케이프 처리 완료.
 # 🚨 MODIFIED: [V42.05 핫픽스] final_msg 변수 할당 누락으로 인한 UnboundLocalError 런타임 붕괴 100% 팩트 교정 완료.
 # 🚨 MODIFIED: [V42.06 핫픽스] SOXS 레이더 내 고가/저가 이식 및 자율지표(Autonomous Indicators) 로직 전면 폐기 완료.
+# 🚨 MODIFIED: [V42.07 핫픽스] 시작 메시지의 옴니 매트릭스 국면 판별 시간(10:20 EST)을 서머타임에 맞춰 KST(23:20/00:20)로 동적 변환 렌더링 이식.
 # ==========================================================
 import os
 import math
@@ -65,6 +66,7 @@ class TelegramView:
         is_dst = bool(datetime.datetime.now(est_tz).dst())
         
         fact_hour = 17 if is_dst else 18
+        matrix_time = "23:20" if is_dst else "00:20"
         dst_state = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
         
         msg = f"🌌 [ 옴니 매트릭스 퀀트 엔진 {latest_version} ]\n"
@@ -73,7 +75,7 @@ class TelegramView:
         msg += f"🕒 [ 운영 스케줄 ({dst_state}) ]\n"
         msg += "🔹 6시간 간격 : 🔑 API 토큰 자동 갱신\n"
         msg += "🔹 10:00 : 📝 확정 정산 스캔 & 졸업 발급\n"
-        msg += "🔹 10:20 : 🏛️ 옴니 매트릭스 시장 국면 판별\n"
+        msg += f"🔹 {matrix_time} : 🏛️ 옴니 매트릭스 시장 국면 판별\n"
         msg += f"🔹 {fact_hour}:00 : 🔐 매매 초기화 및 변동성 락온\n"
         msg += f"🔹 {fact_hour}:05 : 🌃 통합 주문 자동 실행\n\n"
         
@@ -256,7 +258,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V42.06 옴니 매트릭스 듀얼 코어</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V42.07 옴니 매트릭스 듀얼 코어</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
