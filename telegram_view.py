@@ -1,9 +1,10 @@
 # ==========================================================
 # [telegram_view.py] - 🌟 100% 통합 무결점 완성본 (V31.00) 🌟
-# 🚨 MODIFIED: [V42.08 핫픽스] 듀얼 모멘텀 암살자 기초자산(SOXX) 레이더 순서 변경 (실시간 ➔ 5분평균) 및 갭(%) 산출 렌더링 이식 완료.
 # 🚨 MODIFIED: [V42.09 핫픽스] 듀얼 모멘텀 타임쉴드 대기 메시지 시간(10:20 EST)을 서머타임 연동 한국시간(KST 23:20/00:20)으로 팩트 교정 완료.
 # 🚨 MODIFIED: [V42.10 핫픽스] 5분 평균 VWAP 갭(Gap) 산출 공식 정방향((실시간-5분평균)/5분평균) 팩트 교정 완료.
 # 🚨 MODIFIED: [V42.11 그랜드 핫픽스] 듀얼 모멘텀(Long/Short) 부등호 오염 원천 차단. 5분 평균 > 당일 실시간 = 상승(롱) 로직 팩트 교정 완료.
+# 🚨 MODIFIED: [V42.12 그랜드 핫픽스] 부등호 논리 완벽 원상 복구! (당일 > 5분평균 = 상승 롱 / 당일 < 5분평균 = 하락 숏)
+# 🚨 MODIFIED: [V42.13 핫픽스] 5분 평균 VWAP 갭 렌더링 수식을 (5분평균-실시간)/실시간으로 교정하여 직관적인 UI(+) 제공.
 # ==========================================================
 import os
 import math
@@ -251,7 +252,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V42.11 옴니 매트릭스 듀얼 코어</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V42.13 옴니 매트릭스 듀얼 코어</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -529,7 +530,8 @@ class TelegramView:
                 final_msg += f"▫️ 실시간 VWAP: ${base_vwap:,.2f} ({rt_gap:+.2f}%)\n"
                 
                 if avg_vwap_5m > 0 and base_vwap > 0:
-                    avg_5m_gap = ((base_vwap - avg_vwap_5m) / avg_vwap_5m) * 100
+                    # 🚨 [V42.13 핫픽스] 5분 평균 갭차이를 +로 표출하도록 공식 재수정
+                    avg_5m_gap = ((avg_vwap_5m - base_vwap) / base_vwap) * 100
                     final_msg += f"▫️ 5분 평균 VWAP: ${avg_vwap_5m:,.2f} ({avg_5m_gap:+.2f}%)\n"
                 elif avg_vwap_5m > 0:
                     final_msg += f"▫️ 5분 평균 VWAP: ${avg_vwap_5m:,.2f}\n"
@@ -558,17 +560,15 @@ class TelegramView:
                         
                     if prev_vwap > 0:
                         if t == "SOXS":
-                            # 🚨 [V42.11 핫픽스] 5분평균 < 당일실시간 (하락) 로직 교정
-                            momentum_color = "🟢" if base_vwap < prev_vwap and avg_vwap_5m < base_vwap else "🔴"
-                            trend_str = "하락 돌파 (진입허용)" if base_vwap < prev_vwap and avg_vwap_5m < base_vwap else "조건 미달 (대기)"
+                            momentum_color = "🟢" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "🔴"
+                            trend_str = "하락 돌파 (진입허용)" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "조건 미달 (대기)"
                             final_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
-                            final_msg += f" ↳ (당일 &lt; 전일 &amp; 5분평균 &lt; 당일)\n"
+                            final_msg += f" ↳ (당일 &lt; 전일 &amp; 당일 &lt; 5분평균)\n"
                         else:
-                            # 🚨 [V42.11 핫픽스] 5분평균 > 당일실시간 (상승) 로직 교정
-                            momentum_color = "🟢" if base_vwap > prev_vwap and avg_vwap_5m > base_vwap else "🔴"
-                            trend_str = "상승 돌파 (진입허용)" if base_vwap > prev_vwap and avg_vwap_5m > base_vwap else "조건 미달 (대기)"
+                            momentum_color = "🟢" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "🔴"
+                            trend_str = "상승 돌파 (진입허용)" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "조건 미달 (대기)"
                             final_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
-                            final_msg += f" ↳ (당일 &gt; 전일 &amp; 5분평균 &gt; 당일)\n"
+                            final_msg += f" ↳ (당일 &gt; 전일 &amp; 당일 &gt; 5분평균)\n"
                     
                     if t == "SOXS":
                         d_high = t_info.get('day_high', 0.0)
