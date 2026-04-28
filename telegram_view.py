@@ -7,9 +7,9 @@
 # NEW: [V40.XX 옴니 매트릭스] SOXS 듀얼 모멘텀 전용 버튼 및 옴니 매트릭스 셧다운 알림 렌더링 엔진 이식
 # 🚨 MODIFIED: [V41.XX 파격적 수술] AVWAP 콘솔 및 지시서 렌더링 텍스트 전면 개조 (쿨다운 철거 및 5분 평균 VWAP 레이더 탑재)
 # 🚨 MODIFIED: [V42.00 아키텍처 개편] SOXS 메인 종목 렌더링 영구 소각 및 계층형 트리 구조(자동/수동 ➔ AVWAP) UI 정비
-# 🚨 MODIFIED: [V43.00 갭 스위칭 자율주행] 수동 제어(Toggle) 스위치 영구 소각 및 자율주행 텍스트 렌더링 교정
-# 🚨 MODIFIED: [V43.01 핫픽스] SOXS 지시서 렌더링 시 V-REV 껍데기(보일러플레이트) 100% 영구 적출. 오직 암살자 팩트만 진공 압축 표출.
-# 🚨 MODIFIED: [V43.02 핫픽스] 텔레그램 HTML 파싱 에러(Can't parse entities) 완벽 수술. 부등호(<, >) 및 앰퍼샌드(&) 이스케이프 처리 완료.
+# 🚨 MODIFIED: [V42.01 갭 스위칭 자율주행] 수동 제어(Toggle) 스위치 영구 소각 및 자율주행 텍스트 렌더링 교정
+# 🚨 MODIFIED: [V42.02 핫픽스] 텔레그램 HTML 파싱 에러(Can't parse entities) 완벽 수술. 부등호(<, >) 및 앰퍼샌드(&) 이스케이프 처리 완료.
+# 🚨 MODIFIED: [V42.04 핫픽스] 듀얼 모멘텀 레이더 중복 렌더링 찌꺼기 100% 영구 소각. 기초자산(SOXX) 데이터 단일 병합 완료.
 # ==========================================================
 import os
 import math
@@ -212,7 +212,7 @@ class TelegramView:
     def get_avwap_warning_menu(self, ticker):
         msg = f"🛑 <b>[{ticker}] V41 차세대 AVWAP 무장 해제 및 경고</b>\n\n"
         msg += "현재 <b>AVWAP 암살자 모드</b> 가동을 지시하셨습니다.\n"
-        msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 모멘텀 타격에 쏟아붓는 초공격형 옵션입니다.\n\n"
+        msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 모멘텀 타격에 쏟아붓는 초공격형 옵션 옵션입니다.\n\n"
         msg += "⚠️ <b>[ 파괴적 제약 사항 (V41 락온) ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
         msg += "2. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 독립 연산됩니다.\n"
@@ -256,7 +256,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V42.01 옴니 매트릭스 듀얼 코어</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V42.04 옴니 매트릭스 듀얼 코어</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -313,46 +313,18 @@ class TelegramView:
         body_msg = ""
         keyboard = []
 
+        # [V42.04] 듀얼 모멘텀 데이터 선추출
+        avwap_tickers_data = {}
+        for t_info in ticker_data:
+            if t_info.get('avwap_active', False):
+                avwap_tickers_data[t_info['ticker']] = t_info
+
         for t_info in ticker_data:
             t = t_info['ticker']
             v_mode = t_info['version']
             
             if t == "SOXS":
-                if t_info.get('avwap_active', False):
-                    avwap_qty = t_info.get('avwap_qty', 0)
-                    avwap_avg = t_info.get('avwap_avg', 0.0)
-                    avwap_status = t_info.get('avwap_status', '👀 장초반 10시 필터 대기')
-                    avwap_strikes = t_info.get('avwap_strikes', 0)
-                    
-                    base_tkr = t_info.get('avwap_base_ticker', 'N/A')
-                    base_vwap = t_info.get('avwap_base_vwap', 0.0)
-                    prev_vwap = t_info.get('avwap_prev_vwap', 0.0)
-                    avg_vwap_5m = t_info.get('avwap_avg_vwap_5m', 0.0) 
-                    
-                    body_msg += f"⚔️ <b>[ V41 VWAP 모멘텀 돌파 암살자 (SOXS 숏) ]</b>\n"
-                    if avwap_strikes > 0:
-                        body_msg += f"💼 <b>다중 출장 모드: {avwap_strikes}회차 교전 완료</b>\n"
-                        
-                    body_msg += f"▫️ 기초자산(Base): <b>{base_tkr}</b>\n"
-                    
-                    if prev_vwap > 0:
-                        body_msg += f"▫️ 전일 VWAP: ${prev_vwap:,.2f}\n"
-                        if avg_vwap_5m > 0:
-                            body_msg += f"▫️ 당일 5분 평균 VWAP: ${avg_vwap_5m:,.2f}\n"
-
-                        body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
-                        
-                        momentum_color = "🟢" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "🔴"
-                        trend_str = "하락 돌파 (진입허용)" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "조건 미달 (대기)"
-                        body_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
-                        body_msg += f" ↳ (당일 &lt; 전일 &amp; 당일 &lt; 5분평균)\n"
-                    else:
-                        body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
-                        
-                    body_msg += f"▫️ 현재가: ${t_info.get('curr', 0.0):.2f}\n"    
-                    body_msg += f"▫️ 독립 물량/평단: {avwap_qty}주 / ${avwap_avg:.2f}\n"
-                    body_msg += f"▫️ 작전 상태: <b>{avwap_status}</b>\n\n"
-                continue # SOXS는 메인 장부 렌더링을 완전히 Bypass!
+                continue # SOXS는 메인 장부 렌더링을 완전히 Bypass! (AVWAP 정보는 하단에서 통합 렌더링)
             
             is_manual_vwap = t_info.get('is_manual_vwap', False)
             is_zero_start = t_info.get('is_zero_start', False)
@@ -487,42 +459,8 @@ class TelegramView:
                     raw_guidance = '\n'.join(filtered_lines)
 
                 raw_guidance = raw_guidance.rstrip('\n')
-                body_msg += raw_guidance + "\n"
+                body_msg += raw_guidance + "\n\n"
 
-                if t_info.get('avwap_active', False):
-                    avwap_qty = t_info.get('avwap_qty', 0)
-                    avwap_avg = t_info.get('avwap_avg', 0.0)
-                    avwap_status = t_info.get('avwap_status', '👀 장초반 10시 필터 대기')
-                    avwap_strikes = t_info.get('avwap_strikes', 0)
-                    
-                    base_tkr = t_info.get('avwap_base_ticker', 'N/A')
-                    base_vwap = t_info.get('avwap_base_vwap', 0.0)
-                    prev_vwap = t_info.get('avwap_prev_vwap', 0.0)
-                    avg_vwap_5m = t_info.get('avwap_avg_vwap_5m', 0.0) 
-                    
-                    body_msg += f"\n⚔️ <b>[ V41 VWAP 모멘텀 돌파 암살자 ({t}) ]</b>\n"
-                    if avwap_strikes > 0:
-                        body_msg += f"💼 <b>다중 출장 모드: {avwap_strikes}회차 교전 완료</b>\n"
-                        
-                    body_msg += f"▫️ 기초자산(Base): <b>{base_tkr}</b>\n"
-                    
-                    if prev_vwap > 0:
-                        body_msg += f"▫️ 전일 VWAP: ${prev_vwap:,.2f}\n"
-                        if avg_vwap_5m > 0:
-                            body_msg += f"▫️ 당일 5분 평균 VWAP: ${avg_vwap_5m:,.2f}\n"
-
-                        body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
-                        
-                        momentum_color = "🟢" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "🔴"
-                        trend_str = "상승 돌파 (진입허용)" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "조건 미달 (대기)"
-                        body_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
-                        body_msg += f" ↳ (당일 &gt; 전일 &amp; 당일 &gt; 5분평균)\n"
-                    else:
-                        body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
-                        
-                    body_msg += f"▫️ 독립 물량/평단: {avwap_qty}주 / ${avwap_avg:.2f}\n"
-                    body_msg += f"▫️ 작전 상태: <b>{avwap_status}</b>\n"
-                    
                 if is_trade_active:
                     keyboard.append([InlineKeyboardButton(f"🚀 {t} V-REV 방어선 수동 장전", callback_data=f"EXEC:{t}")])
                 
@@ -574,7 +512,58 @@ class TelegramView:
                 
             body_msg += "\n"
 
-        final_msg = header_msg + body_msg
+        # 🚨 [V42.04] 듀얼 모멘텀 암살자 통합 렌더링 (진공 압축)
+        if avwap_tickers_data:
+            ref_info = avwap_tickers_data.get('SOXL') or list(avwap_tickers_data.values())[0]
+            base_tkr = ref_info.get('avwap_base_ticker', 'N/A')
+            base_vwap = ref_info.get('avwap_base_vwap', 0.0)
+            prev_vwap = ref_info.get('avwap_prev_vwap', 0.0)
+            avg_vwap_5m = ref_info.get('avwap_avg_vwap_5m', 0.0) 
+            
+            body_msg += f"⚔️ <b>[ V41 VWAP 듀얼 모멘텀 암살자 ]</b>\n"
+            body_msg += f"▫️ 기초자산(Base): <b>{base_tkr}</b>\n"
+            
+            if prev_vwap > 0:
+                body_msg += f"▫️ 전일 VWAP: ${prev_vwap:,.2f}\n"
+                if avg_vwap_5m > 0:
+                    body_msg += f"▫️ 당일 5분 평균 VWAP: ${avg_vwap_5m:,.2f}\n"
+                body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
+            else:
+                body_msg += f"▫️ 당일 실시간 VWAP: ${base_vwap:,.2f}\n"
+                
+            for t in ['SOXL', 'SOXS', 'TQQQ']:
+                if t in avwap_tickers_data:
+                    t_info = avwap_tickers_data[t]
+                    avwap_qty = t_info.get('avwap_qty', 0)
+                    avwap_avg = t_info.get('avwap_avg', 0.0)
+                    avwap_status = t_info.get('avwap_status', '👀 장초반 10시 필터 대기')
+                    avwap_strikes = t_info.get('avwap_strikes', 0)
+                    
+                    label = "롱" if t in ["SOXL", "TQQQ"] else "숏"
+                    body_msg += f"\n🎯 <b>[ {t} ({label}) ]</b>\n"
+                    
+                    if avwap_strikes > 0:
+                        body_msg += f"💼 <b>다중 출장 모드: {avwap_strikes}회차 교전 완료</b>\n"
+                        
+                    if prev_vwap > 0:
+                        if t == "SOXS":
+                            momentum_color = "🟢" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "🔴"
+                            trend_str = "하락 돌파 (진입허용)" if base_vwap < prev_vwap and base_vwap < avg_vwap_5m else "조건 미달 (대기)"
+                            body_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
+                            body_msg += f" ↳ (당일 &lt; 전일 &amp; 당일 &lt; 5분평균)\n"
+                        else:
+                            momentum_color = "🟢" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "🔴"
+                            trend_str = "상승 돌파 (진입허용)" if base_vwap > prev_vwap and base_vwap > avg_vwap_5m else "조건 미달 (대기)"
+                            body_msg += f"▫️ 모멘텀 돌파: {momentum_color} {trend_str}\n"
+                            body_msg += f" ↳ (당일 &gt; 전일 &amp; 당일 &gt; 5분평균)\n"
+                    
+                    if t == "SOXS":
+                        body_msg += f"▫️ 현재가: ${t_info.get('curr', 0.0):.2f}\n"
+                        
+                    body_msg += f"▫️ 독립 물량/평단: {avwap_qty}주 / ${avwap_avg:.2f}\n"
+                    body_msg += f"▫️ 작전 상태: <b>{avwap_status}</b>\n"
+                    
+            body_msg += "\n"
 
         vol_summaries = []
         for t_info in ticker_data:
