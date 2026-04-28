@@ -8,6 +8,7 @@
 # 🚨 MODIFIED: [V42.14 핫픽스] 모멘텀 돌파 UI 텍스트 부등호(5분평균 > 당일 = 롱) 팩트 동기화 완료.
 # 🚨 MODIFIED: [V42.15 핫픽스] /settlement 및 락온 경고창에 남아있던 과거의 잔재(2%/-6%)를 4.0%/-8.0%로 팩트 교정 완료.
 # 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 콘솔 하드코딩 완전 철거. 커스텀 목표수익률(Target) 및 근무모드(조기퇴근/출장) 동적 렌더링 및 UI 버튼 신설 탑재 완료.
+# 🚨 MODIFIED: [V43.01 UX 팩트 교정] V-REV 큐 관리 및 지시서의 '로트(Lot)', '층' 용어를 '지층'으로 100% 통일. 코어 엔진(LIFO)과 동일하게 가장 최근 매수일을 '1지층'으로 렌더링하도록 인덱스 스왑 완료.
 # ==========================================================
 import os
 import math
@@ -18,7 +19,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from PIL import Image, ImageDraw, ImageFont
 
 class TelegramView:
-    def __init__(self, config=None): # 🚨 V43.00: config 의존성 주입을 위한 파라미터 추가
+    def __init__(self, config=None):
         self.cfg = config
         self.bold_font_paths = [
             "NanumGothicBold.ttf", "font_bold.ttf", "font.ttf",
@@ -143,41 +144,43 @@ class TelegramView:
         total_invested = sum(item.get('qty', 0) * item.get('price', 0.0) for item in q_data)
         avg_p = total_invested / total_q if total_q > 0 else 0.0
         
-        msg += f"▫️ 총 보유 로트(Lot) : {len(q_data)} 개 층\n"
+        # 🚨 [V43.01 팩트 교정] 용어를 '지층'으로 100% 통일
+        msg += f"▫️ 총 보유 지층 : {len(q_data)} 개 지층\n"
         msg += f"▫️ 총 장전 수량 : {total_q} 주\n"
-        msg += f"▫️ 큐 통합 평단가 : ${avg_p:.2f}\n\n"
-        msg += "<b>[ LIFO 층별 상세 (최근 매수 순) ]</b>\n"
-        msg += "<code>No. 일자        수량   평단가\n"
+        msg += f"▫️ 지층 통합 평단가 : ${avg_p:.2f}\n\n"
+        msg += "<b>[ LIFO 지층별 상세 (최근 매수 = 1지층) ]</b>\n"
+        msg += "<code>지층 일자        수량   평단가\n"
         msg += "-"*30 + "\n"
         
         keyboard = []
         if not q_data:
             msg += "📭 지층 데이터가 없습니다.\n"
         else:
+            # 🚨 [V43.01 팩트 교정] 가장 최근 매수 지층이 1이 되도록 인덱스 역전
             for idx, item in enumerate(reversed(q_data)):
                 qty = item.get('qty', 0)
                 price = item.get('price', 0.0)
                 item_date = item.get('date')
-                real_idx = len(q_data) - idx
+                layer_num = idx + 1 # 1부터 시작
                 
                 if item_date is None:
-                    msg += f"⚠️ {real_idx:<3} [날짜 손상] {qty:>4}주 ${price:.2f}\n"
+                    msg += f"⚠️ {layer_num:<3} [날짜 손상] {qty:>4}주 ${price:.2f}\n"
                     keyboard.append([
-                        InlineKeyboardButton(f"⚠️ {real_idx}층 (손상 - 수정 불가)", callback_data=f"QUEUE:VIEW:{ticker}")
+                        InlineKeyboardButton(f"⚠️ {layer_num}지층 (손상 - 수정 불가)", callback_data=f"QUEUE:VIEW:{ticker}")
                     ])
                 else:
                     date_str = item_date[:10]
-                    msg += f"{real_idx:<3} {date_str[5:]} {qty:>4}주 ${price:.2f}\n"
+                    msg += f"{layer_num:<3} {date_str[5:]} {qty:>4}주 ${price:.2f}\n"
                     keyboard.append([
-                        InlineKeyboardButton(f"✏️ {real_idx}층 수정", callback_data=f"EDIT_Q:{ticker}:{item_date}"),
-                        InlineKeyboardButton(f"🗑️ {real_idx}층 삭제", callback_data=f"DEL_REQ:{ticker}:{item_date}")
+                        InlineKeyboardButton(f"✏️ {layer_num}지층 수정", callback_data=f"EDIT_Q:{ticker}:{item_date}"),
+                        InlineKeyboardButton(f"🗑️ {layer_num}지층 삭제", callback_data=f"DEL_REQ:{ticker}:{item_date}")
                     ])
                 
         msg += "-"*30 + "</code>\n\n"
         msg += "🚨 <b>[ 비상 수혈 통제소 ]</b>\n"
-        msg += "최근 로트(상단 1개 층)를 시장가(MOC)로 강제 덤핑하여 가용 예산을 확보합니다."
+        msg += "최근 매수한 <b>1지층</b>을 시장가(MOC)로 강제 덤핑하여 가용 예산을 확보합니다."
 
-        keyboard.append([InlineKeyboardButton("🩸 최근 로트 수동 긴급 수혈 (MOC)", callback_data=f"EMERGENCY_REQ:{ticker}")])
+        keyboard.append([InlineKeyboardButton("🩸 1지층 수동 긴급 수혈 (MOC)", callback_data=f"EMERGENCY_REQ:{ticker}")])
         keyboard.append([InlineKeyboardButton("🔄 대시보드 새로고침", callback_data=f"QUEUE:VIEW:{ticker}")])
         
         return msg, InlineKeyboardMarkup(keyboard)
@@ -197,11 +200,11 @@ class TelegramView:
 
     def get_emergency_moc_confirm_menu(self, ticker, emergency_qty, emergency_price):
         msg = f"🚨 <b>[{ticker} 비상 수혈 최종 승인 대기]</b> 🚨\n\n"
-        msg += f"가장 최근에 물린 로트(Lot) <b>{emergency_qty}주</b> (평단 <b>${emergency_price:.2f}</b>)를 KIS 서버로 즉각 시장가(MOC) 강제 매도 전송합니다.\n\n"
+        msg += f"가장 최근에 매수한 <b>1지층 {emergency_qty}주</b> (평단 <b>${emergency_price:.2f}</b>)를 KIS 서버로 즉각 시장가(MOC) 강제 매도 전송합니다.\n\n"
         msg += "⚠️ <b>포트폴리오 매니저 경고:</b>\n"
         msg += "1. 이 작업은 즉각 격발되며 취소할 수 없습니다.\n"
         msg += "2. 정규장/프리장 운영 시간에만 격발이 승인됩니다.\n"
-        msg += "3. 체결 즉시 해당 로트 기록은 큐(Queue)에서 영구 소각됩니다.\n"
+        msg += "3. 체결 즉시 해당 지층 기록은 큐(Queue)에서 영구 소각됩니다.\n"
         
         keyboard = [
             [InlineKeyboardButton(f"🔥 [{ticker}] {emergency_qty}주 강제 수혈 격발", callback_data=f"EMERGENCY_EXEC:{ticker}")],
@@ -226,7 +229,6 @@ class TelegramView:
         return msg, InlineKeyboardMarkup(keyboard)
 
     def get_avwap_console_menu(self, t):
-        # 🚨 [V43.00 복원] config에서 동적으로 값을 읽어와 렌더링
         is_multi_strike = False
         target_pct = 4.0
         
@@ -245,7 +247,6 @@ class TelegramView:
         msg += f"🎯 <b>목표 익절가: 진입가 대비 +{target_pct:.1f}% (커스텀)</b>\n"
         msg += f"🚨 <b>하드스탑 컷: 진입가 대비 -8.0% (고정/피격시 당일 동결)</b>\n"
 
-        # 🚨 [V43.00 복원] UI 커스텀 제어 스위치 버튼 추가
         toggle_label = "💼 조기퇴근 모드로 전환" if is_multi_strike else "🔁 다중출장 모드로 전환"
         toggle_action = "EARLY" if is_multi_strike else "MULTI"
         
@@ -273,7 +274,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V43.00 작전 통제실 복구</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V43.01 UX 팩트 교정</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -391,7 +392,8 @@ class TelegramView:
             elif v_mode == "V_REV":
                 bdg_txt = f"1회(1배수) 예산: ${t_info['one_portion']:,.0f}"
                 body_msg += f"{main_icon} <b>[{t}] {v_mode_display}</b>\n"
-                body_msg += f"📈 큐(Queue): <b>{t_info.get('v_rev_q_lots', 0)}개 로트 대기 중 (총 {t_info.get('v_rev_q_qty', 0)}주)</b>\n"
+                # 🚨 [V43.01 팩트 교정] 로트(Lot) -> 지층 통일
+                body_msg += f"📈 큐(Queue): <b>{t_info.get('v_rev_q_lots', 0)}개 지층 대기 중 (총 {t_info.get('v_rev_q_qty', 0)}주)</b>\n"
             else:
                 bdg_txt = f"당일 예산: ${t_info['one_portion']:,.0f}"
                 body_msg += f"{main_icon} <b>[{t}] {v_mode_display}</b>\n"
@@ -575,7 +577,6 @@ class TelegramView:
                     label = "롱" if t in ["SOXL", "TQQQ"] else "숏"
                     final_msg += f"\n🎯 <b>[ {t} ({label}) ]</b>\n"
                     
-                    # 🚨 [V43.00 복원] 근무 모드에 따른 아이콘 표출
                     is_multi_strike = getattr(self.cfg, 'get_avwap_multi_strike_mode', lambda x: False)(t) if self.cfg else False
                     strike_icon = "💼 무제한 출장" if is_multi_strike else "🏠 조기퇴근(1회)"
                     
@@ -649,7 +650,6 @@ class TelegramView:
                 msg += "▫️ 막판 갭 스위칭: <b>🤖 자율주행 (상승장 자동 가동)</b>\n"
                 
                 if hasattr(config, 'get_avwap_hybrid_mode') and config.get_avwap_hybrid_mode(t):
-                    # 🚨 [V43.00 복원] 사용자가 설정한 목표 수익률 및 근무 모드 렌더링
                     av_target = getattr(config, 'get_avwap_target_profit', lambda x: 4.0)(t)
                     is_multi = getattr(config, 'get_avwap_multi_strike_mode', lambda x: False)(t)
                     mode_str = "다중 출장" if is_multi else "조기 퇴근"
