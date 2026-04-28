@@ -9,6 +9,8 @@
 # 🚨 MODIFIED: [V42.15 핫픽스] /settlement 및 락온 경고창에 남아있던 과거의 잔재(2%/-6%)를 4.0%/-8.0%로 팩트 교정 완료.
 # 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 콘솔 하드코딩 완전 철거. 커스텀 목표수익률(Target) 및 근무모드(조기퇴근/출장) 동적 렌더링 및 UI 버튼 신설 탑재 완료.
 # 🚨 MODIFIED: [V43.01 UX 팩트 교정] V-REV 큐 관리 및 지시서의 '로트(Lot)', '층' 용어를 '지층'으로 100% 통일. 코어 엔진(LIFO)과 동일하게 가장 최근 매수일을 '1지층'으로 렌더링하도록 인덱스 스왑 완료.
+# NEW: [V43.02 핫픽스] 서머타임(DST) 변동에 따른 17:05 / 18:05 동적 렌더링 팩트 교정 완료.
+# NEW: [V43.03 수익금 원화(KRW) 병기 패치] 지시서 렌더링 시 실시간 환율을 반영하여 달러($)와 원화(₩) 수익금을 동시 표출하도록 뷰 엔진 교정.
 # ==========================================================
 import os
 import math
@@ -312,7 +314,8 @@ class TelegramView:
         
         return msg, InlineKeyboardMarkup(keyboard)
 
-    def create_sync_report(self, status_text, dst_text, cash, rp_amount, ticker_data, is_trade_active, p_trade_data=None):
+    # MODIFIED: [V43.03 수익금 원화(KRW) 병기 패치] 환율(exchange_rate) 파라미터 추가
+    def create_sync_report(self, status_text, dst_text, cash, rp_amount, ticker_data, is_trade_active, p_trade_data=None, exchange_rate=None):
         total_locked = sum(t_info.get('escrow', 0.0) for t_info in ticker_data)
         
         header_msg = f"📜 <b>[ 통합 지시서 ({status_text}) ]</b>\n📅 <b>{dst_text}</b>\n"
@@ -424,7 +427,13 @@ class TelegramView:
 
             sign = "+" if t_info['profit_amt'] >= 0 else "-"
             icon = "🔺" if t_info['profit_amt'] >= 0 else "🔻"
-            body_msg += f"{icon} 수익: {sign}{abs(t_info['profit_pct']):.2f}% ({sign}${abs(t_info['profit_amt']):,.2f})\n\n"
+            
+            # MODIFIED: [V43.03 수익금 원화(KRW) 병기 패치] 달러 수익금 옆에 원화 수익금 동시 렌더링
+            if exchange_rate and exchange_rate > 0:
+                krw_profit = abs(t_info['profit_amt']) * exchange_rate
+                body_msg += f"{icon} 수익: {sign}{abs(t_info['profit_pct']):.2f}% ({sign}${abs(t_info['profit_amt']):,.2f} | {sign}₩{int(krw_profit):,})\n\n"
+            else:
+                body_msg += f"{icon} 수익: {sign}{abs(t_info['profit_pct']):.2f}% ({sign}${abs(t_info['profit_amt']):,.2f})\n\n"
             
             sniper_status_txt = t_info.get('upward_sniper', 'OFF')
             
@@ -613,7 +622,9 @@ class TelegramView:
             final_msg += "\n"
 
         if not is_trade_active:
-            final_msg += "💡 <i>※ 현재 표출된 계획은 전일 17:05 기준 박제된 스냅샷이며, 금일 17:05에 최신 팩트 잔고를 바탕으로 리셋됩니다.</i>\n\n"
+            # MODIFIED: [V43.02 핫픽스] 서머타임(DST) 변동에 따른 17:05 / 18:05 동적 렌더링 팩트 교정 완료.
+            fact_hour = 17 if is_dst else 18
+            final_msg += f"💡 <i>※ 현재 표출된 계획은 전일 {fact_hour}:05 기준 박제된 스냅샷이며, 금일 {fact_hour}:05에 최신 팩트 잔고를 바탕으로 리셋됩니다.</i>\n\n"
             final_msg += "⛔ 장마감/애프터마켓: 주문 불가"
             
         return final_msg, InlineKeyboardMarkup(keyboard) if keyboard else None
@@ -902,4 +913,3 @@ class TelegramView:
             [InlineKeyboardButton("💎 오리지널 TQQQ + SOXL 듀얼 콤보", callback_data="TICKER:ALL")]
         ]
         return f"🔄 <b>[ 운용 종목 선택 ]</b>\n현재 가동중: <b>{', '.join(current_tickers)}</b>", InlineKeyboardMarkup(keyboard)
-
