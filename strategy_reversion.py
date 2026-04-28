@@ -34,6 +34,7 @@
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
 # NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
 # NEW: [V40.XX 옴니 매트릭스] V-REV 내부 U_CURVE 배열 영구 소각 및 vwap_data.py 동적 30분 재정규화 파이프라인 연결 완료
+# 🚨 MODIFIED: [V40.XX 핫픽스] VWAP 1회분 이중 집행(Double-Spending) 엣지 케이스 원천 차단 (reset_residual 소각 버그 교정 및 BUY 슬라이스 캡핑 이식 완료)
 # ==========================================================
 import math
 import os
@@ -59,8 +60,6 @@ class ReversionStrategy:
         self.executed = {"BUY_BUDGET": {}, "SELL_QTY": {}}
         self.state_loaded = {}
         self.was_holding = {}
-        
-        # MODIFIED: [V40.XX] 하드코딩된 self.U_CURVE_WEIGHTS 배열 전면 소각 완료
 
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
@@ -175,6 +174,9 @@ class ReversionStrategy:
                 pass
         return None
 
+    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+    # 17:05에 장전된 LOC는 체결 확정이 아니므로 절대 record_execution으로 예산을 선차감하지 말 것.
+    # 공수 교대 시 reset_residual은 소수점 잔차만 초기화해야 하며, 이미 집행된 executed 예산을 소각하면 이중 합산(Double Spending) 버그가 발생하므로 절대 건드리지 말 것.
     def reset_residual(self, ticker):
         self._load_state_if_needed(ticker)
         self.residual["BUY1"][ticker] = 0.0
@@ -182,8 +184,6 @@ class ReversionStrategy:
         self.residual["SELL_L1"][ticker] = 0.0
         self.residual["SELL_UPPER"][ticker] = 0.0
         self.residual["SELL_JACKPOT"][ticker] = 0.0
-        self.executed["BUY_BUDGET"][ticker] = 0.0
-        self.executed["SELL_QTY"][ticker] = 0
         self._save_state(ticker)
 
     def record_execution(self, ticker, side, qty, exec_price):
@@ -383,11 +383,19 @@ class ReversionStrategy:
 
         if side == "BUY":
             total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
-            if total_spent >= alloc_cash:
+            rem_budget = max(0.0, float(alloc_cash) - total_spent)
+            
+            if rem_budget <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
-            b1_budget_slice = (alloc_cash * 0.5) * slice_ratio_buy
-            b2_budget_slice = (alloc_cash * 0.5) * slice_ratio_buy
+            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+            # 17:05에 장전된 LOC는 체결 확정이 아니므로 절대 record_execution으로 예산을 선차감하지 말 것.
+            # 공수 교대 시 reset_residual은 소수점 잔차만 초기화해야 하며, 이미 집행된 executed 예산을 소각하면 이중 합산(Double Spending) 버그가 발생하므로 절대 건드리지 말 것.
+            raw_b1_slice = (alloc_cash * 0.5) * slice_ratio_buy
+            raw_b2_slice = (alloc_cash * 0.5) * slice_ratio_buy
+            
+            b1_budget_slice = min(raw_b1_slice, rem_budget)
+            b2_budget_slice = min(raw_b2_slice, max(0.0, rem_budget - b1_budget_slice))
 
             if curr_p > 0 and (is_zero_start_session or curr_p <= p1_trigger):
                 exact_q1 = (b1_budget_slice / curr_p) + float(self.residual["BUY1"].get(ticker, 0.0))
