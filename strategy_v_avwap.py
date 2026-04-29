@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_v_avwap.py] - 🌟 V44.03 잔여 체력 락온 🌟
+# [strategy_v_avwap.py] - 🌟 V44.07 암살자 타임라인 전진 배치 🌟
 # 💡 V-REV 하이브리드 전용 차세대 AVWAP 스나이퍼 플러그인 (Dual-Referencing)
 # ⚠️ 초공격형 당일 청산 암살자 (V-REV 잉여 현금 100% 몰빵 & -8% 하드스탑)
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막 (Persistence 엔진 탑재)
@@ -11,6 +11,7 @@
 # 🚨 MODIFIED: [V43.00 작전 통제실 복구] 사용자가 설정한 커스텀 목표 수익률(Target) 수신 및 조기퇴근/다중출장 모드 연동 엔진 대수술 완료.
 # 🚨 MODIFIED: [V43.07] 체력 소진율(ATR5) 연동 목표 수익률 자율주행(Auto) 익절 렌더링 엔진 완벽 융합 완료.
 # 🚨 MODIFIED: [V44.03 체력 보존 락온] 매수(BUY) 트리거 최상단에 5일 ATR 기반 잔여 체력 검증 파이프라인을 이식하여 상승/하락 여력이 2.0% 미만일 경우 즉시 방아쇠를 강제 파기(WAIT)하는 무결점 락온 확립.
+# NEW: [V44.07 타임라인 락온] 10:20 EST 쉴드를 10:00 EST(정규장 오픈 후 30분)로 전진 배치 완료.
 # ==========================================================
 import logging
 import datetime
@@ -170,7 +171,9 @@ class VAvwapHybridPlugin:
         avwap_state = avwap_state or {}
         
         curr_time = now_est.time()
-        time_1020 = datetime.time(10, 20)
+        
+        # MODIFIED: [V44.07] 타임쉴드 해제 시간 10:20 -> 10:00 전진 배치
+        time_1000 = datetime.time(10, 0)
         time_1500 = datetime.time(15, 0)
         time_1555 = datetime.time(15, 55)
 
@@ -277,8 +280,9 @@ class VAvwapHybridPlugin:
         if avwap_state.get('shutdown', False):
             return _build_res('WAIT', '작전완수_또는_강제청산으로_인한_당일영구동결')
 
-        if curr_time < time_1020:
-            return _build_res('WAIT', '10:20_이전_타임쉴드_대기')
+        # MODIFIED: [V44.07] 타임쉴드 해제 기준 시간 적용
+        if curr_time < time_1000:
+            return _build_res('WAIT', '10:00_이전_타임쉴드_대기')
             
         if curr_time > time_1500:
             return _build_res('WAIT', '15:00_이후_신규진입_차단')
@@ -292,9 +296,6 @@ class VAvwapHybridPlugin:
 
         if trigger_condition:
             # 🚨 [V44.03 AVWAP 체력 소진 방어막 락온]
-            # 이미 당일 저가 대비 크게 올라 최소 2.0%의 수익조차 보장하지 못할 정도로 
-            # 5일 평균 진폭(ATR5) 체력이 모두 고갈되었다면, 방아쇠를 강제로 회수하고(WAIT)
-            # 고점 휩소의 희생양이 되는 것을 영구 차단합니다.
             if atr5 > 0 and prev_c > 0 and day_low > 0 and exec_curr_p > 0:
                 actual_gap_dollar = exec_curr_p - day_low
                 actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0

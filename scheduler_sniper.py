@@ -1,11 +1,12 @@
 # ==========================================================
-# [scheduler_sniper.py] - 🌟 100% 분할 캡슐화 완성본 (V44.05) 🌟
+# [scheduler_sniper.py] - 🌟 100% 분할 캡슐화 완성본 (V44.07) 🌟
 # 🚨 MODIFIED: [V32.00 그랜드 수술] 불필요한 AVWAP 동적 파라미터 배선 전면 소각 및 클린 라우팅 적용
 # NEW: [V40.XX 옴니 매트릭스] 전역 국면 데이터(regime_data) 수신 및 스나이퍼(AVWAP/V14) 듀얼 라우팅 락온 탑재
 # 🚨 MODIFIED: [V41.XX 파격적 수술] AVWAP 쿨다운 및 손절 셧다운 동결 전면 소각 & 무제한 다중 타격 룰 이식
 # 🚨 MODIFIED: [V42.00 아키텍처 개편] SOXS 메인 장부 폐기에 따른 SOXL/SOXS 듀얼 모멘텀 스캔 파이프라인 개조
 # NEW: [V44.03 AVWAP 매수 방어] 5일 ATR 진폭 체력 스캔을 위한 동적 파라미터 병렬 수집 파이프라인 개통
 # NEW: [V44.05 가상 에스크로 락온] 암살자 타격 전 V-REV 예산을 수학적으로 스캔하여 암살자의 잉여 현금에서 100% 격리 차단 완료
+# NEW: [V44.07 암살자 타임라인 전진 배치] 옴니 매트릭스 스캔 및 스나이퍼 격발 10:20 -> 10:00 EST 락온 아키텍처 동기화 완료
 # ==========================================================
 import logging
 import datetime
@@ -139,7 +140,7 @@ async def scheduled_sniper_monitor(context):
                     avwap_targets = [t]
                     if t == "SOXL":
                         avwap_targets.append("SOXS")
-                        
+                    
                     for current_target in avwap_targets:
                         if not tracking_cache.get(f"AVWAP_INIT_{current_target}"):
                             try:
@@ -249,7 +250,7 @@ async def scheduled_sniper_monitor(context):
                                         has_unfilled = True
                                         break
                                     await asyncio.sleep(2.0)
-                                
+                            
                                 if has_unfilled:
                                     continue
                                     
@@ -377,7 +378,7 @@ async def scheduled_sniper_monitor(context):
                                             else:
                                                 msg += f"\n🛡️ <b>[ {strikes}회차 출장 익절 완료 ]</b> 즉각 다음 모멘텀 타점 탐색을 시작합니다."
                                                 shutdown_flag = False
-                                                
+                                            
                                             new_avg = 0.0
                                             avwap_free_cash += (ccld_qty * exec_price)
                                         else:
