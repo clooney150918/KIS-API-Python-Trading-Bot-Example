@@ -1,5 +1,5 @@
 # ==========================================================
-# [telegram_avwap_console.py] - 🌟 V43.11 신규 AVWAP 독립 관제탑 플러그인 🌟
+# [telegram_avwap_console.py] - 🌟 V43.12 신규 AVWAP 독립 관제탑 플러그인 🌟
 # 🚨 NEW: 통합지시서(/sync)의 과부하를 막기 위해 AVWAP 듀얼 모멘텀 레이더를 분리 독립시킴.
 # 🚨 MODIFIED: [V43.07] 당일 저가(Day Low) 0점 앵커 기반 ATR5/ATR14 체력 소진율 시각화 바(Bar) 이식.
 # 🚨 NEW: [V43.07] 체력 소진율(90%, 80%, 70%)에 따른 목표 수익률 자율주행(Auto) 엔진 및 스위치 장착.
@@ -7,6 +7,7 @@
 # 🚨 MODIFIED: [V43.09 핫픽스] 모든 외부 API 통신에 asyncio.wait_for 족쇄(Timeout)를 강제 적용하여 봇 무반응(Deadlock) 현상 영구 소각 완료.
 # 🚨 MODIFIED: [V43.09 UI/UX 패치] 모바일 화면 줄바꿈 방지를 위한 게이지 바 다이어트, 모멘텀 판별식 명시 및 조건 미달 시 정보 은폐(Clean UI) 동적 렌더링 이식 완료.
 # 🚨 MODIFIED: [V43.11 극한 다이어트] 수동 모드 전환과 목표가 입력을 1개 버튼으로 통폐합하고, 1개 종목의 모든 제어 버튼을 가로 1줄에 진공 압축 완료.
+# 🚨 MODIFIED: [V43.12 텔레그램 멱등성 붕괴 방어] 메시지 하단에 초(Second) 단위 타임스탬프를 팩트 주입하여 'Message is not modified' 400 에러를 원천 차단.
 # ==========================================================
 import logging
 import datetime
@@ -221,12 +222,11 @@ class AvwapConsolePlugin:
                 elif avwap_qty > 0: status_txt = "🎯 딥매수 완료 (익절 감시중)"
                 msg += f"▫️ 상태: <b>{status_txt}</b>\n"
 
-            # 💡 [V43.11 극한 다이어트] 1개 종목의 제어 버튼 3개를 가로 1줄에 완벽하게 압축 배치
             btn_auto = InlineKeyboardButton(f"{t} 🤖자율", callback_data=f"AVWAP_SET:TARGET_AUTO:{t}")
             btn_manual = InlineKeyboardButton("🎯수동입력", callback_data=f"AVWAP_SET:TARGET_MANUAL:{t}")
             
             strike_icon_btn = "💼조기퇴근" if not is_multi else "🔁다중출장"
-            strike_action = "EARLY" if is_multi else "MULTI" # Toggle
+            strike_action = "EARLY" if is_multi else "MULTI"
             btn_strike = InlineKeyboardButton(strike_icon_btn, callback_data=f"AVWAP_SET:{strike_action}:{t}")
 
             keyboard.append([btn_auto, btn_manual, btn_strike])
@@ -235,5 +235,8 @@ class AvwapConsolePlugin:
             InlineKeyboardButton("🔄 관제탑 새로고침", callback_data="AVWAP_SET:REFRESH:NONE"),
             InlineKeyboardButton("🔙 닫기", callback_data="RESET:CANCEL")
         ])
+
+        # 🚨 [V43.12] 텔레그램 'Message is not modified' 에러 원천 차단을 위한 초(Second) 단위 타임스탬프 하드코딩
+        msg += f"\n\n⏱️ <i>마지막 스캔: {now_est.strftime('%Y-%m-%d %H:%M:%S')} (EST)</i>"
 
         return msg, InlineKeyboardMarkup(keyboard)
