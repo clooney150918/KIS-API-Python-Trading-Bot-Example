@@ -20,7 +20,16 @@
 # MODIFIED: [V30.09 핫픽스] 잔존 데드코드(pytz) 영구 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
 # 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 반영. 불필요해진 AVWAP 동적 파라미터(TARGET_SET, GAP_SET) 콜백 라우팅 전면 소각 완료.
 # NEW: [V40.XX 옴니 매트릭스] SOXL/SOXS 듀얼 모멘텀 티커 스위칭 완벽 분기 및 V-REV/AVWAP 권한 개방 완료
-# NEW: [V40.XX 옴니 매트릭스 절대 헌법] TQQQ(V14 전용) / SOXS(V-REV 전용) 백엔드 팻핑거 락다운 이식 완료
+# 🚨 MODIFIED: [V42.00 아키텍처 개편] SOXS 메인 종목 모드 전환 영구 락다운 및 듀얼 모멘텀 티커 라우팅 팩트 정립
+# 🚨 MODIFIED: [V42.01 갭 스위칭 자율주행] 수동 제어(ON/OFF/THRESH_SET) 콜백 라우터 영구 소각
+# 🚨 MODIFIED: [V42.02 핫픽스] 운용 종목 선택 메뉴(/ticker)에서 SOXS 듀얼 콤보 라우팅 원천 차단 (팻핑거 방어)
+# 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 커스텀 목표수익률(Target) 및 근무모드(조기퇴근/출장) 변경 콜백(AVWAP_SET) 라우팅 신설 완료.
+# 🚨 MODIFIED: [V43.07] 체력 소진율 연동 익절 자율주행 모드(TARGET_AUTO/MANUAL) 및 리프레시 버튼 콜백 라우터 팩트 추가.
+# 🚨 MODIFIED: [V43.11 UI 극한 다이어트] 수동 전환과 목표가 텍스트 입력을 1개 라우터(TARGET_MANUAL)로 통폐합하여 UX 동선 최적화.
+# 🚨 MODIFIED: [V43.12 텔레그램 멱등성 붕괴 방어] AVWAP 콘솔 업데이트 시 발생하는 'Message is not modified' 400 에러를 Safe Bypass 쉴드로 원천 차단 완료.
+# 🚨 MODIFIED: [V43.13 런타임 캐시 락온] AVWAP_SET 콜백에서 봇 데몬의 팩트 app_data 메모리 참조를 동기화하여 스위칭 증발(Amnesia) 버그 영구 소각 완료.
+# 🚨 MODIFIED: [V43.14 직관적 버튼 렌더링] TARGET_MANUAL 콜백이 수동 모드 '전환(토글)'만을 전담하도록 팩트 분리 완료.
+# 🚨 MODIFIED: [V43.16 상태 인터셉터 락온] '타점수정' 클릭 시 채팅방 ID 기반 user_states를 정확히 할당하여 텍스트 입력이 무시되던 맹점 완벽 소각 완료.
 # ==========================================================
 import logging
 import datetime
@@ -318,7 +327,7 @@ class TelegramCallbacks:
                 await query.edit_message_text(f"✅ <b>[{ticker}] 삼위일체 소각(Nuke) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 큐(Queue), 에스크로의 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 다음 매수 진입 시 0주 새출발 디커플링 타점 모드로 완벽히 재시작합니다.", parse_mode='HTML')
             
             elif sub == "CANCEL":
-                await query.edit_message_text("❌ 안전 통제실 메뉴를 닫습니다.", parse_mode='HTML')
+                await query.edit_message_text("❌ 닫았습니다.", parse_mode='HTML')
 
         elif action == "REC":
             if sub == "VIEW": 
@@ -587,12 +596,11 @@ class TelegramCallbacks:
             ticker = data[2]
             current_ver = self.cfg.get_version(ticker)
             
-            # 🚨 [V40.XX 절대 헌법] 팻핑거 백엔드 원천 차단
-            if new_ver == "V_REV" and ticker == "TQQQ":
-                await update.callback_query.answer("⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+            if ticker == "TQQQ" and new_ver == "V_REV":
+                await query.answer("⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
                 return
-            if new_ver == "V14" and ticker == "SOXS":
-                await update.callback_query.answer("⚠️ [절대 헌법 위반] SOXS는 V-REV 역추세 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+            if ticker == "SOXS":
+                await query.answer("⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.", show_alert=True)
                 return
 
             async with self.tx_lock:
@@ -649,12 +657,11 @@ class TelegramCallbacks:
             
             target_ver = "V_REV" if mode_type in ["AUTO", "MANUAL"] else "V14"
 
-            # 🚨 [V40.XX 절대 헌법] 팻핑거 백엔드 원천 차단
-            if target_ver == "V_REV" and ticker == "TQQQ":
-                await update.callback_query.answer("⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+            if ticker == "TQQQ" and target_ver == "V_REV":
+                await query.answer("⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
                 return
-            if target_ver == "V14" and ticker == "SOXS":
-                await update.callback_query.answer("⚠️ [절대 헌법 위반] SOXS는 V-REV 역추세 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+            if ticker == "SOXS":
+                await query.answer("⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.", show_alert=True)
                 return
 
             async with self.tx_lock:
@@ -712,6 +719,99 @@ class TelegramCallbacks:
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ <b>집행 방식:</b> {mode_txt}\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
 
+        elif action == "AVWAP_SET":
+            action_type = sub
+            ticker = data[2]
+            
+            app_data = context.bot_data.get('app_data')
+            if not app_data:
+                try:
+                    jobs = context.job_queue.jobs() if context.job_queue else []
+                    if jobs and len(jobs) > 0 and jobs[0].data is not None:
+                        app_data = jobs[0].data
+                except Exception:
+                    pass
+            if not app_data:
+                app_data = {}
+                
+            tracking_cache = app_data.setdefault('sniper_tracking', {})
+            
+            if action_type == "TARGET":
+                # 🚨 [V43.16] user_states를 정확히 할당하여 텍스트 입력을 인터셉터로 토스
+                controller.user_states[chat_id] = f"CONF_AVWAP_TARGET_{ticker}"
+                await context.bot.send_message(chat_id, f"✏️ <b>[{ticker}] 수동 목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ 입력 완료 시 자동으로 '🖐️수동 고정' 모드로 전환됩니다.", parse_mode='HTML')
+                await query.answer("목표 수익률 입력 대기 중...", show_alert=False)
+
+            elif action_type == "TARGET_MANUAL":
+                tracking_cache[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
+                try:
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    msg, markup = await plugin.get_console_message(app_data)
+                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await query.answer(f"✅ [{ticker}] 🖐️ 수동 고정 모드로 전환되었습니다.", show_alert=False)
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        await query.answer(f"✅ [{ticker}] 이미 🖐️수동 모드입니다.", show_alert=False)
+                    else:
+                        pass
+
+            elif action_type == "TARGET_AUTO":
+                tracking_cache[f"AVWAP_TARGET_MODE_{ticker}"] = "AUTO"
+                try:
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    msg, markup = await plugin.get_console_message(app_data)
+                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await query.answer(f"✅ [{ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        await query.answer(f"✅ [{ticker}] 이미 최신 상태(🤖자율주행)입니다.", show_alert=False)
+                    else:
+                        logging.error(f"관제탑 새로고침 에러: {e}")
+                        await query.answer("모드 변경 완료. /avwap을 다시 호출해주세요.", show_alert=False)
+                    
+            elif action_type == "EARLY":
+                self.cfg.set_avwap_multi_strike_mode(ticker, False)
+                try:
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    msg, markup = await plugin.get_console_message(app_data)
+                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await query.answer("✅ 조기퇴근 모드(1회 익절)로 전환되었습니다.", show_alert=False)
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        await query.answer("✅ 이미 최신 상태(조기퇴근)입니다.", show_alert=False)
+                    else:
+                        pass
+                
+            elif action_type == "MULTI":
+                self.cfg.set_avwap_multi_strike_mode(ticker, True)
+                try:
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    msg, markup = await plugin.get_console_message(app_data)
+                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await query.answer("✅ 무제한 다중 출장 모드로 전환되었습니다.", show_alert=False)
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        await query.answer("✅ 이미 최신 상태(무제한 다중출장)입니다.", show_alert=False)
+                    else:
+                        pass
+                
+            elif action_type == "REFRESH":
+                try:
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    msg, markup = await plugin.get_console_message(app_data)
+                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await query.answer("🔄 관제탑 스크린을 최신 팩트로 갱신했습니다.", show_alert=False)
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        await query.answer("✅ 시장 변화가 없어 최신 상태가 유지 중입니다.", show_alert=False)
+                    else:
+                        await query.answer(f"갱신 에러: {e}", show_alert=True)
+
         elif action == "AVWAP":
             if sub == "MENU":
                 ticker = data[2]
@@ -720,50 +820,17 @@ class TelegramCallbacks:
                     await query.answer(f"⚠️ [{ticker}] AVWAP 하이브리드 모드가 꺼져있습니다. 먼저 활성화해주세요.", show_alert=True)
                     return
                     
-                msg, markup = self.view.get_avwap_console_menu(ticker)
-                await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
-                
-        elif action == "VREV_GAP":
-            if sub == "TOGGLE":
-                state = data[2]
-                ticker = data[3]
-                is_on = (state == "ON")
-                if hasattr(self.cfg, 'set_vrev_gap_switching_mode'):
-                    self.cfg.set_vrev_gap_switching_mode(ticker, is_on)
-                    status_text = "🟢 가동(ON)" if is_on else "🔴 비활성(OFF)"
-                    await query.answer(f"[{ticker}] V-REV 장막판 갭 스위칭: {status_text}", show_alert=False)
-                    
-                    is_gap_switch = getattr(self.cfg, 'get_vrev_gap_switching_mode', lambda x: False)(ticker)
-                    gap_th = getattr(self.cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(ticker)
-                    msg, markup = self.view.get_vrev_gap_console_menu(ticker, is_gap_switch, gap_th)
+                try:
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    app_data = context.bot_data.get('app_data', {})
+                    msg, markup = await plugin.get_console_message(app_data)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
-                    
-            elif sub == "THRESH_SET":
-                ticker = data[2]
-                controller.user_states[chat_id] = f"VREV_GAP_{ticker}"
-                await query.answer("👇 확인을 누르시고, 화면 맨 아래 채팅창에 임계치(숫자)를 쳐주세요!", show_alert=True)
-                msg = f"📉 <b>[{ticker} V-REV 갭 스위칭 임계치 설정]</b>\n\n▫️ 장 마감 30분 전 1분 타임 슬라이싱 중, 기초자산(SOXX 등) VWAP 대비 <b>몇 % 하락 시 전량 스윕 타격</b>할지 입력하세요.\n▫️ 입력 예시: <code>-0.67</code> 또는 <code>-1.5</code>\n▫️ (주의: 반드시 음수 형태로 입력하세요)"
-                await context.bot.send_message(chat_id, msg, parse_mode='HTML')
-
-        elif action == "VREV":
-            if sub == "GAP_ON":
-                ticker = data[2]
-                if hasattr(self.cfg, 'set_vrev_gap_switching_mode'):
-                    self.cfg.set_vrev_gap_switching_mode(ticker, True)
-                if hasattr(controller, 'cmd_settlement'):
-                    await controller.cmd_settlement(update, context)
-            elif sub == "GAP_OFF":
-                ticker = data[2]
-                if hasattr(self.cfg, 'set_vrev_gap_switching_mode'):
-                    self.cfg.set_vrev_gap_switching_mode(ticker, False)
-                if hasattr(controller, 'cmd_settlement'):
-                    await controller.cmd_settlement(update, context)
-            elif sub == "GAP_TARGET_SET":
-                ticker = data[2]
-                controller.user_states[chat_id] = f"VREV_GAP_{ticker}"
-                await query.answer("👇 확인을 누르시고, 화면 맨 아래 채팅창에 임계치(숫자)를 쳐주세요!", show_alert=True)
-                msg = f"📉 <b>[{ticker} 장막판 갭 스위칭 임계치 설정]</b>\n▫️ 장 마감 30분 전 기초자산 VWAP 대비 몇 % 이탈 시 100% 스윕할지 입력하세요.\n▫️ 예: -0.67, -1.0\n▫️ (주의: 반드시 음수 형태로 입력하세요)"
-                await context.bot.send_message(chat_id, msg, parse_mode='HTML')
+                except Exception as e:
+                    if "Message is not modified" in str(e):
+                        await query.answer("✅ 이미 최신 상태입니다.", show_alert=False)
+                    else:
+                        await query.edit_message_text(f"❌ 관제탑 호출 에러: {e}", parse_mode='HTML')
 
         elif action == "MODE":
             mode_val = sub
@@ -777,7 +844,7 @@ class TelegramCallbacks:
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
                     self.cfg.set_avwap_hybrid_mode(ticker, True)
                 self.cfg.set_upward_sniper_mode(ticker, False) 
-                await query.edit_message_text(f"🔥 <b>[{ticker}] 차세대 12차 AVWAP 암살자 모드가 락온(Lock-on) 되었습니다!</b>\n▫️ 남은 가용 예산 100%를 활용하여 장중 딥매수 타점을 정밀 사냥합니다.", parse_mode='HTML')
+                await query.edit_message_text(f"🔥 <b>[{ticker}] 차세대 12차 AVWAP 암살자 모드가 락온(Lock-on) 되었습니다!</b>\n▫️ 남은 가용 예산 100%를 활용하여 장중 딥매수 타점을 정밀 사냥합니다.\n▫️ <code>/avwap</code> 명령어로 독립 관제탑에 접속하세요.", parse_mode='HTML')
                 return
             elif mode_val == "AVWAP_OFF":
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
@@ -798,9 +865,15 @@ class TelegramCallbacks:
                 target_tickers = ["SOXL", "TQQQ"]
                 msg_txt = "SOXL + TQQQ 통합"
             elif "," in sub:
+                if "SOXS" in sub.split(","):
+                    await query.answer("⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 암살자 전용이므로 메인 장부에 등록할 수 없습니다.", show_alert=True)
+                    return
                 target_tickers = sub.split(",")
                 msg_txt = " + ".join(target_tickers) + " 듀얼 모멘텀"
             else:
+                if sub == "SOXS":
+                    await query.answer("⚠️ [절대 헌법 위반] SOXS 단독 운용 모드는 영구 폐기되었습니다.", show_alert=True)
+                    return
                 target_tickers = [sub]
                 msg_txt = sub + " 전용"
                 

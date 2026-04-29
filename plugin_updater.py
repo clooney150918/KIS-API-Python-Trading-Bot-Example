@@ -8,13 +8,14 @@
 # 🚨 [V30.06 NEW] 장중 업데이트 레드존(Red-Zone) 원천 차단:
 # VWAP 타임 슬라이싱 및 장마감 정산의 무결성을 위해 
 # EST 14:55 ~ 16:10 사이의 업데이트 및 재가동을 100% 차단함.
+# 🚨 MODIFIED: [V42.16 핫픽스] pytz 영구 적출 및 ZoneInfo 락온 (ModuleNotFoundError 런타임 붕괴 방어)
 # ==========================================================
 import logging
 import asyncio
 import subprocess
 import os
 import datetime
-import pytz
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 class SystemUpdater:
@@ -31,7 +32,8 @@ class SystemUpdater:
         현재 시간이 업데이트 금지 시간대(레드존)인지 검사합니다.
         기준: 14:55 EST ~ 16:10 EST (VWAP 가동 및 장마감 정산 보호)
         """
-        est = pytz.timezone('US/Eastern')
+        # 🚨 MODIFIED: [V42.16] pytz 적출 및 ZoneInfo 이식 완료
+        est = ZoneInfo('America/New_York')
         now_est = datetime.datetime.now(est)
         curr_time = now_est.time()
         
