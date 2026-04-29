@@ -10,6 +10,7 @@
 # NEW: [V43.04] 일일 체력(ATR) 소진율 팩트 스캔 및 뷰포트 인젝션 파이프라인 개통 완료.
 # 🚨 MODIFIED: [V43.05] 일일 체력 지시계 기준을 14일(ATR14)에서 5일(ATR5)로 교체하여 단기 민감도 극대화.
 # 🚨 MODIFIED: [V43.06 다이어트 수술] 통합지시서(/sync) 내부의 비대한 AVWAP 스캔 엔진을 전면 적출하고 독립 플러그인으로 라우팅 이관 완료.
+# 🚨 MODIFIED: [V43.08 라우터 복원] 유실된 /avwap 명령어 핸들러를 완벽히 재등록하고 에러 캡처 방어막 이식.
 # ==========================================================
 import logging
 import datetime
@@ -130,8 +131,8 @@ class TelegramController:
         application.add_handler(CommandHandler("reset", self.cmd_reset))
         application.add_handler(CommandHandler("update", self.cmd_update))
         
-        # 🚨 [V43.06 다이어트] 기존 cmd_avwap 함수 포인터를 신규 플러그인 로직으로 교체
-        application.add_handler(CommandHandler("avwap", self.cmd_avwap_v2))
+        # 🚨 [V43.08] 누락되었던 AVWAP 명령어 핸들러 공식 등록
+        application.add_handler(CommandHandler("avwap", self.cmd_avwap))
         
         application.add_handler(CallbackQueryHandler(self.handle_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -157,13 +158,13 @@ class TelegramController:
             return await self.cmd_mode(update, context)
         elif "명예의 전당" in text or "졸업" in text:
             return await self.cmd_history(update, context)
-        elif "암살자" in text or "조기" in text:
-            return await self.cmd_avwap_v2(update, context)
+        elif "암살자" in text or "조기" in text or "avwap" in text.lower():
+            return await self.cmd_avwap(update, context)
             
         await self.states_handler.handle_message(update, context, self)
 
-    # 🚨 NEW: [V43.06] 신설된 독립 관제탑 플러그인 라우터
-    async def cmd_avwap_v2(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 🚨 NEW: [V43.08] 신설된 독립 관제탑 플러그인 라우터 연동 완료
+    async def cmd_avwap(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):
             return
             
@@ -173,14 +174,18 @@ class TelegramController:
             
             app_data = context.bot_data.get('app_data', {})
             if not app_data:
-                jobs = context.job_queue.jobs() if context.job_queue else []
-                app_data = jobs[0].data if jobs and jobs[0].data is not None else {}
-                
+                try:
+                    jobs = context.job_queue.jobs() if context.job_queue else []
+                    if jobs and len(jobs) > 0 and jobs[0].data is not None:
+                        app_data = jobs[0].data
+                except Exception:
+                    app_data = {}
+                    
             msg, markup = await plugin.get_console_message(app_data)
             await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
         except Exception as e:
             logging.error(f"AVWAP 관제탑 호출 에러: {e}")
-            await update.message.reply_text(f"❌ <b>[시스템 오류]</b>\n독립 관제탑 호출 중 문제가 발생했습니다: {e}", parse_mode='HTML')
+            await update.message.reply_text(f"❌ <b>[시스템 오류]</b>\n독립 관제탑 호출 중 내부 오류가 발생했습니다:\n<code>{e}</code>", parse_mode='HTML')
 
     async def cmd_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):
@@ -310,8 +315,6 @@ class TelegramController:
         msg = self.view.get_start_message(target_hour, season_icon, latest_version) 
         await update.message.reply_text(msg, parse_mode='HTML')
 
-    # 🚨 [V43.06 다이어트 수술 완료]
-    # AVWAP 관련 150줄의 스캔 코드를 100% 적출하여 telegram_avwap_console.py 플러그인으로 분리 독립
     async def cmd_sync(self, update, context):
         if not self._is_admin(update):
             return
@@ -365,7 +368,6 @@ class TelegramController:
                 is_sniper_active_time = True
 
         for t in sorted_tickers:
-            # 🚨 [V43.06] SOXS는 오직 AVWAP 숏(Short) 타격 전용이므로 메인 지시서 연산 루프에서 완전 배제 (바이패스)
             if t == "SOXS":
                 continue
 
@@ -558,12 +560,6 @@ class TelegramController:
                                 v_rev_guidance += f" 🧹 줍줍(5개): ${grid_start:.2f} ~ ${grid_end:.2f} ({tag})\n"
                 else:
                     v_rev_guidance += " 🔴 매수 대기: 타점 연산 대기 중\n"
-
-                if is_manual_vwap:
-                    v_rev_guidance += "\n🚨 <b>[ ⛔ 치명적 경고: 수동 VWAP 설정 ]</b> 🚨\n"
-                    v_rev_guidance += "한투 앱(V앱)에서 수동 주문을 거실 때, <b>절대로 '하루 종일'로 설정하지 마십시오!</b>\n"
-                    v_rev_guidance += "작동 시간은 반드시 \n<b>[장 마감 30분 전 ~ 장 마감]</b>\n으로만 세팅하셔야 창출됩니다.\n"
-                    v_rev_guidance += "장중 내내 작동하게 둘 경우 V-REV 코어 전략의 수익률이 심각하게 파괴됩니다.\n"
 
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
