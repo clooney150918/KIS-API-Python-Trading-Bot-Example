@@ -1,5 +1,5 @@
 # ==========================================================
-# [telegram_avwap_console.py] - 🌟 V43.20 신규 AVWAP 독립 관제탑 플러그인 🌟
+# [telegram_avwap_console.py] - 🌟 V43.21 신규 AVWAP 독립 관제탑 플러그인 🌟
 # 🚨 NEW: 통합지시서(/sync)의 과부하를 막기 위해 AVWAP 듀얼 모멘텀 레이더를 분리 독립시킴.
 # 🚨 MODIFIED: [V43.07] 당일 저가(Day Low) 0점 앵커 기반 ATR5/ATR14 체력 소진율 시각화 바(Bar) 이식.
 # 🚨 NEW: [V43.07] 체력 소진율(90%, 80%, 70%)에 따른 목표 수익률 자율주행(Auto) 엔진 및 스위치 장착.
@@ -11,8 +11,9 @@
 # 🚨 MODIFIED: [V43.14 직관적 버튼 렌더링] 버튼 텍스트가 현재 모드를 직관적으로 표출.
 # 🚨 MODIFIED: [V43.17 개발망 풀-오픈] 조건 미달 시 발동되던 UI 은폐 락온 전면 무력화 (항시 렌더링).
 # 🚨 MODIFIED: [V43.18 달러 팩트 갭(Gap) 시각화] 백분율의 맹점을 타파하고 달러 기반 UI 산출.
-# 🚨 MODIFIED: [V43.19 퍼센트(%) 팩트 통일] 목표 수익률(%)과 직관적이고 즉각적인 1:1 팩트 비교를 위해, 실제 갭과 잔여 체력을 전일 종가 기준의 백분율(%)로 전면 스위칭.
-# 🚨 MODIFIED: [V43.20 ATR 다이어트] 후행성 노이즈를 유발하는 중기 체력(ATR14)을 UI에서 완전히 소각하고, 신뢰도가 높은 단기 체력(ATR5) 단일 지표로 직관성 극대화 완료.
+# 🚨 MODIFIED: [V43.19 퍼센트(%) 팩트 통일] 목표 수익률(%)과 직관적이고 즉각적인 1:1 팩트 비교를 위해 스위칭.
+# 🚨 MODIFIED: [V43.20 ATR 다이어트] 후행성 노이즈를 유발하는 중기 체력(ATR14) 소각.
+# 🚨 MODIFIED: [V43.21 완전 자율주행 독립] AUTO 모드에서 사용자의 수동 입력값을 100% 배제하고, 소진율에 따라 [5% -> 4% -> 3% -> 2%]로 변속하는 독립 기어 엔진 장착 완료.
 # ==========================================================
 import logging
 import datetime
@@ -117,7 +118,6 @@ class AvwapConsolePlugin:
             except Exception: day_high, day_low = 0.0, 0.0
             
             try:
-                # broker 함수에서 atr5, atr14 두 개를 반환하므로 받되, atr14는 사용하지 않고 소각
                 atr5, _ = await asyncio.wait_for(asyncio.to_thread(self.broker.get_atr_data, t), timeout=3.0)
             except Exception: atr5 = 0.0
             
@@ -179,14 +179,10 @@ class AvwapConsolePlugin:
                 ref_price = avwap_avg if (avwap_qty > 0 and avwap_avg > 0) else curr_p
                 ref_label = "매수평단" if (avwap_qty > 0 and avwap_avg > 0) else "현재가"
                 
-                # 💡 [V43.19] 실제 갭과 잔여 체력을 모두 전일 종가 기준의 퍼센트(%)로 환산
                 actual_gap_dollar = ref_price - day_low
                 actual_gap_pct = (actual_gap_dollar / prev_c) * 100
                 
-                # atr5 변수 자체가 이미 퍼센트 값입니다
                 exh_5 = (actual_gap_pct / atr5 * 100) if atr5 > 0 else 0
-                
-                # 잔여 체력 계산 (%)
                 rem_5_pct = atr5 - actual_gap_pct
                 
                 rem_5_str = f"+{rem_5_pct:.2f}% 상승 여력" if rem_5_pct >= 0 else "체력 완전 고갈 (오버슈팅)"
@@ -207,11 +203,12 @@ class AvwapConsolePlugin:
                 if exh_5 >= 90:
                     msg += " ⚠️ <i>[경고] 단기 체력 90% 소진. 익절라인 하향 권장!</i>\n"
 
+            # 💡 [V43.21 완전 자율주행 독립 엔진] 사용자의 수동값(user_target_pct) 배제
             if target_mode == "AUTO":
                 if exh_5 >= 90: dynamic_target = 2.0
                 elif exh_5 >= 80: dynamic_target = 3.0
                 elif exh_5 >= 70: dynamic_target = 4.0
-                else: dynamic_target = user_target_pct
+                else: dynamic_target = 5.0 # 사용자 값 무시, 최고 안전 기어 5.0% 고정
                 
                 target_display = f"🤖자율주행 (+{dynamic_target:.1f}%)"
                 btn_mode_text = f"🤖자율 (+{dynamic_target:.1f}%)"
