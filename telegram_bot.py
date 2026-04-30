@@ -14,6 +14,7 @@
 # 🚨 MODIFIED: [V43.13 상태 인터셉터 이식] AVWAP 수동 목표가 입력을 가로채어 팩트 업데이트 후 UI를 자동 갱신하는 쉴드 장착.
 # 🚨 MODIFIED: [V43.14 직관적 렌더링 연동] 수동 목표값 입력 완료 후, 봇 데몬 메모리에 '수동(MANUAL)' 상태를 확실하게 각인하여 원터치 스위칭의 무결성 확보.
 # 🚨 MODIFIED: [V43.16 코어 메모리 강제 동기화] 숫자 입력 시 변경된 MANUAL 상태가 증발(Amnesia)하지 않도록 백그라운드 Job Queue Data에 딥 인젝션(Deep Injection) 수술 완료.
+# NEW: [V44.07 암살자 타임라인 전진 배치] 옴니 매트릭스 스캔 및 스나이퍼 격발 10:20 -> 10:00 EST 락온 수술 완료.
 # ==========================================================
 import logging
 import datetime
@@ -404,11 +405,14 @@ class TelegramController:
             schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
             if not schedule.empty:
                 market_open = schedule.iloc[0]['market_open'].astimezone(est)
-                switch_time = market_open + datetime.timedelta(minutes=50)
+                
+                # 🚨 MODIFIED: [V44.07] 정규장 오픈 후 50분 -> 30분 전진 배치
+                switch_time = market_open + datetime.timedelta(minutes=30)
                 if now_est >= switch_time:
                     is_sniper_active_time = True
         except Exception:
-            if now_est.weekday() < 5 and now_est.time() >= datetime.time(10, 20):
+            # 🚨 MODIFIED: [V44.07] 타임라인 10:20 -> 10:00 EST 락온
+            if now_est.weekday() < 5 and now_est.time() >= datetime.time(10, 0):
                 is_sniper_active_time = True
 
         for t in sorted_tickers:
@@ -514,7 +518,7 @@ class TelegramController:
                 half_portion_cash = one_portion_cash * 0.5
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
-                
+                 
                 if cached_snap and "orders" in cached_snap and logic_qty > 0:
                     sell_idx = 1
                     for o in cached_snap["orders"]:
@@ -543,7 +547,7 @@ class TelegramController:
                             
                         target_jackpot = round(snap_avg * 1.01, 2) if snap_avg > 0 else 0.0
                         v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} <b>{logic_qty}주</b> (옵션)\n"
-                
+                 
                 elif q_list and logic_qty > 0:
                     l1_qty = q_list[-1].get('qty', 0)
                     l1_price = q_list[-1].get('price', safe_prev_close)

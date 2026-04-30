@@ -1,10 +1,12 @@
 # ==========================================================
-# [scheduler_vwap.py] - 🌟 100% 분할 캡슐화 완성본 (V32.02) 🌟
+# [scheduler_vwap.py] - 🌟 100% 분할 캡슐화 완성본 (V44.05) 🌟
 # 🚨 NEW: [V31.00] V-REV 장막판 갭 스위칭(Gap Hijacking) 오버라이드 엔진 탑재 완료
 # 🚨 MODIFIED: [V32.01 핫픽스] V14 VWAP 파라미터 시그니처(prev_close) 교정 및 LOC 사용자 강제 납치 방어막 이식
 # 🚨 MODIFIED: [V32.02 핫픽스] 0주 새출발 VWAP 매수 실종 방어를 위한 가격 상한제 바이패스(Bypass) 락온 이식
 # NEW: [V40.XX 옴니 매트릭스] U-Curve 30분 동적 재정규화 및 듀얼 모멘텀(regime_data) BUY 락다운 이식
 # 🚨 MODIFIED: [V43.00 갭 스위칭 자율주행] 수동 스위치 참조 소각 및 옴니 매트릭스 상승장 자동 가동 락온 이식
+# 🚨 MODIFIED: [V43.28 그랜드 핫픽스] VWAP 스케줄러 기상 시간(15:27)과 타임 윈도우(15:30) 엇박자로 인한 100% 초과 덤핑 버그 원천 차단.
+# NEW: [V44.05 가상 에스크로] V-REV 예방적 덫 취소(Nuke) 텍스트를 '가상 에스크로 해제'로 팩트 교정 완료
 # ==========================================================
 import logging
 import datetime
@@ -62,16 +64,23 @@ async def scheduled_vwap_init_and_cancel(context):
                 if version == "V_REV" or (version == "V14" and is_manual_vwap):
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
-                            await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
-                            await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                            # NEW: [V44.05 가상 에스크로] V14 VWAP만 물리적 취소를 수행, V-REV는 취소할 덫이 없으므로 바이패스하되 메시지만 출력
+                            if version == "V14" and is_manual_vwap:
+                                await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
+                                await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                                msg = f"🌅 <b>[{t}] 장 마감 33분 전 엔진 기상 (Fail-Safe 전환)</b>\n"
+                                msg += f"▫️ 프리장에 선제 전송해둔 '예방적 양방향 LOC 덫'을 전량 취소(Nuke)했습니다.\n"
+                                msg += f"▫️ 1분 단위 정밀 타격(VWAP 슬라이싱) 모드로 교전 수칙을 변경합니다. ⚔️"
+                            else:
+                                msg = f"🌅 <b>[{t}] 가상 에스크로 해제 및 엔진 기상</b>\n"
+                                msg += f"▫️ 자전거래(FDS) 우회를 위해 설정된 <b>'가상 에스크로(Virtual Escrow)'를 해제</b>하고 자금을 실전 배치합니다.\n"
+                                msg += f"▫️ 1분 단위 정밀 타격(VWAP 슬라이싱) 모드로 교전 수칙을 변경합니다. ⚔️"
+                                
                             vwap_cache[f"REV_{t}_nuked"] = True
-                            msg = f"🌅 <b>[{t}] 장 마감 33분 전 엔진 기상 (Fail-Safe 전환)</b>\n"
-                            msg += f"▫️ 프리장에 선제 전송해둔 '예방적 양방향 LOC 덫'을 전량 취소(Nuke)했습니다.\n"
-                            msg += f"▫️ 1분 단위 정밀 타격(VWAP 슬라이싱) 모드로 교전 수칙을 변경합니다. ⚔️"
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
                         except Exception as e:
-                            logging.error(f"🚨 Fail-Safe 초기화(Nuke) 에러: {e}", exc_info=True)
+                            logging.error(f"🚨 자가 치유 Nuke 실패: {e}", exc_info=True)
                             vwap_cache[f"REV_{t}_nuked"] = False 
                     
     try:
@@ -144,25 +153,32 @@ async def scheduled_vwap_trade(context):
                     logging.error(f"🚨 [{t}] VWAP 프로파일 로드 실패: {e}")
                     profile = {}
                     
-                target_keys = [f"15:{str(m).zfill(2)}" for m in range(30, 60)]
+                target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
                 total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
                 time_str = now_est.strftime('%H:%M')
                 
                 if time_str in target_keys:
                     raw_weight = profile.get(time_str, 0.0)
-                    current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / 30.0)
+                    current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / len(target_keys))
                 else:
                     current_weight = 0.0
 
                 if version == "V_REV" or (version == "V14" and is_manual_vwap):
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
-                            await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
-                            await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                            # NEW: [V44.05 가상 에스크로] 텍스트 디커플링
+                            if version == "V14" and is_manual_vwap:
+                                await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
+                                await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
+                                msg = f"🌅 <b>[{t}] 하이브리드 타임 슬라이싱 기상 (자가 치유 가동)</b>\n"
+                                msg += f"▫️ 장 마감 33분 전 진입을 확인하여 기존 LOC 덫 강제 취소(Nuke)했습니다.\n"
+                                msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
+                            else:
+                                msg = f"🌅 <b>[{t}] 가상 에스크로 해제 및 엔진 기상 (자가 치유 가동)</b>\n"
+                                msg += f"▫️ 장 마감 33분 전 진입을 확인하여 가상 에스크로를 해제했습니다.\n"
+                                msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
+                                
                             vwap_cache[f"REV_{t}_nuked"] = True
-                            msg = f"🌅 <b>[{t}] 하이브리드 타임 슬라이싱 기상 (자가 치유 가동)</b>\n"
-                            msg += f"▫️ 장 마감 33분 전 진입을 확인하여 기존 LOC 덫 강제 취소(Nuke)했습니다.\n"
-                            msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
                         except Exception as e:
@@ -367,16 +383,13 @@ async def scheduled_vwap_trade(context):
                         
                         target_orders = []
                         
-                        # MODIFIED: [V43.00 자율주행 락온] 수동 스위치(cfg.get_vrev_gap_switching_mode) 영구 소각
-                        # 옴니 매트릭스가 '상승장(allow_buy: True)'으로 판독할 경우 자동 가동되도록 직결!
                         gap_thresh = getattr(cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(t)
                         
-                        omni_filter = {"allow_buy": False} # 기본적으로 방어(OFF) 상태
+                        omni_filter = {"allow_buy": False}
                         if regime_data is not None:
                             current_qty_for_filter = int(float(safe_holdings.get(t, {}).get('qty', 0)))
                             omni_filter = strategy.apply_omni_matrix_filter(t, current_qty_for_filter, regime_data)
                             
-                        # 옴니 매트릭스가 허가(상승장)할 때만 갭 스위칭 룰 가동!
                         if omni_filter["allow_buy"] and current_regime == "BUY" and not vwap_cache.get(f"REV_{t}_gap_hijack_fired"):
                             base_tkr = base_map.get(t, 'SOXX')
                             base_curr_p = float(await asyncio.to_thread(broker.get_current_price, base_tkr) or 0.0)

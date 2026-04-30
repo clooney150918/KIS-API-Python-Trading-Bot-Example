@@ -1,10 +1,6 @@
+# MODIFIED: [V44.08 예방 덫 소각] V-REV 예방 덫 가상 에스크로 락온 로직 전면 소각. 자전거래 의심 회피 및 AVWAP 암살자의 가용 예산을 100% 개방하기 위해 04:05 EST의 모든 매수/매도 덫 장전을 0주 상태든 기보유 상태든 전면 백지화 완료.
 # ==========================================================
-# [scheduler_regular.py] - 🌟 100% 분할 캡슐화 완성본 (V30.09) 🌟
-# ⚠️ 단일 책임 원칙(SRP) 적용: 정규장 통합 주문 및 방어선 장전 전담 코어
-# 💡 [역할] 04:05 EST 예방적 LOC 덫 전송 및 V14 오리지널 주문 집행
-# 🚨 기존 scheduler_trade.py에서 100% 비파괴적으로 분리 독립 완료
-# MODIFIED: [V30.09 핫픽스] KST 의존성(get_target_hour) 전면 소각 및 타임 가드 맹점 철거
-# MODIFIED: [V30.09 핫픽스] 잔존 데드코드(pytz) 영구 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
+# FILE: scheduler_regular.py
 # ==========================================================
 import logging
 import datetime
@@ -20,13 +16,6 @@ import pandas_market_calendars as mcal
 
 from scheduler_core import is_market_open, get_budget_allocation
 
-# ==========================================================
-# 4. 🌅 정규장 오픈 (04:05 EST) 전송 (V14 통합 & V-REV 예방 방어선)
-# ==========================================================
-# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-# 코파일럿 등이 제안하는 외부 KIS API 래퍼(동기식 블로킹) 모듈을 무지성으로 병합하지 마세요.
-# asyncio 루프 내에서 requests나 동기 함수를 직접 호출하면 전체 스케줄러가 100% 교착(Deadlock)에 빠집니다.
-# 반드시 기존의 asyncio.to_thread 래핑과 내부 broker.py 엔진만을 사용해 비동기 무결성을 유지하세요.
 async def scheduled_regular_trade(context):
     if not is_market_open():
         return
@@ -80,7 +69,7 @@ async def scheduled_regular_trade(context):
                     skip_msg = (
                         f"⚠️ <b>[{t}] REG 잠금 미해제 — 주문 스킵</b>\n"
                         f"▫️ 전날 REG 잠금이 자정 초기화 시 해제되지 않아 오늘 04:05 EST 주문 루프에서 제외되었습니다.\n"
-                        f"▫️ 수동으로 잠금 해제 후 [🚀 V-REV 방어선 수동 장전] 버튼을 눌러 재장전하십시오."
+                        f"▫️ 수동으로 잠금 해제 후 상태를 확인하십시오."
                     )
                     await context.bot.send_message(context.job.chat_id, skip_msg, parse_mode='HTML')
                     continue
@@ -122,88 +111,23 @@ async def scheduled_regular_trade(context):
                     if version == "V_REV":
                         q_data = queue_ledger.get_queue(t)
                         v_rev_q_qty = sum(item.get("qty", 0) for item in q_data)
-                        rev_budget = float(cfg.get_seed(t) or 0.0) * 0.15
-                        half_portion_cash = rev_budget * 0.5
                         
-                        if q_data and safe_qty > 0:
-                            dates_in_queue = sorted(list(set(item.get('date') for item in q_data if item.get('date'))), reverse=True)
-                            l1_qty = 0
-                            l1_price = 0.0
-                            if dates_in_queue:
-                                lots_1 = [item for item in q_data if item.get('date') == dates_in_queue[0]]
-                                l1_qty_raw = sum(item.get('qty', 0) for item in lots_1)
-                                
-                                if l1_qty_raw > safe_qty:
-                                    await context.bot.send_message(
-                                        context.job.chat_id, 
-                                        f"⚠️ <b>[{t}] 큐/브로커 원장 불일치!</b>\n"
-                                        f"▫️ 내부 큐: {l1_qty_raw}주 / 실제 보유: {safe_qty}주\n"
-                                        f"▫️ 초과 매도 방지를 위해 실제 보유량({safe_qty}주)으로 1층 수량을 조정합니다.",
-                                        parse_mode='HTML'
-                                    )
-                                l1_qty = min(l1_qty_raw, safe_qty)
-                                
-                                if l1_qty > 0:
-                                    l1_price = sum(item.get('qty', 0) * item.get('price', 0.0) for item in lots_1) / l1_qty
-                            
-                            target_l1 = round(l1_price * 1.006, 2)
-                            if l1_qty > 0:
-                                loc_orders.append({'side': 'SELL', 'qty': l1_qty, 'price': target_l1, 'type': 'LOC', 'desc': '[1층 단독]'})
-                                
-                            upper_qty = safe_qty - l1_qty 
-                            if upper_qty > 0:
-                                total_inv = safe_qty * safe_avg
-                                l1_inv = l1_qty * l1_price
-                                upper_invested = total_inv - l1_inv
-                                upper_avg = upper_invested / upper_qty if upper_invested > 0 else safe_avg
-                                
-                                target_upper = round(upper_avg * 1.005, 2)
-                                loc_orders.append({'side': 'SELL', 'qty': upper_qty, 'price': target_upper, 'type': 'LOC', 'desc': '[상위 재고]'})
-                                
-                        elif not q_data and safe_qty > 0:
-                            await context.bot.send_message(
-                                context.job.chat_id,
-                                f"⚠️ <b>[{t}] V-REV 큐 증발 감지 — Fallback 매도선 생성</b>\n"
-                                f"▫️ 내부 큐: 비어있음 / 실제 보유: {safe_qty}주\n"
-                                f"▫️ 서버 재시작 등으로 큐가 초기화된 것으로 판단됩니다.\n"
-                                f"▫️ 총 보유 평단가({safe_avg:.2f}) × 1.005 기준 전량 Fallback LOC 매도선을 설정합니다.",
-                                parse_mode='HTML'
-                            )
-                            fallback_target = round(safe_avg * 1.005, 2) if safe_avg > 0 else 0.0
-                            if fallback_target >= 0.01:
-                                loc_orders.append({'side': 'SELL', 'qty': safe_qty, 'price': fallback_target, 'type': 'LOC', 'desc': '[Fallback 전량]'})
+                        msgs[t] += f"🛡️ <b>[{t}] V-REV 예방적 덫 장전 기능 전면 소각</b>\n"
+                        msgs[t] += "▫️ 자전거래(FDS) 의심을 회피하고 AVWAP 암살자가 자유롭게 타격하도록 예방 덫 기능을 영구 소각했습니다.\n"
                         
-                        b1_price = round(prev_c / 0.935 if v_rev_q_qty == 0 else prev_c * 0.995, 2)
-                        b2_price = round(prev_c * 0.999 if v_rev_q_qty == 0 else prev_c * 0.9725, 2)
-                        
-                        b1_qty = math.floor(half_portion_cash / b1_price) if b1_price > 0 else 0
-                        b2_qty = math.floor(half_portion_cash / b2_price) if b2_price > 0 else 0
-                        
-                        if b1_qty > 0:
-                            loc_orders.append({'side': 'BUY', 'qty': b1_qty, 'price': b1_price, 'type': 'LOC', 'desc': '예방적 매수(Buy1)'})
-                        if b2_qty > 0:
-                            loc_orders.append({'side': 'BUY', 'qty': b2_qty, 'price': b2_price, 'type': 'LOC', 'desc': '예방적 매수(Buy2)'})
-
-                            if safe_qty > 0 and v_rev_q_qty > 0:
-                                for n in range(1, 6):
-                                    grid_p = round(half_portion_cash / (b2_qty + n), 2)
-                                    if grid_p >= 0.01 and grid_p < b2_price:
-                                        loc_orders.append({'side': 'BUY', 'qty': 1, 'price': grid_p, 'type': 'LOC', 'desc': f'예방적 줍줍({n})'})
-                                        
-                        msgs[t] += f"🛡️ <b>[{t}] V-REV 예방적 양방향 LOC 방어선 장전 완료</b>\n"
-                        
-                        plan_result = {"orders": loc_orders, "trigger_loc": True, "total_q": v_rev_q_qty}
+                        plan_result = {"orders": [], "trigger_loc": False, "total_q": v_rev_q_qty}
                         if hasattr(strategy_rev, 'save_daily_snapshot'):
                             strategy_rev.save_daily_snapshot(t, plan_result)
 
-                        if safe_qty == 0 or v_rev_q_qty == 0:
-                            msgs[t] += "🚫 <code>[0주 새출발] 기준 평단가 부재로 줍줍 생략 (1층 확보에 예산 100% 집중)</code>\n"
+                        cfg.set_lock(t, "REG")
+                        all_success_map[t] = True
+                        v_rev_tickers.append((t, version))
+                        continue 
 
                     elif version == "V14":
                         ma_5day = float(await asyncio.to_thread(broker.get_5day_ma, t) or 0.0)
                         v14_vwap_plugin = strategy.v14_vwap_plugin
                         
-                        # MODIFIED: [V32.01 핫픽스] TypeError 런타임 붕괴 방어. get_dynamic_plan이 아닌 get_plan으로 올바르게 팩트 호출
                         v14_plan = v14_vwap_plugin.get_plan(
                             ticker=t, current_price=curr_p, avg_price=safe_avg, qty=safe_qty, 
                             prev_close=prev_c, ma_5day=ma_5day, market_type="REG", 
@@ -254,9 +178,14 @@ async def scheduled_regular_trade(context):
 
             for t, ver in v_rev_tickers:
                 mod_name = "V-REV" if ver == "V_REV" else "무매4(VWAP)"
-                msg = f"🎺 <b>[{t}] {mod_name} 예방적 방어망 장전 완료</b>\n"
-                msg += f"▫️ 프리장이 개장했습니다! 시스템 다운 등 최악의 블랙스완을 대비하여 <b>지층별 분리 종가(LOC) 덫</b>을 KIS 서버에 선제 전송했습니다.\n"
-                msg += f"▫️ 서버가 무사하다면 장 후반(04:30 EST)에 스스로 깨어나 이 덫을 거두고 추세(60% 허들)를 스캔하여 새로운 최적 전술로 교체합니다! 편안한 밤 보내십시오! 🌙💤\n"
+                if ver == "V_REV":
+                    msg = f"🎺 <b>[{t}] {mod_name} 예방적 방어망 전면 철거 완료</b>\n"
+                    msg += f"▫️ 프리장이 개장했습니다! 자전거래(FDS) 의심을 회피하고 <b>AVWAP 암살자</b>의 기동력을 극대화하기 위해 예방적 덫(물리/가상)을 전면 소각했습니다.\n"
+                    msg += f"▫️ 1회분 예산은 암살자가 자유롭게 타격에 활용하며, 장 후반(15:27 EST) VWAP 엔진이 깨어나 잔여 예산을 정밀 타격합니다! 편안한 밤 보내십시오! 🌙💤\n"
+                else:
+                    msg = f"🎺 <b>[{t}] {mod_name} 예방적 방어망 장전 완료</b>\n"
+                    msg += f"▫️ 프리장이 개장했습니다! 시스템 다운 등 최악의 블랙스완을 대비하여 <b>지층별 분리 종가(LOC) 덫</b>을 KIS 서버에 선제 전송했습니다.\n"
+                    msg += f"▫️ 서버가 무사하다면 장 후반(15:27 EST)에 스스로 깨어나 이 덫을 거두고 추세(60% 허들)를 스캔하여 새로운 최적 전술로 교체합니다! 편안한 밤 보내십시오! 🌙💤\n"
                 await context.bot.send_message(chat_id=context.job.chat_id, text=msg, parse_mode='HTML')
 
             for t in sorted_tickers:

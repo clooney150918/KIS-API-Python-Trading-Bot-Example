@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_reversion.py] - 🌟 V30.07 0주 새출발 매도 영구 동결 완결본 🌟
+# [strategy_reversion.py] - 🌟 V43.28 1회분 이중 집행 및 예산 누수 엣지 케이스 완결본 🌟
 # ⚠️ V-REV 하이브리드 엔진 전용 수학적 타격 모듈
 # 💡 5년 백테스트 기반 VWAP 유동성 정밀 가중치(U_CURVE_WEIGHTS) 적용 완료
 # 💡 [V24.16 팩트 동기화] 0주 새출발 디커플링 타점 (Buy1: 0.999, Buy2: /0.935) 원본 유지
@@ -27,14 +27,15 @@
 # 🚨 [V29.06 팩트 증명] 한투 평단가 하방 오염 100% 영구 차단 검증. 본 엔진은 외부 평단가(actual_avg) 개입을 일절 불허하며 오직 큐(q_data) 기반 순수 역산 평단가만 사용함이 검증됨.
 # MODIFIED: [V29.07] 0주 새출발 VWAP 타점 붕괴 및 호가 스프레드(Ask) 스킵 맹점 100% 영구 차단 (스냅샷 앵커 복원)
 # MODIFIED: [V29.09] 0주 새출발 시각적 디커플링 차단 (스냅샷 강제 덮어쓰기) 및 0주 타점 역배선(Swap) 팩트 교정 수술 완료
-# 🚨 [V30.07 NEW] 0주 새출발 당일 매도 영구 동결 락온:
-# 당일 0주로 스냅샷이 박제된 세션(is_zero_start=True)에서는 1주가 부분 체결되더라도
+# 🚨 [V30.07 NEW] 0주 새출발 당일 매도 영구 동결 락온 이식:
+# 당일 0주로 스냅샷이 박제된 세션(is_zero_start_fact=True)에서는 1주가 부분 체결되더라도
 # 정규장(REG) 내의 모든 SELL 지시를 100% 강제 소각하고 오직 애프터마켓(AFTER)에서만 덫을 놓도록
 # get_dynamic_plan 렌더링 파이프라인에 강력한 필터링 방어막 이식.
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
 # NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
 # NEW: [V40.XX 옴니 매트릭스] V-REV 내부 U_CURVE 배열 영구 소각 및 vwap_data.py 동적 30분 재정규화 파이프라인 연결 완료
-# 🚨 MODIFIED: [V40.XX 핫픽스] VWAP 1회분 이중 집행(Double-Spending) 엣지 케이스 원천 차단 (reset_residual 소각 버그 교정 및 BUY 슬라이스 캡핑 이식 완료)
+# 🚨 MODIFIED: [V43.28 그랜드 수술] BUY 슬라이싱 누수(부족 매수) 방어. 조건 불만족 스킵 시 예산을 무조건 잔차 달러 버킷(Residual)에 이월시켜 100% 소진을 락온.
+# 🚨 MODIFIED: [V43.28 엣지 케이스 수술] SELL 이중 차감 조기 종료 방어. LIFO 큐(total_q) 자체가 실시간 팩트이므로 executed 차감을 영구 소각하여 멱등성 확보.
 # ==========================================================
 import math
 import os
@@ -232,7 +233,8 @@ class ReversionStrategy:
 
         # NEW: [V40.XX] 동적 U-Curve 30분 재정규화 파이프라인 세팅
         profile = VWAP_PROFILES.get(ticker, {})
-        target_keys = [f"15:{str(m).zfill(2)}" for m in range(30, 60)]
+        # 🚨 MODIFIED: [V43.28 핫픽스] 스케줄러 기상 시간(15:27)과 엇박자를 교정하여 27분부터 스캔 궤적 매핑
+        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
         now_est = datetime.now(ZoneInfo('America/New_York'))
@@ -374,12 +376,13 @@ class ReversionStrategy:
             start_idx = target_keys.index(time_str)
             rem_vol = sum(profile.get(k, 0.0) for k in target_keys[start_idx:])
             rem_weight = (rem_vol / total_target_vol) if total_target_vol > 0 else (30 - start_idx) / 30.0
+            
+            # 🚨 MODIFIED: [V43.28 핫픽스] 매수(BUY)도 매도(SELL)와 동일하게 동적 이월(Carry-over) 재정규화 비율 적용
             slice_ratio_sell = current_weight / rem_weight if rem_weight > 0 else 1.0
+            slice_ratio_buy = current_weight / rem_weight if rem_weight > 0 else 1.0
         else:
             slice_ratio_sell = 0.0
-
-        # current_weight는 이미 30분 총합 대비 비율로 들어오므로 별도의 total_weight 나눗셈이 필요 없음
-        slice_ratio_buy = current_weight
+            slice_ratio_buy = 0.0
 
         if side == "BUY":
             total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
@@ -389,55 +392,77 @@ class ReversionStrategy:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
             # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-            # 17:05에 장전된 LOC는 체결 확정이 아니므로 절대 record_execution으로 예산을 선차감하지 말 것.
-            # 공수 교대 시 reset_residual은 소수점 잔차만 초기화해야 하며, 이미 집행된 executed 예산을 소각하면 이중 합산(Double Spending) 버그가 발생하므로 절대 건드리지 말 것.
-            raw_b1_slice = (alloc_cash * 0.5) * slice_ratio_buy
-            raw_b2_slice = (alloc_cash * 0.5) * slice_ratio_buy
+            # 미체결 예산을 이월(Carry-over)하기 위해 달러($) 단위의 독립 버킷(residual)을 활용해야 하며, 
+            # slice_ratio를 남은 예산(rem_budget)에 직접 곱하여 매수 1회분 뻥튀기(Double Spending)를 영구 소각할 것.
+            slice_budget = rem_budget * slice_ratio_buy
             
-            b1_budget_slice = min(raw_b1_slice, rem_budget)
-            b2_budget_slice = min(raw_b2_slice, max(0.0, rem_budget - b1_budget_slice))
+            raw_b1_slice = slice_budget * 0.5
+            raw_b2_slice = slice_budget - raw_b1_slice
+            
+            b1_bucket = float(self.residual["BUY1"].get(ticker, 0.0)) + raw_b1_slice
+            b2_bucket = float(self.residual["BUY2"].get(ticker, 0.0)) + raw_b2_slice
 
-            if curr_p > 0 and (is_zero_start_session or curr_p <= p1_trigger):
-                exact_q1 = (b1_budget_slice / curr_p) + float(self.residual["BUY1"].get(ticker, 0.0))
-                alloc_q1 = int(math.floor(exact_q1))
-                self.residual["BUY1"][ticker] = float(exact_q1 - alloc_q1)
-                if alloc_q1 > 0:
-                    orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger})
+            b1_budget_slice = min(b1_bucket, rem_budget)
+            b2_budget_slice = min(b2_bucket, max(0.0, rem_budget - b1_budget_slice))
+
+            if curr_p > 0:
+                if is_zero_start_session or curr_p <= p1_trigger:
+                    exact_q1 = (b1_budget_slice / curr_p) + float(self.residual["BUY1"].get(ticker, 0.0))
+                    alloc_q1 = int(math.floor(exact_q1))
+                    self.residual["BUY1"][ticker] = float(exact_q1 - alloc_q1)
+                    if alloc_q1 > 0:
+                        orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger})
+                else:
+                    self.residual["BUY1"][ticker] = b1_bucket
                     
-            if curr_p > 0 and curr_p <= p2_trigger:
-                exact_q2 = (b2_budget_slice / curr_p) + float(self.residual["BUY2"].get(ticker, 0.0))
-                alloc_q2 = int(math.floor(exact_q2))
-                self.residual["BUY2"][ticker] = float(exact_q2 - alloc_q2)
-                if alloc_q2 > 0:
-                    orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger})
+                if curr_p <= p2_trigger:
+                    exact_q2 = (b2_budget_slice / curr_p) + float(self.residual["BUY2"].get(ticker, 0.0))
+                    alloc_q2 = int(math.floor(exact_q2))
+                    self.residual["BUY2"][ticker] = float(exact_q2 - alloc_q2)
+                    if alloc_q2 > 0:
+                        orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger})
+                else:
+                    self.residual["BUY2"][ticker] = b2_bucket
+            else:
+                self.residual["BUY1"][ticker] = b1_bucket
+                self.residual["BUY2"][ticker] = b2_bucket
 
         else: # SELL
-            rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
+            # 🚨 MODIFIED: [V43.28 핫픽스] 큐(Queue) 팩트 기반 이중 차감 맹점 원천 차단
+            # queue_ledger.pop_lots 에 의해 total_q 자체가 실시간으로 줄어들고 있으므로 
+            # executed["SELL_QTY"]를 다시 빼는 이중 차감 버그(매도 조기 종료 현상)를 영구 소각함.
+            rem_qty_total = total_q
+            
             if rem_qty_total <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
 
-            if curr_p >= trigger_jackpot:
-                exact_qs = float(total_q * slice_ratio_sell) + float(self.residual["SELL_JACKPOT"].get(ticker, 0.0))
-                alloc_qs = int(min(math.floor(exact_qs), rem_qty_total))
-                self.residual["SELL_JACKPOT"][ticker] = float(exact_qs - alloc_qs)
-                if alloc_qs > 0:
-                    orders.append({"side": "SELL", "qty": alloc_qs, "price": trigger_jackpot})
-            
-            else:
-                if l1_qty > 0 and curr_p >= trigger_l1:
-                    exact_l1 = float(l1_qty * slice_ratio_sell) + float(self.residual["SELL_L1"].get(ticker, 0.0))
-                    alloc_l1 = int(min(math.floor(exact_l1), rem_qty_total))
-                    self.residual["SELL_L1"][ticker] = float(exact_l1 - alloc_l1)
-                    if alloc_l1 > 0:
-                        orders.append({"side": "SELL", "qty": alloc_l1, "price": trigger_l1})
-                        rem_qty_total -= alloc_l1
+            if slice_ratio_sell > 0:
+                if curr_p >= trigger_jackpot:
+                    exact_qs = float(rem_qty_total * slice_ratio_sell) + float(self.residual["SELL_JACKPOT"].get(ticker, 0.0))
+                    alloc_qs = int(min(math.floor(exact_qs), rem_qty_total))
+                    self.residual["SELL_JACKPOT"][ticker] = float(exact_qs - alloc_qs)
+                    if alloc_qs > 0:
+                        orders.append({"side": "SELL", "qty": alloc_qs, "price": trigger_jackpot})
+                
+                else:
+                    if l1_qty > 0 and curr_p >= trigger_l1:
+                        # 1층 물량이 이미 매도된 상태를 고려하여 1층 잔여량 정밀 스캔
+                        sold_so_far = int(total_q) - rem_qty_total
+                        rem_l1_qty = max(0, l1_qty - sold_so_far)
+                        if rem_l1_qty > 0:
+                            exact_l1 = float(rem_l1_qty * slice_ratio_sell) + float(self.residual["SELL_L1"].get(ticker, 0.0))
+                            alloc_l1 = int(min(math.floor(exact_l1), rem_l1_qty))
+                            self.residual["SELL_L1"][ticker] = float(exact_l1 - alloc_l1)
+                            if alloc_l1 > 0:
+                                orders.append({"side": "SELL", "qty": alloc_l1, "price": trigger_l1})
+                                rem_qty_total -= alloc_l1
 
-                if upper_qty > 0 and trigger_upper > 0 and curr_p >= trigger_upper and rem_qty_total > 0:
-                    exact_upper = float(upper_qty * slice_ratio_sell) + float(self.residual["SELL_UPPER"].get(ticker, 0.0))
-                    alloc_upper = int(min(math.floor(exact_upper), rem_qty_total))
-                    self.residual["SELL_UPPER"][ticker] = float(exact_upper - alloc_upper)
-                    if alloc_upper > 0:
-                        orders.append({"side": "SELL", "qty": alloc_upper, "price": trigger_upper})
+                    if upper_qty > 0 and trigger_upper > 0 and curr_p >= trigger_upper and rem_qty_total > 0:
+                        exact_upper = float(rem_qty_total * slice_ratio_sell) + float(self.residual["SELL_UPPER"].get(ticker, 0.0))
+                        alloc_upper = int(min(math.floor(exact_upper), rem_qty_total))
+                        self.residual["SELL_UPPER"][ticker] = float(exact_upper - alloc_upper)
+                        if alloc_upper > 0:
+                            orders.append({"side": "SELL", "qty": alloc_upper, "price": trigger_upper})
 
         if is_zero_start_session and market_type != "AFTER":
             orders = [o for o in orders if o.get("side") != "SELL"]

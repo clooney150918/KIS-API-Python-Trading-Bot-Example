@@ -1,35 +1,6 @@
+# MODIFIED: [V44.08 가상 락다운 콜백 해체] 불필요해진 V-REV 수동 덫 장전 우회(Virtual Escrow) 로직을 전면 도려내고, 해당 콜백 접근 시 즉각 락다운(Alert) 팝업을 띄우도록 클린 라우팅 수술 완료.
 # ==========================================================
-# [telegram_callbacks.py] - 🌟 100% 통합 완성본 🌟 (Full Version)
-# MODIFIED: [V28.14 통이관 및 큐 삭제 런타임 에러 완전 소각]
-# MODIFIED: [V28.15 그랜드 수술] 물량 통이관(SET_INIT) 콜백 라우터 영구 소각 및 
-# V14 <-> V-REV 모드 전환 시 실잔고 '0주 락온(Lock-on)' 절대 방어막 이식 완료
-# MODIFIED: [V28.16 UX 팩트 패치] 0주 락온 발동 시 일회성 팝업(Alert) 무반응 맹점을 해체하고 옵션 A 텍스트 박제 완료
-# MODIFIED: [V28.18 UX 팩트 패치] 0주 락온 시 자기 자신의 모드(동일 모드) 서브메뉴 진입 허용 렌더링 완료
-# MODIFIED: [V28.19 그랜드 수술] KIS API 가짜 0주(Phantom 0-Share) 응답 맹점 원천 차단. 
-# holdings None Safe-Casting 쉴드 이식 및 V14 장부 + V-REV 큐 다이렉트 I/O를 결합한 삼중 교차 검증(Triple Verification) 방어막 최종 탑재 완료
-# MODIFIED: [V28.22 스냅샷 렌더링 디커플링 수술] 졸업 카드 발급(HIST:IMG) 시 
-# 콜백 데이터에 고유 식별자(ID)가 존재할 경우 해당 과거 지층(History)을 
-# 100% 정밀 타격하여 렌더링하도록 팩트 라우팅 엔진 이식.
-# MODIFIED: [V28.25 그랜드 수술] 동적 수수료율 설정을 위한 INPUT:FEE 콜백 라우팅 분기 신설 완료.
-# MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
-# MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
-# MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
-# 🚨 [V29.02 UX 팩트 패치] "역사 목록으로 돌아가기(HIST:LIST)" 콜백 시 cmd_history 호출에 따른 런타임 즉사 맹점 소각. 동적 리스트 렌더링 엔진 단독 이식 완료.
-# 🚨 [V29.03 핫픽스] UnboundLocalError 런타임 즉사 유발 원흉(AVWAP 내부 로컬 임포트 섀도잉) 100% 소각 완료.
-# NEW: [V29.04] queue_ledger.queues 객체 직접 참조 런타임 붕괴 데드코드 전면 소각 및 다이렉트 I/O 멱등성 방어막 이식
-# MODIFIED: [V30.09 핫픽스] 잔존 데드코드(pytz) 영구 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
-# 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 반영. 불필요해진 AVWAP 동적 파라미터(TARGET_SET, GAP_SET) 콜백 라우팅 전면 소각 완료.
-# NEW: [V40.XX 옴니 매트릭스] SOXL/SOXS 듀얼 모멘텀 티커 스위칭 완벽 분기 및 V-REV/AVWAP 권한 개방 완료
-# 🚨 MODIFIED: [V42.00 아키텍처 개편] SOXS 메인 종목 모드 전환 영구 락다운 및 듀얼 모멘텀 티커 라우팅 팩트 정립
-# 🚨 MODIFIED: [V42.01 갭 스위칭 자율주행] 수동 제어(ON/OFF/THRESH_SET) 콜백 라우터 영구 소각
-# 🚨 MODIFIED: [V42.02 핫픽스] 운용 종목 선택 메뉴(/ticker)에서 SOXS 듀얼 콤보 라우팅 원천 차단 (팻핑거 방어)
-# 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 커스텀 목표수익률(Target) 및 근무모드(조기퇴근/출장) 변경 콜백(AVWAP_SET) 라우팅 신설 완료.
-# 🚨 MODIFIED: [V43.07] 체력 소진율 연동 익절 자율주행 모드(TARGET_AUTO/MANUAL) 및 리프레시 버튼 콜백 라우터 팩트 추가.
-# 🚨 MODIFIED: [V43.11 UI 극한 다이어트] 수동 전환과 목표가 텍스트 입력을 1개 라우터(TARGET_MANUAL)로 통폐합하여 UX 동선 최적화.
-# 🚨 MODIFIED: [V43.12 텔레그램 멱등성 붕괴 방어] AVWAP 콘솔 업데이트 시 발생하는 'Message is not modified' 400 에러를 Safe Bypass 쉴드로 원천 차단 완료.
-# 🚨 MODIFIED: [V43.13 런타임 캐시 락온] AVWAP_SET 콜백에서 봇 데몬의 팩트 app_data 메모리 참조를 동기화하여 스위칭 증발(Amnesia) 버그 영구 소각 완료.
-# 🚨 MODIFIED: [V43.14 직관적 버튼 렌더링] TARGET_MANUAL 콜백이 수동 모드 '전환(토글)'만을 전담하도록 팩트 분리 완료.
-# 🚨 MODIFIED: [V43.16 상태 인터셉터 락온] '타점수정' 클릭 시 채팅방 ID 기반 user_states를 정확히 할당하여 텍스트 입력이 무시되던 맹점 완벽 소각 완료.
+# FILE: telegram_callbacks.py
 # ==========================================================
 import logging
 import datetime
@@ -81,12 +52,12 @@ class TelegramCallbacks:
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, controller):
         query = update.callback_query
-        await query.answer()
         chat_id = update.effective_chat.id
         data = query.data.split(":")
         action, sub = data[0], data[1] if len(data) > 1 else ""
 
         if action == "UPDATE":
+            await query.answer()
             if sub == "CONFIRM":
                 from plugin_updater import SystemUpdater
                 updater = SystemUpdater()
@@ -109,6 +80,7 @@ class TelegramCallbacks:
                 await query.edit_message_text("❌ 자가 업데이트를 취소했습니다.", parse_mode='HTML')
 
         elif action == "QUEUE":
+            await query.answer()
             if sub == "VIEW":
                 ticker = data[2]
                 if getattr(self, 'queue_ledger', None):
@@ -127,7 +99,6 @@ class TelegramCallbacks:
 
         elif action == "EMERGENCY_REQ":
             ticker = sub
-            
             status_code, _ = controller._get_market_status()
             if status_code not in ["PRE", "REG"]:
                 await query.answer("❌ [격발 차단] 현재 장운영시간(정규장/프리장)이 아닙니다.", show_alert=True)
@@ -144,6 +115,7 @@ class TelegramCallbacks:
                 await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
                 return
             
+            await query.answer()
             emergency_qty = q_data[-1].get('qty', 0)
             emergency_price = q_data[-1].get('price', 0.0)
             
@@ -190,6 +162,7 @@ class TelegramCallbacks:
                         await query.edit_message_text(f"❌ <b>[{ticker}] 수동 긴급 수혈 실패:</b> {err_msg}", parse_mode='HTML')
 
         elif action == "DEL_REQ":
+            await query.answer()
             ticker = sub
             target_date = ":".join(data[2:])
             
@@ -264,6 +237,7 @@ class TelegramCallbacks:
                 await query.answer(f"❌ 처리 중 에러 발생: {e}", show_alert=True)
 
         elif action == "VERSION":
+            await query.answer()
             history_data = self.cfg.get_full_version_history()
             if sub == "LATEST":
                 msg, markup = self.view.get_version_message(history_data, page_index=None)
@@ -274,6 +248,7 @@ class TelegramCallbacks:
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                 
         elif action == "RESET":
+            await query.answer()
             if sub == "MENU":
                 active_tickers = self.cfg.get_active_tickers()
                 msg, markup = self.view.get_reset_menu(active_tickers)
@@ -330,6 +305,7 @@ class TelegramCallbacks:
                 await query.edit_message_text("❌ 닫았습니다.", parse_mode='HTML')
 
         elif action == "REC":
+            await query.answer()
             if sub == "VIEW": 
                 async with self.tx_lock:
                     _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
@@ -349,6 +325,7 @@ class TelegramCallbacks:
                         await self.sync_engine._display_ledger(ticker, chat_id, context, message_obj=query.message, pre_fetched_holdings=holdings)
 
         elif action == "HIST":
+            await query.answer()
             if sub == "VIEW":
                 hid = int(data[2])
                 target = next((h for h in self.cfg.get_history() if h['id'] == hid), None)
@@ -416,9 +393,15 @@ class TelegramCallbacks:
         elif action == "EXEC":
             t = sub
             ver = self.cfg.get_version(t)
-            
-            if ver == "V_REV" and getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t):
-                await query.answer("🚨 [격발 차단] 수동(한투 알고리즘) 모드가 가동 중입니다. 지시서를 참고하여 한투 앱(V앱)에서 직접 매매를 걸어주십시오.", show_alert=True)
+
+            # 🚨 MODIFIED: [V44.09 예방 덫 영구 소각] V-REV는 자전거래 의심 회피를 위해 예방 덫을 완전히 소각했으므로 해당 콜백 접근 시 락다운 팝업 출력
+            if ver == "V_REV":
+                await query.answer("🛑 [예방 덫 전면 소각] V-REV 모드는 자전거래 의심을 회피하고 AVWAP 암살자 가동을 위해 예방 덫 수동 장전 기능을 영구 소각했습니다.", show_alert=True)
+                return
+
+            await query.answer()
+            if getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t):
+                await context.bot.send_message(chat_id, "🚨 [격발 차단] 수동(한투 알고리즘) 모드가 가동 중입니다. 지시서를 참고하여 한투 앱(V앱)에서 직접 매매를 걸어주십시오.")
                 return
             
             await query.edit_message_text(f"🚀 {t} 수동 강제 전송 시작 (교차 분리)...")
@@ -451,109 +434,15 @@ class TelegramCallbacks:
                     logging.debug(f"YF 정규장 종가 롤오버 스캔 실패 ({t}): {e}")
                     if curr_p > 0 and prev_c == 0.0:
                         prev_c = curr_p
-
-            if ver == "V_REV":
-                if not getattr(self, 'queue_ledger', None):
-                    from queue_ledger import QueueLedger
-                    self.queue_ledger = QueueLedger()
-                    
-                q_data = self.queue_ledger.get_queue(t)
-                
-                cached_snap = self.strategy.v_rev_plugin.load_daily_snapshot(t)
-                logic_qty = safe_qty
-                if cached_snap and "total_q" in cached_snap:
-                    logic_qty = cached_snap["total_q"]
-
-                rev_budget = float(self.cfg.get_seed(t) or 0.0) * 0.15
-                half_portion_cash = rev_budget * 0.5
-                
-                loc_orders = []
-                
-                if q_data and logic_qty > 0:
-                    dates_in_queue = sorted(list(set(item.get('date') for item in q_data if item.get('date'))), reverse=True)
-                    l1_qty = 0
-                    l1_price = 0.0
-                    if dates_in_queue:
-                        lots_1 = [item for item in q_data if item.get('date') == dates_in_queue[0]]
-                        l1_qty = sum(item.get('qty', 0) for item in lots_1)
-                        if l1_qty > 0:
-                            l1_price = sum(item.get('qty', 0) * item.get('price', 0.0) for item in lots_1) / l1_qty
-                    
-                    target_l1 = round(l1_price * 1.006, 2)
-                    
-                    if l1_qty > 0:
-                        loc_orders.append({'side': 'SELL', 'qty': l1_qty, 'price': target_l1, 'type': 'LOC', 'desc': '[1층 단독]'})
-                        
-                    upper_qty = logic_qty - l1_qty
-                    if upper_qty > 0:
-                        if safe_avg <= 0.0:
-                            msg = f"🚨 <b>[{t}] 수동 장전 차단:</b> KIS API가 유효한 평단가를 반환하지 않았습니다 (avg=0). 주문을 취소합니다."
-                            await context.bot.send_message(chat_id, msg, parse_mode='HTML')
-                            return
-
-                        upper_invested = (logic_qty * safe_avg) - (l1_qty * l1_price)
-                        if upper_invested > 0 and upper_qty > 0:
-                            upper_avg = upper_invested / upper_qty
-                        else:
-                            upper_avg = l1_price
-                            
-                        target_upper = round(upper_avg * 1.005, 2)
-                        loc_orders.append({'side': 'SELL', 'qty': upper_qty, 'price': target_upper, 'type': 'LOC', 'desc': '[상위 재고]'})
-                
-                if prev_c > 0:
-                    b1_price = round(prev_c / 0.935 if logic_qty == 0 else prev_c * 0.995, 2)
-                    b2_price = round(prev_c * 0.999 if logic_qty == 0 else prev_c * 0.9725, 2)
-                    
-                    b1_qty = math.floor(half_portion_cash / b1_price) if b1_price > 0 else 0
-                    b2_qty = math.floor(half_portion_cash / b2_price) if b2_price > 0 else 0
-                    
-                    if b1_qty > 0:
-                        loc_orders.append({'side': 'BUY', 'qty': b1_qty, 'price': b1_price, 'type': 'LOC', 'desc': '예방적 매수(Buy1)'})
-                    if b2_qty > 0:
-                        loc_orders.append({'side': 'BUY', 'qty': b2_qty, 'price': b2_price, 'type': 'LOC', 'desc': '예방적 매수(Buy2)'})
-                        
-                    if logic_qty == 0:
-                        pass 
-                    elif b2_qty > 0 and b2_price > 0:
-                        for n in range(1, 6):
-                            grid_p = round(half_portion_cash / (b2_qty + n), 2)
-                            if grid_p >= 0.01 and grid_p < b2_price:
-                                loc_orders.append({'side': 'BUY', 'qty': 1, 'price': grid_p, 'type': 'LOC', 'desc': f'예방적 줍줍({n})'})
-
-                msg = f"🛡️ <b>[{t}] V-REV 예방적 양방향 LOC 방어선 수동 장전 완료</b>\n"
-                
-                if logic_qty == 0:
-                    msg += "🚫 <code>[0주 새출발] 기준 평단가 부재로 줍줍 생략 (1층 확보에 예산 100% 집중)</code>\n"
-                    
-                all_success = True
-                for o in loc_orders:
-                    res = await asyncio.to_thread(self.broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
-                    is_success = res.get('rt_cd') == '0'
-                    if not is_success:
-                        all_success = False
-                        
-                    err_msg = res.get('msg1', '오류')
-                    status_icon = '✅' if is_success else f'❌({err_msg})'
-                    msg += f"└ {o['desc']} {o['qty']}주 (${o['price']}): {status_icon}\n"
-                    await asyncio.sleep(0.2)
-                    
-                if all_success and len(loc_orders) > 0:
-                    self.cfg.set_lock(t, "REG")
-                    msg += "\n🔒 <b>방어선 전송 완료 (매매 잠금 설정됨)</b>"
-                elif len(loc_orders) == 0:
-                    msg += "\n⚠️ <b>전송할 방어선(예산/수량)이 없습니다.</b>"
-                else:
-                    msg += "\n⚠️ <b>일부 방어선 구축 실패 (잠금 보류)</b>"
-                    
-                await context.bot.send_message(chat_id, msg, parse_mode='HTML')
-                return
             
             ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
             
             logic_qty_v14 = safe_qty
             is_manual_vwap = getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t)
             if is_manual_vwap:
-                cached_snap_v14 = self.strategy.v14_vwap_plugin.load_daily_snapshot(t)
+                cached_snap_v14 = None
+                if hasattr(self.strategy, 'v14_vwap_plugin'):
+                    cached_snap_v14 = self.strategy.v14_vwap_plugin.load_daily_snapshot(t)
                 if cached_snap_v14 and "total_q" in cached_snap_v14:
                     logic_qty_v14 = cached_snap_v14["total_q"]
 
@@ -592,22 +481,23 @@ class TelegramCallbacks:
             await context.bot.send_message(chat_id, msg, parse_mode='HTML')
 
         elif action == "SET_VER":
+            await query.answer()
             new_ver = sub
             ticker = data[2]
             current_ver = self.cfg.get_version(ticker)
             
             if ticker == "TQQQ" and new_ver == "V_REV":
-                await query.answer("⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+                await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.")
                 return
             if ticker == "SOXS":
-                await query.answer("⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.", show_alert=True)
+                await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.")
                 return
 
             async with self.tx_lock:
                 _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
                 
             if holdings is None:
-                await query.answer("🚨 API 통신 지연으로 잔고를 확인할 수 없어 전환을 차단합니다. 잠시 후 다시 시도해 주세요.", show_alert=True)
+                await context.bot.send_message(chat_id, "🚨 API 통신 지연으로 잔고를 확인할 수 없어 전환을 차단합니다. 잠시 후 다시 시도해 주세요.")
                 return
                 
             kis_qty = int(float(holdings.get(ticker, {}).get('qty', 0)))
@@ -630,7 +520,7 @@ class TelegramCallbacks:
             
             if new_ver == "V_REV":
                 if not (os.path.exists("strategy_reversion.py") and os.path.exists("queue_ledger.py")):
-                    await query.answer("🚨 [개봉박두] V-REV 엔진 모듈 파일이 존재하지 않아 전환할 수 없습니다! (업데이트 필요)", show_alert=True)
+                    await context.bot.send_message(chat_id, "🚨 [개봉박두] V-REV 엔진 모듈 파일이 존재하지 않아 전환할 수 없습니다! (업데이트 필요)")
                     return
                 msg, markup = self.view.get_vrev_mode_selection_menu(ticker)
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
@@ -651,6 +541,7 @@ class TelegramCallbacks:
             await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
 
         elif action == "SET_VER_CONFIRM":
+            await query.answer()
             mode_type = sub 
             ticker = data[2]
             current_ver = self.cfg.get_version(ticker)
@@ -658,17 +549,17 @@ class TelegramCallbacks:
             target_ver = "V_REV" if mode_type in ["AUTO", "MANUAL"] else "V14"
 
             if ticker == "TQQQ" and target_ver == "V_REV":
-                await query.answer("⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.", show_alert=True)
+                await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.")
                 return
             if ticker == "SOXS":
-                await query.answer("⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.", show_alert=True)
+                await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.")
                 return
 
             async with self.tx_lock:
                 _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
                 
             if holdings is None:
-                await query.answer("🚨 API 통신 지연으로 잔고를 확인할 수 없어 전환을 차단합니다. 잠시 후 다시 시도해 주세요.", show_alert=True)
+                await context.bot.send_message(chat_id, "🚨 API 통신 지연으로 잔고를 확인할 수 없어 전환을 차단합니다. 잠시 후 다시 시도해 주세요.")
                 return
                 
             kis_qty = int(float(holdings.get(ticker, {}).get('qty', 0)))
@@ -723,45 +614,44 @@ class TelegramCallbacks:
             action_type = sub
             ticker = data[2]
             
-            app_data = context.bot_data.get('app_data')
-            if not app_data:
+            if 'app_data' not in context.bot_data:
+                context.bot_data['app_data'] = {}
+            render_app_data = context.bot_data['app_data']
+            
+            def set_tracking_mode(mode_value):
+                nonlocal render_app_data
+                context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = mode_value
+                if context.job_queue:
+                    for job in context.job_queue.jobs():
+                        if job.data is not None:
+                            job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = mode_value
+                            render_app_data = job.data
+
+            if action_type == "TARGET_MANUAL":
+                set_tracking_mode("MANUAL")
+                controller.user_states[chat_id] = f"CONF_AVWAP_TARGET_{ticker}"
+                
                 try:
-                    jobs = context.job_queue.jobs() if context.job_queue else []
-                    if jobs and len(jobs) > 0 and jobs[0].data is not None:
-                        app_data = jobs[0].data
+                    from telegram_avwap_console import AvwapConsolePlugin
+                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+                    msg, markup = await plugin.get_console_message(render_app_data)
+                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                 except Exception:
                     pass
-            if not app_data:
-                app_data = {}
-                
-            tracking_cache = app_data.setdefault('sniper_tracking', {})
-            
-            if action_type == "TARGET":
-                # 🚨 [V43.16] user_states를 정확히 할당하여 텍스트 입력을 인터셉터로 토스
-                controller.user_states[chat_id] = f"CONF_AVWAP_TARGET_{ticker}"
-                await context.bot.send_message(chat_id, f"✏️ <b>[{ticker}] 수동 목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ 입력 완료 시 자동으로 '🖐️수동 고정' 모드로 전환됩니다.", parse_mode='HTML')
-                await query.answer("목표 수익률 입력 대기 중...", show_alert=False)
 
-            elif action_type == "TARGET_MANUAL":
-                tracking_cache[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
-                    await query.answer(f"✅ [{ticker}] 🖐️ 수동 고정 모드로 전환되었습니다.", show_alert=False)
+                    await context.bot.send_message(chat_id, f"🖐️ <b>[{ticker}] 수동 고정 모드 전환!</b>\n🎯 <b>목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ -8.0% 하드스탑 컷은 안전을 위해 고정됩니다.", parse_mode='HTML')
+                    await query.answer(f"[{ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
                 except Exception as e:
-                    if "Message is not modified" in str(e):
-                        await query.answer(f"✅ [{ticker}] 이미 🖐️수동 모드입니다.", show_alert=False)
-                    else:
-                        pass
+                    logging.error(f"프롬프트 발송 실패: {e}")
+                    await query.answer(f"[{ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
 
             elif action_type == "TARGET_AUTO":
-                tracking_cache[f"AVWAP_TARGET_MODE_{ticker}"] = "AUTO"
+                set_tracking_mode("AUTO")
                 try:
                     from telegram_avwap_console import AvwapConsolePlugin
                     plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(app_data)
+                    msg, markup = await plugin.get_console_message(render_app_data)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                     await query.answer(f"✅ [{ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
@@ -776,7 +666,7 @@ class TelegramCallbacks:
                 try:
                     from telegram_avwap_console import AvwapConsolePlugin
                     plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(app_data)
+                    msg, markup = await plugin.get_console_message(render_app_data)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                     await query.answer("✅ 조기퇴근 모드(1회 익절)로 전환되었습니다.", show_alert=False)
                 except Exception as e:
@@ -790,7 +680,7 @@ class TelegramCallbacks:
                 try:
                     from telegram_avwap_console import AvwapConsolePlugin
                     plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(app_data)
+                    msg, markup = await plugin.get_console_message(render_app_data)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                     await query.answer("✅ 무제한 다중 출장 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
@@ -800,10 +690,14 @@ class TelegramCallbacks:
                         pass
                 
             elif action_type == "REFRESH":
+                if context.job_queue:
+                    for job in context.job_queue.jobs():
+                        if job.data is not None:
+                            render_app_data = job.data
                 try:
                     from telegram_avwap_console import AvwapConsolePlugin
                     plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(app_data)
+                    msg, markup = await plugin.get_console_message(render_app_data)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                     await query.answer("🔄 관제탑 스크린을 최신 팩트로 갱신했습니다.", show_alert=False)
                 except Exception as e:
@@ -813,11 +707,12 @@ class TelegramCallbacks:
                         await query.answer(f"갱신 에러: {e}", show_alert=True)
 
         elif action == "AVWAP":
+            await query.answer()
             if sub == "MENU":
                 ticker = data[2]
                 is_hybrid_on = getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False)(ticker)
                 if not is_hybrid_on:
-                    await query.answer(f"⚠️ [{ticker}] AVWAP 하이브리드 모드가 꺼져있습니다. 먼저 활성화해주세요.", show_alert=True)
+                    await context.bot.send_message(chat_id, f"⚠️ [{ticker}] AVWAP 하이브리드 모드가 꺼져있습니다. 먼저 활성화해주세요.")
                     return
                     
                 try:
@@ -828,11 +723,12 @@ class TelegramCallbacks:
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                 except Exception as e:
                     if "Message is not modified" in str(e):
-                        await query.answer("✅ 이미 최신 상태입니다.", show_alert=False)
+                        pass
                     else:
                         await query.edit_message_text(f"❌ 관제탑 호출 에러: {e}", parse_mode='HTML')
 
         elif action == "MODE":
+            await query.answer()
             mode_val = sub
             ticker = data[2] if len(data) > 2 else "SOXL"
             
@@ -849,30 +745,31 @@ class TelegramCallbacks:
             elif mode_val == "AVWAP_OFF":
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
                     self.cfg.set_avwap_hybrid_mode(ticker, False)
-                await query.edit_message_text(f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리드 전술이 즉시 해제되었습니다.</b>", parse_mode='HTML')
+                await query.edit_message_text(f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리 전술이 즉시 해제되었습니다.</b>", parse_mode='HTML')
                 return
 
             current_ver = self.cfg.get_version(ticker)
             if current_ver == "V_REV" and mode_val == "ON":
-                await query.answer(f"🚨 {current_ver} 모드에서는 로직 충돌 방지를 위해 상방 스나이퍼를 켤 수 없습니다!", show_alert=True)
+                await context.bot.send_message(chat_id, f"🚨 {current_ver} 모드에서는 로직 충돌 방지를 위해 상방 스나이퍼를 켤 수 없습니다!")
                 return
 
             self.cfg.set_upward_sniper_mode(ticker, mode_val == "ON")
             await query.edit_message_text(f"✅ <b>[{ticker}]</b> 상방 스나이퍼 모드 변경 완료: {'🎯 ON (가동중)' if mode_val == 'ON' else '⚪ OFF (대기중)'}", parse_mode='HTML')
             
         elif action == "TICKER":
+            await query.answer()
             if sub == "ALL":
                 target_tickers = ["SOXL", "TQQQ"]
                 msg_txt = "SOXL + TQQQ 통합"
             elif "," in sub:
                 if "SOXS" in sub.split(","):
-                    await query.answer("⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 암살자 전용이므로 메인 장부에 등록할 수 없습니다.", show_alert=True)
+                    await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 암살자 전용이므로 메인 장부에 등록할 수 없습니다.")
                     return
                 target_tickers = sub.split(",")
                 msg_txt = " + ".join(target_tickers) + " 듀얼 모멘텀"
             else:
                 if sub == "SOXS":
-                    await query.answer("⚠️ [절대 헌법 위반] SOXS 단독 운용 모드는 영구 폐기되었습니다.", show_alert=True)
+                    await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS 단독 운용 모드는 영구 폐기되었습니다.")
                     return
                 target_tickers = [sub]
                 msg_txt = sub + " 전용"
@@ -881,11 +778,13 @@ class TelegramCallbacks:
             await query.edit_message_text(f"✅ <b>[운용 종목 락온 완료]</b>\n▫️ <b>{msg_txt}</b> 모드로 전환되었습니다.\n▫️ /sync를 눌러 확인하십시오.", parse_mode='HTML')
             
         elif action == "SEED":
+            await query.answer()
             ticker = data[2]
             controller.user_states[chat_id] = f"SEED_{sub}_{ticker}"
             await context.bot.send_message(chat_id, f"💵 [{ticker}] 시드머니 금액 입력:", parse_mode='HTML')
             
         elif action == "INPUT":
+            await query.answer()
             ticker = data[2]
             controller.user_states[chat_id] = f"CONF_{sub}_{ticker}"
             

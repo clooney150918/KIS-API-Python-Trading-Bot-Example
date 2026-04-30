@@ -1,20 +1,6 @@
+# MODIFIED: [V44.08 수동 덫 UI 영구 소각] V-REV 모드에 한하여 자전거래 의심을 차단하기 위해 [🚀 주문 실행] (수동 장전) 버튼 렌더링을 100% 영구 소각.
 # ==========================================================
-# [telegram_view.py] - 🌟 100% 통합 무결점 완성본 (V31.00) 🌟
-# 🚨 MODIFIED: [V42.09 핫픽스] 듀얼 모멘텀 타임쉴드 대기 메시지 시간(10:20 EST)을 서머타임 연동 한국시간(KST 23:20/00:20)으로 팩트 교정 완료.
-# 🚨 MODIFIED: [V42.10 핫픽스] 5분 평균 VWAP 갭(Gap) 산출 공식 정방향((실시간-5분평균)/5분평균) 팩트 교정 완료.
-# 🚨 MODIFIED: [V42.11 그랜드 핫픽스] 듀얼 모멘텀(Long/Short) 부등호 오염 원천 차단. 5분 평균 > 당일 실시간 = 상승(롱) 로직 팩트 교정 완료.
-# 🚨 MODIFIED: [V42.12 그랜드 핫픽스] 부등호 논리 완벽 원상 복구! (당일 > 5분평균 = 상승 롱 / 당일 < 5분평균 = 하락 숏)
-# 🚨 MODIFIED: [V42.13 핫픽스] 5분 평균 VWAP 갭 렌더링 수식을 (5분평균-실시간)/실시간으로 교정하여 직관적인 UI(+) 제공.
-# 🚨 MODIFIED: [V42.14 핫픽스] 모멘텀 돌파 UI 텍스트 부등호(5분평균 > 당일 = 롱) 팩트 동기화 완료.
-# 🚨 MODIFIED: [V42.15 핫픽스] /settlement 및 락온 경고창에 남아있던 과거의 잔재(2%/-6%)를 4.0%/-8.0%로 팩트 교정 완료.
-# 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 콘솔 하드코딩 완전 철거. 커스텀 목표수익률(Target) 및 근무모드(조기퇴근/출장) 동적 렌더링 및 UI 버튼 신설 탑재 완료.
-# 🚨 MODIFIED: [V43.01 UX 팩트 교정] V-REV 큐 관리 및 지시서의 '로트(Lot)', '층' 용어를 '지층'으로 100% 통일. 코어 엔진(LIFO)과 동일하게 가장 최근 매수일을 '1지층'으로 렌더링하도록 인덱스 스왑 완료.
-# NEW: [V43.02 핫픽스] 서머타임(DST) 변동에 따른 17:05 / 18:05 동적 렌더링 팩트 교정 완료.
-# NEW: [V43.03 수익금 원화(KRW) 병기 패치] 지시서 렌더링 시 실시간 환율을 반영하여 달러($)와 원화(₩) 수익금을 동시 표출하도록 뷰 엔진 교정.
-# NEW: [V43.04] 일일 체력(ATR14) 지시계 및 조기퇴근 가이던스 동적 렌더링 이식 완료.
-# 🚨 MODIFIED: [V43.05] 일일 체력 지시계를 14일(ATR14)에서 5일(ATR5) 평균 진폭으로 교체하여 단기 추세 반영력 극대화.
-# 🚨 MODIFIED: [V43.06 다이어트 수술] 통합지시서(/sync)의 과부하를 막기 위해 AVWAP 관련 렌더링 블록을 완전히 소각하고 독립 관제탑(/avwap)으로 역할을 100% 위임.
-# 🚨 MODIFIED: [V43.08 UX 동선 최적화] 통합지시서(/sync) 최하단에 /avwap 관제탑 호출 하이퍼링크 명령어 렌더링 추가.
+# FILE: telegram_view.py
 # ==========================================================
 import os
 import math
@@ -233,35 +219,6 @@ class TelegramView:
         ]
         return msg, InlineKeyboardMarkup(keyboard)
 
-    def get_avwap_console_menu(self, t):
-        is_multi_strike = False
-        target_pct = 4.0
-        
-        if self.cfg:
-            is_multi_strike = getattr(self.cfg, 'get_avwap_multi_strike_mode', lambda x: False)(t)
-            target_pct = getattr(self.cfg, 'get_avwap_target_profit', lambda x: 4.0)(t)
-            
-        mode_text = "무제한 다중 타격 (Multi-Strike) 락온" if is_multi_strike else "조기 퇴근 (One & Done) 락온"
-        mode_desc = "목표 수익 도달 시에도 <b>쿨다운 없이 즉각 다음 타점을 무제한 스캔</b>합니다." if is_multi_strike else "목표 수익 도달 시 <b>즉시 봇 전원을 차단하고 당일 매매를 영구 동결(퇴근)</b>합니다."
-        
-        msg = f"🔫 <b>[ {t} 차세대 AVWAP 듀얼 모멘텀 콘솔 ]</b>\n\n"
-        msg += f"💼 <b>현재 가동 모드: [ {mode_text} ]</b>\n"
-        msg += f"▫️ 당일 실시간 VWAP이 전일 VWAP과 5분 평균 VWAP을 동시에 돌파하는 <b>강력한 모멘텀</b>에서만 타격합니다.\n"
-        msg += f"▫️ {mode_desc}\n"
-        msg += f"▫️ <b>[오버나이트 방어]</b> 15:55 EST 타임스탑 강제 청산 시에 당일 매매가 동결됩니다.\n\n"
-        msg += f"🎯 <b>목표 익절가: 진입가 대비 +{target_pct:.1f}% (커스텀)</b>\n"
-        msg += f"🚨 <b>하드스탑 컷: 진입가 대비 -8.0% (고정/피격시 당일 동결)</b>\n"
-
-        toggle_label = "💼 조기퇴근 모드로 전환" if is_multi_strike else "🔁 다중출장 모드로 전환"
-        toggle_action = "EARLY" if is_multi_strike else "MULTI"
-        
-        keyboard = [
-            [InlineKeyboardButton(f"🎯 목표 수익률(%) 변경", callback_data=f"AVWAP_SET:TARGET:{t}")],
-            [InlineKeyboardButton(toggle_label, callback_data=f"AVWAP_SET:{toggle_action}:{t}")],
-            [InlineKeyboardButton("🔙 닫기 (설정 락온 완료)", callback_data=f"RESET:CANCEL")]
-        ]
-        return msg, InlineKeyboardMarkup(keyboard)
-
     def get_version_message(self, history_data, page_index=None):
         ITEMS_PER_PAGE = 5
         total_pages = max(1, (len(history_data) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
@@ -279,7 +236,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V43.01 UX 팩트 교정</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V44.08 수동 덫 렌더링 소각</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -359,9 +316,9 @@ class TelegramView:
                         q1 = math.floor(half_budget / p1_trigger_fact)
                         q2 = math.floor(half_budget / p2_trigger_fact)
                         if q1 > 0:
-                            t_info['plan']['orders'].append({"side": "BUY", "qty": q1, "price": p1_trigger_fact, "type": "LOC", "desc": "예방적 매수(Buy1)"})
+                            t_info['plan']['orders'].append({"side": "BUY", "qty": q1, "price": p1_trigger_fact, "type": "LOC", "desc": "가상 매수(Buy1)"})
                         if q2 > 0:
-                            t_info['plan']['orders'].append({"side": "BUY", "qty": q2, "price": p2_trigger_fact, "type": "LOC", "desc": "예방적 매수(Buy2)"})
+                            t_info['plan']['orders'].append({"side": "BUY", "qty": q2, "price": p2_trigger_fact, "type": "LOC", "desc": "가상 매수(Buy2)"})
             
             if t_info.get('t_val', 0.0) > (t_info.get('split', 40.0) * 1.1):
                 body_msg += "⚠️ <b>[🚨 시스템 긴급 경고: 비정상 T값 폭주 감지!]</b>\n"
@@ -439,7 +396,12 @@ class TelegramView:
                 if is_rev:
                     body_msg += f"⚙️ 🌟 5일선 별지점: ${t_info['star_price']:.2f} | 🎯감시: {sniper_status_txt}\n"
                 else:
-                    body_msg += f"⚙️ 🎯 {t_info['target']}% | ⭐ {t_info['star_pct']}% | 🎯감시: {sniper_status_txt}\n"
+                    if fact_qty > 0 and t_info['avg'] > 0:
+                        target_price = t_info['avg'] * (1 + t_info['target'] / 100.0)
+                        body_msg += f"⚙️ 🎯 익절 목표가: <b>${target_price:.2f}</b> (+{t_info['target']}%)\n"
+                        body_msg += f"⚙️ ⭐ 별지점: {t_info['star_pct']}% | 🎯감시: {sniper_status_txt}\n"
+                    else:
+                        body_msg += f"⚙️ 🎯 목표: {t_info['target']}% | ⭐ 별지점: {t_info['star_pct']}% | 🎯감시: {sniper_status_txt}\n"
                     
                 if sniper_status_txt == "ON":
                     if not is_trade_active:
@@ -462,7 +424,7 @@ class TelegramView:
                 if is_manual_vwap:
                     body_msg += "⏱️ <b>VWAP 스케줄:</b> <b>(수동) 한투 앱에서 직접 알고리즘 장전 대기</b>\n"
                 else:
-                    body_msg += "⏱️ <b>VWAP 스케줄:</b> 15:30 EST 앵커 세팅 ➔ 1분 단위 교차 타격\n"
+                    body_msg += "⏱️ <b>VWAP 스케줄:</b> 15:30 EST 가상 앵커 세팅 ➔ 1분 단위 교차 타격\n"
             
             if v_mode == "V_REV":
                 body_msg += "📋 <b>[주문 가이던스 - ⚖️다중 LIFO 제어]</b>\n"
@@ -481,11 +443,9 @@ class TelegramView:
                     raw_guidance = '\n'.join(filtered_lines)
 
                 raw_guidance = raw_guidance.rstrip('\n')
+                raw_guidance = raw_guidance.replace(" (LOC)", "").replace(" (VWAP)", "").replace("[가상격리] ", "").replace("[가상 ", "[").replace("가상 ", "")
                 body_msg += raw_guidance + "\n\n"
 
-                if is_trade_active:
-                    keyboard.append([InlineKeyboardButton(f"🚀 {t} V-REV 방어선 수동 장전", callback_data=f"EXEC:{t}")])
-                
             else:
                 if is_manual_vwap and not is_rev:
                     body_msg += "⏱️ <b>VWAP 스케줄:</b> 장 마감 30분 전 ➔ 1분 단위 유동성 분할 타격\n"
@@ -524,8 +484,11 @@ class TelegramView:
                         if prices:
                             body_msg += f" 🧹 줍줍({len(jup_orders)}개): <b>${prices[0]} ~ ${prices[-1]} (LOC)</b>\n"
                     
+                    # 🚨 NEW: [V44.08 수동 덫 UI 영구 소각] V-REV 모드 수동 덫 장전 버튼 렌더링을 완전히 배제함
                     if is_trade_active:
-                        if t_info.get('is_locked', False):
+                        if v_mode == "V_REV":
+                            body_msg += " (🔒 예방 덫 수동 장전 영구 소각 완료)\n"
+                        elif t_info.get('is_locked', False):
                             body_msg += " (✅ 금일 주문 완료/잠금)\n"
                         else:
                             keyboard.append([InlineKeyboardButton(f"🚀 {t} 주문 실행", callback_data=f"EXEC:{t}")])
@@ -544,7 +507,6 @@ class TelegramView:
             final_msg += f"💡 <i>※ 현재 표출된 계획은 전일 {fact_hour}:05 기준 박제된 스냅샷이며, 금일 {fact_hour}:05에 최신 팩트 잔고를 바탕으로 리셋됩니다.</i>\n\n"
             final_msg += "⛔ 장마감/애프터마켓: 주문 불가"
             
-        # 🚨 [V43.08 UX 팩트 교정] 통합지시서 하단에 /avwap 관제탑 호출 명령어 안내 추가
         final_msg += "\n\n▶️ /avwap : 🔫 AVWAP 독립 관제탑 호출"
 
         return final_msg, InlineKeyboardMarkup(keyboard) if keyboard else None
@@ -573,31 +535,29 @@ class TelegramView:
             
             if ver == "V_REV":
                 msg += "▫️ 1회 예산: 총 시드의 15% (고정 할당)\n"
-                msg += "▫️ 목표: [1층] 매수단가+0.6%\n"
+                msg += "▫️ 목표: [가상1층] 매수단가+0.6%\n"
                 msg += "              [상위층] 평단가+0.5% (디커플링)\n"
                 msg += f"▫️ 자동복리: {comp_rate}%\n"
                 msg += f"▫️ 증권사 수수료: <b>{fee_rate}%</b>\n"
-                
+            
                 msg += "▫️ 막판 갭 스위칭: <b>🤖 자율주행 (상승장 자동 가동)</b>\n"
                 
                 if hasattr(config, 'get_avwap_hybrid_mode') and config.get_avwap_hybrid_mode(t):
-                    av_target = getattr(config, 'get_avwap_target_profit', lambda x: 4.0)(t)
                     is_multi = getattr(config, 'get_avwap_multi_strike_mode', lambda x: False)(t)
                     mode_str = "다중 출장" if is_multi else "조기 퇴근"
-                    
-                    status_label = f"💼 {mode_str} 락온 (+{av_target:.1f}%)"
+                    status_label = f"💼 {mode_str} 락온"
                     msg += f"▫️ AVWAP 암살자: <b>{status_label}</b>\n"
                 elif hasattr(config, 'get_avwap_hybrid_mode'):
                     msg += f"▫️ AVWAP 암살자: <b>비활성 (OFF)</b>\n"
                     
                 msg += "⚖️ <b>역추세(Reversion) 하이브리드 엔진 스탠바이:</b>\n"
-                msg += "▫️ 전일 종가 앵커 기준 LIFO 큐 교차 매매 대기 중\n\n"
+                msg += "▫️ 전일 종가 앵커 기준 LIFO 큐 가상 락온 대기 중\n\n"
             else:
                 msg += f"▫️ 분할: {split_cnt}회\n▫️ 목표: {target_pct}%\n▫️ 자동복리: {comp_rate}%\n"
                 msg += f"▫️ 증권사 수수료: <b>{fee_rate}%</b>\n"
                 v14_mode_txt = "🕒 VWAP 1분 타임 슬라이싱 (자체엔진)" if is_manual_vwap else "📉 LOC 단일 타격 (초안정성)"
                 msg += f"▫️ 집행: <b>{v14_mode_txt}</b>\n\n"
-                
+        
             if t == "SOXL":
                 row1 = [
                     InlineKeyboardButton("💎 오리지널 V14 세팅", callback_data=f"SET_VER:V14:{t}"),

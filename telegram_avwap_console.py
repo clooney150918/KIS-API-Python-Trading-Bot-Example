@@ -1,18 +1,17 @@
 # ==========================================================
-# [telegram_avwap_console.py] - 🌟 V43.20 신규 AVWAP 독립 관제탑 플러그인 🌟
+# [telegram_avwap_console.py] - 🌟 V43.28 신규 AVWAP 독립 관제탑 플러그인 🌟
 # 🚨 NEW: 통합지시서(/sync)의 과부하를 막기 위해 AVWAP 듀얼 모멘텀 레이더를 분리 독립시킴.
-# 🚨 MODIFIED: [V43.07] 당일 저가(Day Low) 0점 앵커 기반 ATR5/ATR14 체력 소진율 시각화 바(Bar) 이식.
-# 🚨 NEW: [V43.07] 체력 소진율(90%, 80%, 70%)에 따른 목표 수익률 자율주행(Auto) 엔진 및 스위치 장착.
-# 🚨 MODIFIED: [V43.08] 전일 VWAP 연산 중 발생하던 존재하지 않는 메서드 런타임 에러 팩트 수술 완료.
-# 🚨 MODIFIED: [V43.09 핫픽스] 모든 외부 API 통신에 asyncio.wait_for 족쇄(Timeout)를 강제 적용.
-# 🚨 MODIFIED: [V43.09 UI/UX 패치] 모바일 화면 줄바꿈 방지를 위한 게이지 바 다이어트 및 판별식 명시.
-# 🚨 MODIFIED: [V43.11 극한 다이어트] 수동 모드 전환과 목표가 입력을 1개 버튼으로 통폐합.
-# 🚨 MODIFIED: [V43.12 텔레그램 멱등성 붕괴 방어] 메시지 하단에 초 단위 타임스탬프 팩트 주입.
-# 🚨 MODIFIED: [V43.14 직관적 버튼 렌더링] 버튼 텍스트가 현재 모드를 직관적으로 표출.
-# 🚨 MODIFIED: [V43.17 개발망 풀-오픈] 조건 미달 시 발동되던 UI 은폐 락온 전면 무력화 (항시 렌더링).
-# 🚨 MODIFIED: [V43.18 달러 팩트 갭(Gap) 시각화] 백분율의 맹점을 타파하고 달러 기반 UI 산출.
-# 🚨 MODIFIED: [V43.19 퍼센트(%) 팩트 통일] 목표 수익률(%)과 직관적이고 즉각적인 1:1 팩트 비교를 위해, 실제 갭과 잔여 체력을 전일 종가 기준의 백분율(%)로 전면 스위칭.
-# 🚨 MODIFIED: [V43.20 ATR 다이어트] 후행성 노이즈를 유발하는 중기 체력(ATR14)을 UI에서 완전히 소각하고, 신뢰도가 높은 단기 체력(ATR5) 단일 지표로 직관성 극대화 완료.
+# 🚨 MODIFIED: [V43.18] 달러 팩트 갭(Gap) 시각화 및 잔여 체력 달러 연산.
+# 🚨 MODIFIED: [V43.19] 퍼센트(%) 팩트 통일 (실제 갭과 잔여 체력 백분율 환산).
+# 🚨 MODIFIED: [V43.20] ATR 다이어트 (ATR14 소각, ATR5 단일 지표 사용).
+# 🚨 MODIFIED: [V43.21] 완전 자율주행 독립 (사용자 수동값 배제).
+# 🚨 MODIFIED: [V43.22] 잔여 체력 하드 클램핑 (자율 목표가가 잔여 체력 초과 불가).
+# 🚨 MODIFIED: [V43.23] 최저 수익률 2.0% 절대 방어막 적용.
+# 🚨 MODIFIED: [V43.24] 타점 팩트 시각화 (격발 시 달러 익절가 노출).
+# 🚨 MODIFIED: [V43.25 2-Button 미니멀리즘] 각 종목의 버튼을 2개로 압축하고, 버튼명에 티커(SOXL/SOXS)를 명시하여 오조작을 원천 차단하는 궁극의 UX 설계 적용 완료.
+# 🚨 MODIFIED: [V43.26] 당일 고가/저가/현재가 갭 렌더링 텍스트 다이어트 및 체력 소진율 렌더링 줄바꿈(Formatting) 수술.
+# 🚨 MODIFIED: [V43.27] 전일 종가(Previous Close) 0% 베이스라인 환원 수술. 렌더링되는 모든 등락률(%)을 증권사 앱(MTS/HTS)과 100% 팩트 동기화 완료.
+# 🚨 MODIFIED: [V43.28] 사용자 인지 혼선 방어. 전일 종가(0% 베이스라인) 팩트 렌더링 명시화 및 UI 포맷팅 다이어트 수술.
 # ==========================================================
 import logging
 import datetime
@@ -117,7 +116,6 @@ class AvwapConsolePlugin:
             except Exception: day_high, day_low = 0.0, 0.0
             
             try:
-                # broker 함수에서 atr5, atr14 두 개를 반환하므로 받되, atr14는 사용하지 않고 소각
                 atr5, _ = await asyncio.wait_for(asyncio.to_thread(self.broker.get_atr_data, t), timeout=3.0)
             except Exception: atr5 = 0.0
             
@@ -174,54 +172,77 @@ class AvwapConsolePlugin:
             msg += f"▫️ 독립 물량/평단: {avwap_qty}주 / ${avwap_avg:.2f}\n"
 
             exh_5 = 0.0
+            rem_5_pct = 0.0
 
             if atr5 > 0 and prev_c > 0 and day_low > 0:
                 ref_price = avwap_avg if (avwap_qty > 0 and avwap_avg > 0) else curr_p
                 ref_label = "매수평단" if (avwap_qty > 0 and avwap_avg > 0) else "현재가"
                 
-                # 💡 [V43.19] 실제 갭과 잔여 체력을 모두 전일 종가 기준의 퍼센트(%)로 환산
-                actual_gap_dollar = ref_price - day_low
-                actual_gap_pct = (actual_gap_dollar / prev_c) * 100
+                # MODIFIED: [V43.28] 사용자 인지 혼선 방어. 전일 종가 기반 등락률 통일 및 포맷팅 다이어트
+                high_pct = ((day_high - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
+                low_pct = ((day_low - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
+                curr_pct = ((ref_price - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 
-                # atr5 변수 자체가 이미 퍼센트 값입니다
-                exh_5 = (actual_gap_pct / atr5 * 100) if atr5 > 0 else 0
+                abs_gap_pct = abs(curr_pct)
                 
-                # 잔여 체력 계산 (%)
-                rem_5_pct = atr5 - actual_gap_pct
+                exh_5 = (abs_gap_pct / atr5 * 100) if atr5 > 0 else 0
+                rem_5_pct = atr5 - abs_gap_pct
                 
-                rem_5_str = f"+{rem_5_pct:.2f}% 상승 여력" if rem_5_pct >= 0 else "체력 완전 고갈 (오버슈팅)"
+                rem_5_str = f"{rem_5_pct:+.2f}% 추가 변동 여력" if rem_5_pct >= 0 else "체력 완전 고갈 (오버슈팅)"
 
                 def make_bar(exh):
                     pos = min(5, max(0, int(exh / 20)))
                     return "━" * pos + "🎯" + "━" * (5 - pos)
                 
+                # MODIFIED: [V43.28] 전일 종가(베이스라인) 명시적 렌더링 추가
                 msg += f"\n📊 <b>[ {t} 당일 체력 정밀 분석 ]</b>\n"
-                msg += f"▫️ 당일 고가: <b>${day_high:.2f}</b>\n"
-                msg += f"▫️ 당일 저가: <b>${day_low:.2f}</b>\n"
-                msg += f"▫️ {ref_label}: <b>${ref_price:.2f}</b> (저가 대비 <b>+{actual_gap_pct:.2f}%</b> 갭)\n\n"
+                msg += f"▫️ 전일 종가: <b>${prev_c:.2f}</b> (베이스라인)\n"
+                msg += f"▫️ 당일 고가: <b>${day_high:.2f}</b> ({high_pct:+.2f}%)\n"
+                msg += f"▫️ 당일 저가: <b>${day_low:.2f}</b> ({low_pct:+.2f}%)\n"
+                msg += f"▫️ {ref_label}: <b>${ref_price:.2f}</b> ({curr_pct:+.2f}%)\n\n"
                 
                 msg += f"🔋 <b>단기 체력 (ATR5 예상진폭: {atr5:.2f}%)</b>\n"
                 msg += f"▫️ 잔여 체력: <b>{rem_5_str}</b>\n"
-                msg += f"   [0%] {make_bar(exh_5)} [+{atr5:.2f}%] <b>({exh_5:.0f}% 소진)</b>\n"
-                
-                if exh_5 >= 90:
-                    msg += " ⚠️ <i>[경고] 단기 체력 90% 소진. 익절라인 하향 권장!</i>\n"
+                msg += f"   [0%] {make_bar(exh_5)} [+{atr5:.2f}%]\n"
+                msg += f"               <b>({exh_5:.0f}% 소진)</b>\n"
 
             if target_mode == "AUTO":
-                if exh_5 >= 90: dynamic_target = 2.0
-                elif exh_5 >= 80: dynamic_target = 3.0
-                elif exh_5 >= 70: dynamic_target = 4.0
-                else: dynamic_target = user_target_pct
+                if exh_5 >= 90: base_target = 2.0
+                elif exh_5 >= 80: base_target = 3.0
+                elif exh_5 >= 70: base_target = 4.0
+                else: base_target = 5.0
                 
-                target_display = f"🤖자율주행 (+{dynamic_target:.1f}%)"
-                btn_mode_text = f"🤖자율 (+{dynamic_target:.1f}%)"
+                if rem_5_pct > 0:
+                    rem_cap = math.floor(rem_5_pct * 10) / 10.0
+                    dynamic_target = min(base_target, rem_cap)
+                    dynamic_target = max(2.0, dynamic_target)
+                else:
+                    dynamic_target = 2.0
+                
+                applied_pct = dynamic_target
+                target_display = f"🤖자율주행 (+{applied_pct:.1f}%)"
+                
+                btn_mode_text = f"{t} 🤖자율 (+{applied_pct:.1f}%)"
                 toggle_target_action = "TARGET_MANUAL"
             else:
-                target_display = f"🖐️수동고정 (+{user_target_pct:.1f}%)"
-                btn_mode_text = f"🖐️수동 (+{user_target_pct:.1f}%)"
+                applied_pct = user_target_pct
+                target_display = f"🖐️수동고정 (+{applied_pct:.1f}%)"
+                
+                btn_mode_text = f"{t} 🖐️수동 (+{applied_pct:.1f}%)"
                 toggle_target_action = "TARGET_AUTO"
 
-            msg += f"▫️ 목표 익절: <b>{target_display}</b> | 하드스탑: <b>-8.0%</b>\n"
+            if avwap_qty > 0 and avwap_avg > 0:
+                locked_pct = tracking_cache.get(f"AVWAP_LOCKED_TARGET_PCT_{t}", applied_pct)
+                
+                target_price = avwap_avg * (1 + locked_pct / 100.0)
+                hardstop_price = avwap_avg * (1 - 8.0 / 100.0)
+                
+                if target_mode == "AUTO":
+                    target_display = f"🤖자율주행 (+{locked_pct:.1f}%)"
+                    
+                msg += f"▫️ 목표 익절: <b>${target_price:.2f}</b> ({target_display}) | 하드스탑: <b>${hardstop_price:.2f}</b> (-8.0%)\n"
+            else:
+                msg += f"▫️ 목표 익절: <b>{target_display}</b> | 하드스탑: <b>-8.0%</b>\n"
 
             status_txt = "👀 타점 대기"
             if is_shutdown: status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
@@ -229,13 +250,12 @@ class AvwapConsolePlugin:
             msg += f"▫️ 상태: <b>{status_txt}</b>\n"
 
             btn_toggle_mode = InlineKeyboardButton(btn_mode_text, callback_data=f"AVWAP_SET:{toggle_target_action}:{t}")
-            btn_input_target = InlineKeyboardButton("✏️타점수정", callback_data=f"AVWAP_SET:TARGET:{t}")
             
-            strike_icon_btn = "💼조기퇴근" if not is_multi else "🔁다중출장"
+            strike_icon_btn = f"{t} 💼조기퇴근" if not is_multi else f"{t} 🔁다중출장"
             strike_action = "MULTI" if not is_multi else "EARLY"
             btn_strike = InlineKeyboardButton(strike_icon_btn, callback_data=f"AVWAP_SET:{strike_action}:{t}")
 
-            keyboard.append([btn_toggle_mode, btn_input_target, btn_strike])
+            keyboard.append([btn_toggle_mode, btn_strike])
 
         keyboard.append([
             InlineKeyboardButton("🔄 관제탑 새로고침", callback_data="AVWAP_SET:REFRESH:NONE"),

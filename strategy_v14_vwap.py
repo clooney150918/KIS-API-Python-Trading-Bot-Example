@@ -25,6 +25,7 @@
 # MODIFIED: [V30.09 핫픽스] get_dynamic_plan 파라미터 시그니처(current_price, prev_close) 표준화로 TypeError 런타임 붕괴 완벽 차단
 # NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
 # NEW: [V40.XX 옴니 매트릭스] U-Curve 하드코딩 배열 전면 소각 및 config.py 동적 재정규화 파이프라인 이식 완료
+# 🚨 MODIFIED: [V43.28 그랜드 수술] 스케줄러가 가격 불만족으로 슬라이스를 스킵할 경우 발생하던 매수/매도 누수 버그를 방어하기 위해 조건 검사 전 무조건 달러 단위 잔차(Residual) 버킷에 예산을 이월(Carry-over)시켜 100% 소진 팩트 락온.
 # ==========================================================
 import math
 import logging
@@ -265,13 +266,13 @@ class V14VwapStrategy:
             logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
             profile = {}
             
-        target_keys = [f"15:{str(m).zfill(2)}" for m in range(30, 60)]
+        # 🚨 MODIFIED: [V43.28 핫픽스] 스케줄러 기상 시간(15:27)과 엇박자를 교정하여 27분부터 스캔 궤적 매핑
+        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
         now_est = datetime.now(ZoneInfo('America/New_York'))
         time_str = now_est.strftime('%H:%M')
         
-        # 장막판 30분(15:30 ~ 15:59) 중 '현재 분'부터 '15:59'까지의 남은 거래량 비중 계산
         rem_weight = 0.0
         if time_str in target_keys:
             start_idx = target_keys.index(time_str)
@@ -280,22 +281,35 @@ class V14VwapStrategy:
                 
             raw_weight = profile.get(time_str, 0.0)
             slice_ratio = (raw_weight / rem_weight) if rem_weight > 0 else 1.0
+            
+            # V43.28 팩트 교정: 누락분 100% 자가 복구를 위해 전체 예산 대비 현재 분의 절대 비중 도출
+            current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / len(target_keys))
         else:
             slice_ratio = 0.0
+            current_weight = 0.0
         
         orders = []
         
         total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
-        rem_budget = max(0.0, total_budget - total_spent)
+        rem_budget_global = max(0.0, total_budget - total_spent)
         
-        if rem_budget > 0 and slice_ratio > 0:
-            slice_budget = rem_budget * slice_ratio
-            if buy_star_price > 0 and (initial_qty == 0 or current_price <= buy_star_price):
-                exact_qty = (slice_budget / current_price) + float(self.residual["BUY_STAR"].get(ticker, 0.0))
-                alloc_qty = int(math.floor(exact_qty))
-                self.residual["BUY_STAR"][ticker] = float(exact_qty - alloc_qty)
-                if alloc_qty > 0:
-                    orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if initial_qty > 0 else current_price, "desc": "VWAP분할매수"})
+        # 🚨 MODIFIED: [V43.28 엣지 케이스 수술] 가격 불만족 시 스킵되는 예산의 증발(Data Starvation) 버그를 방어하기 위해, 조건 검사 전 무조건 달러 단위 잔차 버킷에 이월(Carry-over)시켜 1회분 100% 소진을 락온.
+        if rem_budget_global > 0 and current_weight > 0:
+            slice_budget = total_budget * current_weight
+            b_bucket = float(self.residual["BUY_STAR"].get(ticker, 0.0)) + slice_budget
+            b_budget_slice = min(b_bucket, rem_budget_global)
+
+            if current_price > 0:
+                if buy_star_price > 0 and (initial_qty == 0 or current_price <= buy_star_price):
+                    alloc_qty = int(math.floor(b_budget_slice / current_price))
+                    if alloc_qty > 0:
+                        spent_b = alloc_qty * current_price
+                        self.residual["BUY_STAR"][ticker] = max(0.0, b_bucket - spent_b)
+                        orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if initial_qty > 0 else current_price, "desc": "VWAP분할매수"})
+                    else:
+                        self.residual["BUY_STAR"][ticker] = b_bucket
+                else:
+                    self.residual["BUY_STAR"][ticker] = b_bucket
 
         rem_sell_qty = int(math.ceil(initial_qty / 4)) - int(self.executed["SELL_QTY"].get(ticker, 0))
         if rem_sell_qty > 0 and star_price > 0 and slice_ratio > 0:
@@ -305,6 +319,8 @@ class V14VwapStrategy:
                 self.residual["SELL_STAR"][ticker] = float(exact_s_qty - alloc_s_qty)
                 if alloc_s_qty > 0:
                     orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절"})
+            else:
+                self.residual["SELL_STAR"][ticker] = float(self.residual["SELL_STAR"].get(ticker, 0.0)) + float(rem_sell_qty * slice_ratio)
 
         if is_zero_start_session and market_type != "AFTER":
             orders = [o for o in orders if o.get("side") != "SELL"]

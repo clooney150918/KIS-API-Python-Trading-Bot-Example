@@ -1,5 +1,5 @@
 # ==========================================================
-# [scheduler_core.py] - 🌟 100% 통합 완성본 (V30.09) 🌟
+# [scheduler_core.py] - 🌟 100% 통합 완성본 (V44.05) 🌟
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 💡 [V24.09 패치] API 결측치(None) 방어용 Safe Casting 전면 이식 완료
 # 💡 [V24.10 수술] V_REV 동적 에스크로 차감 방어 (이중 차감 방지)
@@ -13,7 +13,8 @@
 # 🚀 [V29.05 그랜드 수술] 4대 엣지 케이스 완벽 차단! (비동기 데드락 방어, TOCTOU 락온, 결측치 누적 차단, 10시 정각 EST 멱등성 락)
 # MODIFIED: [V29.06 핫픽스] 얼리 웨이크업 타임 패러독스 원천 차단 (정산 딜레이 안전 마진 5.0초 강제 주입)
 # MODIFIED: [V30.08 그랜드 수술] 스마트 딜레이(Shift) 엔진 영구 철거. 콜드 스타트 시 RAM 휘발로 인한 10시 정산 누락 엣지 케이스를 원천 차단하고 다이렉트 타격 배선 완비.
-# MODIFIED: [V30.09 그랜드 수술] pytz 전면 적출 및 ZoneInfo 도입, KST 의존성 로직(get_target_hour 등) 영구 철거로 EST 100% 종속 달성
+# MODIFIED: [V30.09 그랜드 수술] pytz 전면 적출 및 ZoneInfo 도입, KST 의존성 로직 영구 철거로 EST 100% 종속 달성
+# NEW: [V44.05 가상 에스크로 락온] get_budget_allocation 엔진 내 V-REV 15% 1회분 예산을 스캔하여 V14 등 타 종목이 침범하지 못하도록 영구 가상 격리망 구축 완료
 # ==========================================================
 import os
 import logging
@@ -24,17 +25,12 @@ import asyncio
 import glob
 import random
 import pandas_market_calendars as mcal
-# NEW: [멱등성 락온 및 다이렉트 I/O 제어를 위한 필수 내장 모듈 탑재]
 import json
 import tempfile
-# NEW: [V30.09] LMT 오차 방어를 위한 ZoneInfo 도입 및 pytz 적출
 from zoneinfo import ZoneInfo
-
-# MODIFIED: [V30.09] KST 종속적인 is_dst_active 및 get_target_hour 함수 영구 소각 (main.py에서 EST 팩트로 처리)
 
 def is_market_open():
     try:
-        # MODIFIED: [V30.09] pytz 적출 및 ZoneInfo('America/New_York') 락온
         est = ZoneInfo('America/New_York')
         today = datetime.datetime.now(est)
         if today.weekday() >= 5: 
@@ -58,38 +54,69 @@ def get_budget_allocation(cash, tickers, cfg):
     safe_cash = float(cash) if cash is not None else 0.0
     
     dynamic_total_locked = 0.0
+    vrev_virtual_escrow = 0.0 
+    
     for tx in tickers:
+        # 1. V14 리버스 모드 에스크로
         rev_state = cfg.get_reverse_state(tx)
         if rev_state.get("is_active", False):
             is_locked = getattr(cfg, 'get_order_locked', lambda x: False)(tx)
             if not is_locked:
                 dynamic_total_locked += float(cfg.get_escrow_cash(tx) or 0.0)
+        
+        # 2. NEW: [V44.05 가상 에스크로] V-REV 가상 에스크로 격리 (FDS 방어용)
+        if cfg.get_version(tx) == "V_REV":
+            vrev_virtual_escrow += float(cfg.get_seed(tx) or 0.0) * 0.15
 
-    free_cash = max(0.0, safe_cash - dynamic_total_locked)
+    # 가상 에스크로를 전체 가용 현금에서 물리적으로 완전 분리하여 예산 침범 100% 차단
+    free_cash = max(0.0, safe_cash - dynamic_total_locked - vrev_virtual_escrow)
     
     for tx in sorted_tickers:
+        version = getattr(cfg, 'get_version', lambda x: "V14")(tx)
         rev_state = cfg.get_reverse_state(tx)
         is_rev = rev_state.get("is_active", False)
         
-        other_locked = dynamic_total_locked
-        if is_rev:
-            is_locked = getattr(cfg, 'get_order_locked', lambda x: False)(tx)
-            if not is_locked:
-                other_locked -= float(cfg.get_escrow_cash(tx) or 0.0)
-        
-        if is_rev:
-            my_escrow = float(cfg.get_escrow_cash(tx) or 0.0)
-            allocated[tx] = my_escrow + other_locked
+        if version == "V_REV":
+            rev_daily_budget = float(cfg.get_seed(tx) or 0.0) * 0.15
+            spent = 0.0
+            try:
+                est = ZoneInfo('America/New_York')
+                _now_est = datetime.datetime.now(est)
+                if _now_est.hour < 4 or (_now_est.hour == 4 and _now_est.minute < 5):
+                    _logical_date = _now_est - datetime.timedelta(days=1)
+                else:
+                    _logical_date = _now_est
+                _logical_date_str = _logical_date.strftime('%Y-%m-%d')
+                state_file = f"data/vwap_state_REV_{_logical_date_str}_{tx}.json"
+                if os.path.exists(state_file):
+                    with open(state_file, 'r', encoding='utf-8') as f:
+                        v_state = json.load(f)
+                        spent = float(v_state.get("executed", {}).get("BUY_BUDGET", 0.0))
+            except Exception:
+                pass
+            rem_budget = max(0.0, rev_daily_budget - spent)
+            # V-REV는 15% 전용 예산에 추가로 남은 잉여 현금까지 할당하여 돌파 타격에 활용할 수 있도록 지원
+            allocated[tx] = rem_budget + free_cash
         else:
-            split = int(cfg.get_split_count(tx) or 0)
-            seed = float(cfg.get_seed(tx) or 0.0)
-            portion = seed / split if split > 0 else 0.0
+            other_locked = dynamic_total_locked
+            if is_rev:
+                is_locked = getattr(cfg, 'get_order_locked', lambda x: False)(tx)
+                if not is_locked:
+                    other_locked -= float(cfg.get_escrow_cash(tx) or 0.0)
             
-            if free_cash >= portion:
-                allocated[tx] = free_cash
-                free_cash -= portion
-            else: 
-                allocated[tx] = 0.0
+            if is_rev:
+                my_escrow = float(cfg.get_escrow_cash(tx) or 0.0)
+                allocated[tx] = my_escrow + other_locked
+            else:
+                split = int(cfg.get_split_count(tx) or 0)
+                seed = float(cfg.get_seed(tx) or 0.0)
+                portion = seed / split if split > 0 else 0.0
+                
+                if free_cash >= portion:
+                    allocated[tx] = free_cash
+                    free_cash -= portion
+                else: 
+                    allocated[tx] = 0.0
                 
     return sorted_tickers, allocated
 
@@ -160,12 +187,7 @@ async def scheduled_token_check(context):
     await asyncio.to_thread(context.job.data['broker']._get_access_token, force=True)
     logging.info("🔑 [API 토큰 갱신] 토큰 갱신이 안전하게 완료되었습니다.")
 
-# ==========================================================
-# 🚨 리버스 모드 절대 하드스탑(TQQQ -15% / SOXL -20%) 확정 탈출 엔진
-# ==========================================================
-
 async def scheduled_force_reset(context):
-    # MODIFIED: [V30.09] 스케줄러 자체(main.py)에서 EST 04:00에 정확히 격발되므로 KST 시간 검증(diff > 65) 맹점 로직 전면 소각
     if not is_market_open():
         await context.bot.send_message(chat_id=context.job.chat_id, text="⛔ <b>오늘은 미국 증시 휴장일입니다. 금일 시스템 매매 잠금 해제 및 정규장 주문 스케줄을 모두 건너뜁니다.</b>", parse_mode='HTML')
         return
@@ -177,7 +199,6 @@ async def scheduled_force_reset(context):
         tx_lock = app_data['tx_lock']
         chat_id = context.job.chat_id
         
-        # MODIFIED: [이벤트 루프 데드락 방어를 위한 비동기 I/O 래핑]
         await asyncio.to_thread(cfg.reset_locks)
         
         for t in cfg.get_active_tickers():
@@ -203,7 +224,6 @@ async def scheduled_force_reset(context):
                 actual_avg = float(h_data.get('avg') or 0.0)
                 curr_p = float(curr_p or 0.0)
                 
-                # MODIFIED: [API 에러(None) 결측치 시 리버스 일차 강제 누적 맹점 원천 차단]
                 if curr_p <= 0.0 or actual_avg <= 0.0:
                     logging.warning(f"🚨 [{t}] 현재가 또는 평단가 팩트 스캔 실패(API 에러). 시간 오염 방지를 위해 리버스 일차 누적을 패스(Skip)합니다.")
                     continue
@@ -225,7 +245,6 @@ async def scheduled_force_reset(context):
                         await context.bot.send_message(chat_id=chat_id, text=f"🚨 <b>[{t}] 하드스탑 주문 취소 에러!</b> 미체결 주문을 수동으로 확인하세요. (상태 초기화 보류)", parse_mode='HTML')
                         continue 
 
-                    # MODIFIED: [장부 데이터 동시성 충돌(TOCTOU) 방어 락온 및 이벤트 루프 교착 차단]
                     async with tx_lock:
                         await asyncio.to_thread(cfg.set_reverse_state, t, False, 0, 0.0)
                         await asyncio.to_thread(cfg.clear_escrow_cash, t)
@@ -241,35 +260,24 @@ async def scheduled_force_reset(context):
                         
                     msg_addons += f"\n🚨 <b>[{t}] 하드스탑 확정 탈출 발동 (수익률: {curr_ret:.2f}% <= 기준: {exit_threshold}%)!</b>\n▫️ 격리 병동을 즉시 폐쇄하고 V14 본대로 완벽히 복귀했습니다."
                 else:
-                    # MODIFIED: [이벤트 루프 블로킹 방어]
                     await asyncio.to_thread(cfg.increment_reverse_day, t)
                 
-        # MODIFIED: [V30.09] 메세지 하드코딩된 KST 타겟시간 제거 및 EST 04:00 락온 텍스트로 치환
         final_msg = f"🔓 <b>[04:00 EST] 시스템 일일 초기화 완료 (매매 잠금 해제 & 팩트 스캔)</b>" + msg_addons
         await context.bot.send_message(chat_id=chat_id, text=final_msg, parse_mode='HTML')
         
     except Exception as e:
         await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> {e}", parse_mode='HTML')
 
-# ==========================================================
-# 🚀 [V30.08] 스마트 딜레이 엔진 영구 철거: main.py의 10:00:05 KST 다이렉트 배선에 맞춰 
-# 콜드 스타트 기억상실(Amnesia)을 유발하던 RAM 휘발성 딜레이(Shift) 로직 전면 소각
-# ==========================================================
-
 async def scheduled_auto_sync_summer(context):
-    # MODIFIED: [콜드 스타트 기억상실 원천 차단] 복잡한 지연(Delay) 로직 소각 후 다이렉트 타격
     logging.info("🌞 [여름 정산] 10:00 KST 확정 정산 엔진 다이렉트 가동")
     await run_auto_sync(context, "10:00")
 
 async def scheduled_auto_sync_winter(context):
-    # MODIFIED: [콜드 스타트 기억상실 원천 차단] 복잡한 지연(Delay) 로직 소각 후 다이렉트 타격
     logging.info("❄️ [겨울 정산] 10:00 KST 확정 정산 엔진 다이렉트 가동")
     await run_auto_sync(context, "10:00")
 
 async def run_auto_sync(context, time_str):
-    # NEW: [타임존 락온(EST) 및 10시 정각 중복 발급(Double Fire) 방어용 다이렉트 I/O 멱등성 락]
     def _check_and_set_lock():
-        # MODIFIED: [V30.09] pytz 적출 및 ZoneInfo 락온
         est_tz = ZoneInfo('America/New_York')
         today_est = datetime.datetime.now(est_tz).strftime("%Y-%m-%d")
         lock_file = "data/sync_lock.json"
@@ -285,7 +293,6 @@ async def run_auto_sync(context, time_str):
             pass
 
         try:
-            # Atomic Write 원칙 준수
             fd, tmp_path = tempfile.mkstemp(dir="data", text=True)
             with os.fdopen(fd, 'w') as f:
                 json.dump({"last_sync": today_est}, f)
