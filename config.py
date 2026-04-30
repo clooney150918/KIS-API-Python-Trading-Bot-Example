@@ -18,6 +18,7 @@
 # 🚨 MODIFIED: [V42.00 아키텍처 개편] SOXS 메인 장부 전면 폐기. 오리지널(SOXL, TQQQ) 및 V-REV(SOXL 전용) 2대 트리 구조 확립.
 # 🚨 MODIFIED: [V42.02 핫픽스] 로컬 캐시 오염 방어. active_tickers 반환 시 SOXS 강제 필터링 적출 적용.
 # 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 사용자가 설정하는 커스텀 목표 수익률(TARGET) 저장소 복원 수술 완료.
+# 🚨 MODIFIED: [V44.08 팩트 교정] get_vwap_profile 함수를 ConfigManager 내부 메서드로 편입시켜 hasattr 파이프라인 누수 100% 원천 차단 완료
 # ==========================================================
 import json
 import os
@@ -45,12 +46,6 @@ try:
 except ImportError:
     VWAP_PROFILES = {"SOXL": {}, "SOXS": {}}
     print("⚠️ [경고] vwap_data.py 플러그인을 찾을 수 없습니다. (U-Curve 데이터 부재)")
-
-def get_vwap_profile(ticker: str) -> dict:
-    target_ticker = ticker.upper()
-    if target_ticker not in VWAP_PROFILES or not VWAP_PROFILES[target_ticker]:
-        raise ValueError(f"🚨 [치명적 런타임 오류] {target_ticker}의 U-Curve 데이터가 vwap_data.py에 존재하지 않습니다.")
-    return VWAP_PROFILES[target_ticker]
 
 
 class ConfigManager:
@@ -95,6 +90,13 @@ class ConfigManager:
         
         self._escrow_cache = {}
         self._locks_mutex = threading.Lock()
+
+    # 🚨 MODIFIED: [V44.08 팩트 교정] 클래스 외부 독립 함수였던 get_vwap_profile을 클래스 내부 메서드로 편입하여 hasattr 파이프라인 누수 완벽 방어
+    def get_vwap_profile(self, ticker: str) -> dict:
+        target_ticker = ticker.upper()
+        if target_ticker not in VWAP_PROFILES or not VWAP_PROFILES[target_ticker]:
+            raise ValueError(f"🚨 [치명적 런타임 오류] {target_ticker}의 U-Curve 데이터가 vwap_data.py에 존재하지 않습니다.")
+        return VWAP_PROFILES[target_ticker]
 
     def _atomic_update_locks(self, update_fn):
         with self._locks_mutex:
@@ -800,4 +802,3 @@ class ConfigManager:
         v = self._load_file(self.FILES["CHAT_ID"])
         return int(v) if v else None
     def set_chat_id(self, v): self._save_file(self.FILES["CHAT_ID"], v)
-

@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_v_avwap.py] - 🌟 V44.07 암살자 타임라인 전진 배치 🌟
+# [strategy_v_avwap.py] - 🌟 V44.08 암살자 타임라인 전진 배치 및 팩트 교정 🌟
 # 💡 V-REV 하이브리드 전용 차세대 AVWAP 스나이퍼 플러그인 (Dual-Referencing)
 # ⚠️ 초공격형 당일 청산 암살자 (V-REV 잉여 현금 100% 몰빵 & -8% 하드스탑)
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막 (Persistence 엔진 탑재)
@@ -11,7 +11,8 @@
 # 🚨 MODIFIED: [V43.00 작전 통제실 복구] 사용자가 설정한 커스텀 목표 수익률(Target) 수신 및 조기퇴근/다중출장 모드 연동 엔진 대수술 완료.
 # 🚨 MODIFIED: [V43.07] 체력 소진율(ATR5) 연동 목표 수익률 자율주행(Auto) 익절 렌더링 엔진 완벽 융합 완료.
 # 🚨 MODIFIED: [V44.03 체력 보존 락온] 매수(BUY) 트리거 최상단에 5일 ATR 기반 잔여 체력 검증 파이프라인을 이식하여 상승/하락 여력이 2.0% 미만일 경우 즉시 방아쇠를 강제 파기(WAIT)하는 무결점 락온 확립.
-# NEW: [V44.07 타임라인 락온] 10:20 EST 쉴드를 10:00 EST(정규장 오픈 후 30분)로 전진 배치 완료.
+# 🚨 MODIFIED: [V44.07 타임라인 락온] 10:20 EST 쉴드를 10:00 EST(정규장 오픈 후 30분)로 전진 배치 완료.
+# NEW: [V44.08 팩트 교정] 5분 평균 VWAP 부등호 역배선 100% 원상 복구 및 절대 헌법 락온
 # ==========================================================
 import logging
 import datetime
@@ -289,10 +290,11 @@ class VAvwapHybridPlugin:
 
         prev_vwap = context_data.get('prev_vwap', 0.0)
 
+        # MODIFIED: [V44.08 팩트 교정] 롱/숏 진입 시 5분 평균 VWAP 부등호 역배선 절대 헌법에 맞춰 정상 락온
         if not is_inverse:
-            trigger_condition = (base_vwap > prev_vwap) and (base_vwap > avg_vwap_5m)
+            trigger_condition = (base_vwap > prev_vwap) and (avg_vwap_5m > base_vwap)
         else:
-            trigger_condition = (base_vwap < prev_vwap) and (base_vwap < avg_vwap_5m)
+            trigger_condition = (base_vwap < prev_vwap) and (avg_vwap_5m < base_vwap)
 
         if trigger_condition:
             # 🚨 [V44.03 AVWAP 체력 소진 방어막 락온]
