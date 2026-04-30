@@ -15,6 +15,7 @@
 # 🚨 MODIFIED: [V44.13 당일 저가 기반 팩트 교정] 체력 소진율(ATR5) 연산의 베이스라인을 전일 종가에서 '당일 저가(Day Low)'로 디커플링하여 실제 바닥 대비 상승 물리력을 100% 팩트 반영.
 # 🚨 MODIFIED: [V44.14 듀얼 팩트 시각화] 당일 고가 및 현재가 우측에 당일 저가 대비 반등폭(Rebound Gap) 퍼센트를 듀얼 표기(/)하여 직관력 극대화.
 # 🚨 MODIFIED: [V44.15 UI 해상도 업그레이드 및 시각적 환각 교정] 게이지 바(Bar) 연산 시 소수점 버림(int)으로 인한 왜곡 맹점을 반올림(round)으로 적출하고, 10분할로 해상도를 2배 정밀하게 렌더링.
+# 🚨 MODIFIED: [V44.16 기초자산 팩트 확장] 기초자산(SOXX) 스캔 시 당일 고가 및 저가를 추가 스캔하여 VWAP 레이더망 상단에 등락률과 함께 렌더링 완료.
 # ==========================================================
 import logging
 import datetime
@@ -52,7 +53,20 @@ class AvwapConsolePlugin:
         base_tkr = "SOXX"
         base_prev_vwap, base_curr_vwap = 0.0, 0.0
         avg_vwap_5m = 0.0
+        base_day_high, base_day_low, base_prev_c = 0.0, 0.0, 0.0
+        
         try:
+            # 기초자산 당일 고/저/전일종가 스캔
+            try:
+                base_prev_c_val = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, base_tkr), timeout=2.0)
+                base_prev_c = float(base_prev_c_val) if base_prev_c_val else 0.0
+                
+                base_hl = await asyncio.wait_for(asyncio.to_thread(self.broker.get_day_high_low, base_tkr), timeout=2.0)
+                base_day_high = float(base_hl[0]) if base_hl else 0.0
+                base_day_low = float(base_hl[1]) if base_hl else 0.0
+            except Exception as e:
+                logging.debug(f"🚨 기초자산 H/L/PrevC 스캔 에러: {e}")
+
             avwap_ctx = None
             if hasattr(self.strategy, 'v_avwap_plugin'):
                 avwap_ctx = await asyncio.wait_for(
@@ -90,6 +104,12 @@ class AvwapConsolePlugin:
 
         msg = f"🔫 <b>[ 차세대 AVWAP 듀얼 모멘텀 관제탑 ]</b>\n\n"
         msg += f"🏛️ <b>[ 기초자산 ({base_tkr}) 모멘텀 스캔 ]</b>\n"
+        
+        if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
+            b_high_pct = ((base_day_high - base_prev_c) / base_prev_c) * 100
+            b_low_pct = ((base_day_low - base_prev_c) / base_prev_c) * 100
+            msg += f"▫️ 당일 고가: <b>${base_day_high:.2f}</b> ({b_high_pct:+.2f}%)\n"
+            msg += f"▫️ 당일 저가: <b>${base_day_low:.2f}</b> ({b_low_pct:+.2f}%)\n"
         
         if base_prev_vwap > 0:
             msg += f"▫️ 전일 VWAP: <b>${base_prev_vwap:,.2f}</b>\n"
@@ -186,11 +206,11 @@ class AvwapConsolePlugin:
                 low_pct = ((day_low - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 curr_pct = ((ref_price - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 
-                # NEW: [V44.13 당일 저가 기반 팩트 교정] 체력 소진율 연산을 전일 종가에서 '당일 저가'로 디커플링
+                # 당일 저가 기반 팩트 교정
                 rebound_gap = ref_price - day_low if ref_price >= day_low else 0.0
                 actual_rebound_pct = (rebound_gap / prev_c) * 100 if prev_c > 0 else 0.0
                 
-                # NEW: [V44.14] 당일 저가 대비 반등폭(Rebound Gap) 듀얼 시각화 연산
+                # 당일 저가 대비 반등폭(Rebound Gap) 듀얼 시각화 연산
                 high_rebound_gap = day_high - day_low if day_high >= day_low else 0.0
                 high_rebound_pct = (high_rebound_gap / prev_c) * 100 if prev_c > 0 else 0.0
                 curr_rebound_pct = actual_rebound_pct
@@ -200,7 +220,6 @@ class AvwapConsolePlugin:
                 
                 rem_5_str = f"+{rem_5_pct:.2f}% 추가 상승 여력" if rem_5_pct >= 0 else "체력 완전 고갈 (오버슈팅)"
 
-                # MODIFIED: [V44.15 해상도 업그레이드] int() 버림 오판 소각, 10분할 반올림(round) 락온으로 팩트 시각화 보장
                 def make_bar(exh):
                     pos = min(10, max(0, round(exh / 10)))
                     return "━" * pos + "🎯" + "━" * (10 - pos)
