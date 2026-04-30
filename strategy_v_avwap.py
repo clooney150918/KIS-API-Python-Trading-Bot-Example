@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_v_avwap.py] - 🌟 V44.08 암살자 타임라인 전진 배치 및 팩트 교정 🌟
+# [strategy_v_avwap.py] - 🌟 V44.22 앱솔루트 팩트 교정 🌟
 # 💡 V-REV 하이브리드 전용 차세대 AVWAP 스나이퍼 플러그인 (Dual-Referencing)
 # ⚠️ 초공격형 당일 청산 암살자 (V-REV 잉여 현금 100% 몰빵 & -8% 하드스탑)
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막 (Persistence 엔진 탑재)
@@ -14,6 +14,7 @@
 # 🚨 MODIFIED: [V44.07 타임라인 락온] 10:20 EST 쉴드를 10:00 EST(정규장 오픈 후 30분)로 전진 배치 완료.
 # 🚨 MODIFIED: [V44.08 팩트 교정] 5분 평균 VWAP 부등호 역배선 100% 원상 복구 및 절대 헌법 락온
 # 🚨 MODIFIED: [V44.19 완전 돌파 즉각 타격 락온] 과거의 낡은 -0.67% 이격도(Gap) 대기 조건이 100% 완벽히 소각되었음을 교차 검증 완료. 모멘텀 충족 시 즉시 방아쇠(VWAP_MOMENTUM_BREAKOUT) 격발 보장.
+# 🚨 MODIFIED: [V44.22 증거금 방어막 탑재] 암살자가 현금 100%를 무지성으로 긁을 때 수수료/슬리피지로 인해 한투 API에서 '주문가능금액 초과'로 리젝(거절)되는 사태를 막기 위해, 예산에 5% 안전 마진(0.95)을 강제 적용하는 락온 이식.
 # ==========================================================
 import logging
 import datetime
@@ -158,7 +159,6 @@ class VAvwapHybridPlugin:
         
         target_mode = kwargs.get('target_mode', 'AUTO')
         
-        # 🚨 [V44.03] 스나이퍼에서 수집된 진폭 체력 스캔 팩트 파라미터 수신 완료
         atr5 = kwargs.get('atr5', 0.0)
         day_low = kwargs.get('day_low', 0.0)
         prev_c = kwargs.get('prev_close', 0.0)
@@ -171,10 +171,8 @@ class VAvwapHybridPlugin:
             except Exception: pass
 
         avwap_state = avwap_state or {}
-        
         curr_time = now_est.time()
         
-        # MODIFIED: [V44.07] 타임쉴드 해제 시간 10:20 -> 10:00 전진 배치
         time_1000 = datetime.time(10, 0)
         time_1500 = datetime.time(15, 0)
         time_1555 = datetime.time(15, 55)
@@ -290,7 +288,7 @@ class VAvwapHybridPlugin:
 
         prev_vwap = context_data.get('prev_vwap', 0.0)
 
-        # 🚨 순수 돌파 모멘텀 로직 (이격도 대기 0% 확인)
+        # 🚨 순수 돌파 모멘텀 로직
         if not is_inverse:
             trigger_condition = (base_vwap > prev_vwap) and (avg_vwap_5m > base_vwap)
         else:
@@ -306,9 +304,11 @@ class VAvwapHybridPlugin:
                     return _build_res('WAIT', f'ATR5_잔여체력_고갈(최소2.0%보장_현재{rem_5_pct:.1f}%)_관망')
                     
             if exec_curr_p > 0 and avwap_alloc_cash > 0:
-                buy_qty = int(math.floor(avwap_alloc_cash / exec_curr_p))
+                # 🚨 [V44.22 증거금 방어막 탑재] 현금 100% 무지성 매수 시 한투 API 잔고 부족 거절 사태를 막는 5% 안전 버퍼
+                safe_budget = avwap_alloc_cash * 0.95
+                buy_qty = int(math.floor(safe_budget / exec_curr_p))
+                
                 if buy_qty > 0:
-                    # 🚨 갭 대기 없이 조건 만족 즉시 다이렉트 매수 격발
                     return _build_res('BUY', f'VWAP_MOMENTUM_BREAKOUT', qty=buy_qty, target_price=exec_curr_p)
             return _build_res('WAIT', '순수현금예산_부족_관망')
             
