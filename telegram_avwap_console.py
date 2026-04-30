@@ -17,6 +17,7 @@
 # 🚨 MODIFIED: [V44.15 UI 해상도 업그레이드 및 시각적 환각 교정] 게이지 바(Bar) 연산 시 소수점 버림(int)으로 인한 왜곡 맹점을 반올림(round)으로 적출하고, 10분할로 해상도를 2배 정밀하게 렌더링.
 # 🚨 MODIFIED: [V44.16 기초자산 팩트 확장] 기초자산(SOXX) 스캔 시 당일 고가 및 저가를 추가 스캔하여 VWAP 레이더망 상단에 등락률과 함께 렌더링 완료.
 # 🚨 MODIFIED: [V44.17 UI 게이지 롤백 및 올림 연산 이식] 모바일 가독성을 위해 게이지를 다시 5분할로 환원하고, 보수적 체력 경고를 위해 소수점 올림(math.ceil) 엔진을 락온하여 즉각적인 UI 전진 배치.
+# 🚨 MODIFIED: [V44.22 UI 환각 영구 소각] '타점 대기' 하드코딩 텍스트를 전면 적출하고, 실제 코어 엔진(get_decision)이 반환하는 팩트 사유(Reason)를 직접 라우팅받아 실시간 상태창에 100% 동기화 출력하도록 디커플링 수술 완료.
 # ==========================================================
 import logging
 import datetime
@@ -56,6 +57,7 @@ class AvwapConsolePlugin:
         avg_vwap_5m = 0.0
         base_day_high, base_day_low, base_prev_c = 0.0, 0.0, 0.0
         
+        df_1m = None
         try:
             # 기초자산 당일 고/저/전일종가 스캔
             try:
@@ -276,9 +278,41 @@ class AvwapConsolePlugin:
             else:
                 msg += f"▫️ 목표 익절: <b>{target_display}</b> | 하드스탑: <b>-8.0%</b>\n"
 
-            status_txt = "👀 타점 대기"
-            if is_shutdown: status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
-            elif avwap_qty > 0: status_txt = "🎯 딥매수 완료 (익절 감시중)"
+            # 🚨 MODIFIED: [V44.22 UI 환각 영구 소각] 엔진 다이렉트 질의를 통한 100% 팩트 렌더링 디커플링
+            status_txt = "👀 타점 스캔중"
+            if is_shutdown: 
+                status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
+            elif avwap_qty > 0: 
+                status_txt = "🎯 딥매수 완료 (익절 감시중)"
+            else:
+                try:
+                    base_curr_p = float(df_1m['close'].iloc[-1]) if df_1m is not None and not df_1m.empty else 0.0
+                    avwap_state_dict = {"strikes": strikes}
+                    
+                    decision = self.strategy.v_avwap_plugin.get_decision(
+                        base_ticker=base_tkr,
+                        exec_ticker=t,
+                        base_curr_p=base_curr_p,
+                        exec_curr_p=curr_p,
+                        base_day_open=0.0,
+                        avwap_avg_price=avwap_avg,
+                        avwap_qty=avwap_qty,
+                        avwap_alloc_cash=0.0,
+                        context_data=avwap_ctx,
+                        df_1min_base=df_1m,
+                        now_est=now_est,
+                        avwap_state=avwap_state_dict,
+                        regime_data=None,
+                        prev_close=prev_c,
+                        day_low=day_low,
+                        atr5=atr5
+                    )
+                    reason = decision.get('reason', '')
+                    if reason:
+                        status_txt = f"⏳ 대기 ({reason})"
+                except Exception as e:
+                    logging.debug(f"AVWAP 상태 텍스트 추출 에러: {e}")
+
             msg += f"▫️ 상태: <b>{status_txt}</b>\n"
 
             btn_toggle_mode = InlineKeyboardButton(btn_mode_text, callback_data=f"AVWAP_SET:{toggle_target_action}:{t}")

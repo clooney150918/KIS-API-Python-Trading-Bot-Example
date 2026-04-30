@@ -1,5 +1,5 @@
 # ==========================================================
-# [scheduler_sniper.py] - 🌟 100% 분할 캡슐화 완성본 (V44.07) 🌟
+# [scheduler_sniper.py] - 🌟 100% 분할 캡슐화 완성본 (V44.21) 🌟
 # 🚨 MODIFIED: [V32.00 그랜드 수술] 불필요한 AVWAP 동적 파라미터 배선 전면 소각 및 클린 라우팅 적용
 # NEW: [V40.XX 옴니 매트릭스] 전역 국면 데이터(regime_data) 수신 및 스나이퍼(AVWAP/V14) 듀얼 라우팅 락온 탑재
 # 🚨 MODIFIED: [V41.XX 파격적 수술] AVWAP 쿨다운 및 손절 셧다운 동결 전면 소각 & 무제한 다중 타격 룰 이식
@@ -7,6 +7,8 @@
 # NEW: [V44.03 AVWAP 매수 방어] 5일 ATR 진폭 체력 스캔을 위한 동적 파라미터 병렬 수집 파이프라인 개통
 # NEW: [V44.05 가상 에스크로 락온] 암살자 타격 전 V-REV 예산을 수학적으로 스캔하여 암살자의 잉여 현금에서 100% 격리 차단 완료
 # NEW: [V44.07 암살자 타임라인 전진 배치] 옴니 매트릭스 스캔 및 스나이퍼 격발 10:20 -> 10:00 EST 락온 아키텍처 동기화 완료
+# 🚨 MODIFIED: [V44.20 암살자 마비 맹점 완벽 적출] YF 시가(Open) 스캔 실패 시 스케줄러가 통째로 스킵되던 치명적 맹점(continue)을 전면 소각하여 무결성 확보.
+# 🚨 MODIFIED: [V44.21 옴니 매트릭스 디커플링] 10:00 EST에 고정된 정적 국면(Regime) 데이터가 AVWAP의 실시간 동적 모멘텀(돌파)을 가로막던 하극상 락다운을 완벽히 해체(regime_data=None)하여 사냥 본능 100% 해방.
 # ==========================================================
 import logging
 import datetime
@@ -159,14 +161,17 @@ async def scheduled_sniper_monitor(context):
                         
                         target_base = base_map.get(t, t) 
                         
-                        if f"AVWAP_CTX_{current_target}" not in tracking_cache or tracking_cache[f"AVWAP_CTX_{current_target}"] is None:
-                            ctx_data = await asyncio.to_thread(strategy.v_avwap_plugin.fetch_macro_context, target_base)
-                            if ctx_data is not None:
-                                tracking_cache[f"AVWAP_CTX_{current_target}"] = ctx_data
-                            else:
-                                continue 
-                        
                         ctx_data = tracking_cache.get(f"AVWAP_CTX_{current_target}")
+                        if not ctx_data:
+                            try:
+                                ctx_data = await asyncio.wait_for(asyncio.to_thread(strategy.v_avwap_plugin.fetch_macro_context, target_base), timeout=4.0)
+                                if ctx_data:
+                                    tracking_cache[f"AVWAP_CTX_{current_target}"] = ctx_data
+                            except Exception: pass
+                        
+                        if not ctx_data:
+                            continue 
+                        
                         avwap_qty = tracking_cache.get(f"AVWAP_QTY_{current_target}", 0)
                         avwap_avg = tracking_cache.get(f"AVWAP_AVG_{current_target}", 0.0)
                         
@@ -176,18 +181,8 @@ async def scheduled_sniper_monitor(context):
                         base_curr_p = float(await asyncio.to_thread(broker.get_current_price, target_base) or 0.0)
                         if base_curr_p <= 0: continue
                         
-                        def _fetch_open(tkr):
-                            try:
-                                st = yf.Ticker(tkr)
-                                h = st.history(period="1d", interval="1m", prepost=False, timeout=5)
-                                if not h.empty: return float(h['Open'].dropna().iloc[0])
-                            except: pass
-                            return 0.0
-                        
-                        base_day_open = float(await asyncio.to_thread(_fetch_open, target_base) or 0.0)
-                        
-                        if base_day_open <= 0:
-                            continue 
+                        # 🚨 [V44.20 팩트 교정] YF 시가(Open) 스캔 실패 시 암살자가 영구 마비되던 치명적 맹점 전면 소각
+                        base_day_open = 0.0 
                         
                         df_1min_base = None
                         try: df_1min_base = await asyncio.to_thread(broker.get_1min_candles_df, target_base)
@@ -226,7 +221,7 @@ async def scheduled_sniper_monitor(context):
                             df_1min_base=df_1min_base,
                             now_est=now_est,
                             avwap_state=avwap_state_dict,
-                            regime_data=regime_data,
+                            regime_data=None, # 🚨 [V44.21 옴니 매트릭스 디커플링] 정적 국면(Regime) 개입을 전면 차단하여 실시간 VWAP 돌파 모멘텀을 100% 해방
                             prev_close=prev_c,
                             day_low=day_low,
                             atr5=atr5
