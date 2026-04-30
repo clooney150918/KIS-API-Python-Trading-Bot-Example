@@ -18,6 +18,7 @@
 # 🚨 MODIFIED: [V43.16 코어 메모리 강제 동기화] 숫자 입력 시 변경된 MANUAL 상태가 증발(Amnesia)하지 않도록 백그라운드 Job Queue Data에 딥 인젝션(Deep Injection) 수술 완료.
 # NEW: [V44.07 암살자 타임라인 전진 배치] 옴니 매트릭스 스캔 및 스나이퍼 격발 10:20 -> 10:00 EST 락온 수술 완료.
 # 🚨 MODIFIED: [V44.11 팩트 교정] 0주 새출발 시 1층 예산 100% 강제 진입을 보장하기 위해 Buy1 상한선을 15% 할증(* 1.15)으로 상향 락온하여 지시서 렌더링 동기화.
+# 🚨 MODIFIED: [V44.12 런타임 붕괴 방어] cmd_sync 루프 내 AVWAP 하이브리드 미가동 시 발생하는 UnboundLocalError 연쇄 맹점 원천 차단을 위한 변수 사전 락온 이식 완료.
 # ==========================================================
 import logging
 import datetime
@@ -362,6 +363,7 @@ class TelegramController:
         latest_version = self.cfg.get_latest_version() 
         msg = self.view.get_start_message(target_hour, season_icon, latest_version) 
         await update.message.reply_text(msg, parse_mode='HTML')
+
     async def cmd_sync(self, update, context):
         if not self._is_admin(update):
             return
@@ -420,6 +422,20 @@ class TelegramController:
         for t in sorted_tickers:
             if t == "SOXS":
                 continue
+
+            # NEW: [V44.12 런타임 붕괴 방어] 하이브리드 모드 우회 시 연쇄적으로 증발하는 변수들을 사전 락온하여 UnboundLocalError 원천 차단
+            is_avwap_active = False
+            avwap_budget = 0.0
+            avwap_qty = 0
+            avwap_avg = 0.0
+            avwap_status_txt = "OFF"
+            avwap_strikes = 0
+            avwap_base_ticker = "N/A"
+            avwap_base_price = 0.0
+            avwap_base_vwap = 0.0
+            avwap_prev_vwap = 0.0
+            avwap_rolling_tp = 0.0
+            avwap_gap_pct = 0.0
 
             h = holdings.get(t, {'qty':0, 'avg':0})
             curr = await asyncio.to_thread(self.broker.get_current_price, t, is_market_closed=(status_code == "CLOSE"))
@@ -618,67 +634,67 @@ class TelegramController:
                     v_rev_guidance += "작동 시간은 반드시 \n<b>[장 마감 30분 전 ~ 장 마감]</b>\n으로만 세팅하셔야 창출됩니다.\n"
                     v_rev_guidance += "장중 내내 작동하게 둘 경우 V-REV 코어 전략의 수익률이 심각하게 파괴됩니다.\n"
 
-                if hasattr(self.cfg, 'get_avwap_hybrid_mode') and self.cfg.get_avwap_hybrid_mode(t):
-                    is_avwap_active = True
-                    avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
-                    avwap_avg = tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
-                    avwap_budget = cash
-                    avwap_strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
-                    
-                    if tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
-                        avwap_status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
-                    elif tracking_cache.get(f"AVWAP_BOUGHT_{t}"):
-                        avwap_status_txt = "🎯 딥매수 완료 (익절/손절 감시중)"
-                    elif tracking_cache.get(f"AVWAP_COOLDOWN_{t}"):
-                        avwap_status_txt = "⏳ 자연 쿨다운 (VWAP 갭 회복 대기중)"
-                    else:
-                        avwap_status_txt = "👀 상승장 필터 스캔 및 갭 타점 대기"
+            if hasattr(self.cfg, 'get_avwap_hybrid_mode') and self.cfg.get_avwap_hybrid_mode(t):
+                is_avwap_active = True
+                avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
+                avwap_avg = tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
+                avwap_budget = cash
+                avwap_strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
+                
+                if tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
+                    avwap_status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
+                elif tracking_cache.get(f"AVWAP_BOUGHT_{t}"):
+                    avwap_status_txt = "🎯 딥매수 완료 (익절/손절 감시중)"
+                elif tracking_cache.get(f"AVWAP_COOLDOWN_{t}"):
+                    avwap_status_txt = "⏳ 자연 쿨다운 (VWAP 갭 회복 대기중)"
+                else:
+                    avwap_status_txt = "👀 상승장 필터 스캔 및 갭 타점 대기"
 
-                    avwap_base_ticker = 'SOXX' if t == 'SOXL' else ('QQQ' if t == 'TQQQ' else t)
-                    
-                    avwap_ctx = tracking_cache.get(f"AVWAP_CTX_{t}")
-                    if not avwap_ctx:
-                        try:
-                            avwap_ctx = await asyncio.wait_for(asyncio.to_thread(self.strategy.v_avwap_plugin.fetch_macro_context, avwap_base_ticker), timeout=4.0)
-                            if avwap_ctx: tracking_cache[f"AVWAP_CTX_{t}"] = avwap_ctx
-                        except Exception: pass
+                avwap_base_ticker = 'SOXX' if t == 'SOXL' else ('QQQ' if t == 'TQQQ' else t)
+                
+                avwap_ctx = tracking_cache.get(f"AVWAP_CTX_{t}")
+                if not avwap_ctx:
+                    try:
+                        avwap_ctx = await asyncio.wait_for(asyncio.to_thread(self.strategy.v_avwap_plugin.fetch_macro_context, avwap_base_ticker), timeout=4.0)
+                        if avwap_ctx: tracking_cache[f"AVWAP_CTX_{t}"] = avwap_ctx
+                    except Exception: pass
 
-                    if status_code in ["PRE", "REG"] and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
-                        try:
-                            df_1min_base = await asyncio.wait_for(asyncio.to_thread(self.broker.get_1min_candles_df, avwap_base_ticker), timeout=3.0)
-                            base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, avwap_base_ticker), timeout=3.0) or 0.0)
-                            
-                            if hasattr(self.strategy, 'v_avwap_plugin'):
-                                avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0), "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)}
-                                
-                                decision = self.strategy.v_avwap_plugin.get_decision(
-                                    base_ticker=avwap_base_ticker, exec_ticker=t,
-                                    base_curr_p=base_curr_p, exec_curr_p=curr,
-                                    df_1min_base=df_1min_base, avwap_qty=avwap_qty,
-                                    now_est=now_est, avwap_state=avwap_state_dict,
-                                    context_data=avwap_ctx
-                                )
-                                avwap_base_price = decision.get('base_curr_p', base_curr_p)
-                                avwap_base_vwap = decision.get('vwap', 0.0)
-                                avwap_prev_vwap = decision.get('prev_vwap', 0.0)
-                                avwap_rolling_tp = decision.get('rolling_tp', 0.0)
-                                avwap_gap_pct = decision.get('gap_pct', 0.0)
-                                
-                                if "대기" in avwap_status_txt:
-                                    reason = decision.get('reason', '타점 계산중')
-                                    avwap_status_txt = f"⏳ 대기 ({reason})"
-                        except Exception as e:
-                            logging.error(f"🚨 [{t}] AVWAP 실시간 레이더 스캔 타임아웃/에러: {e}")
-
-                    if not tracking_cache.get(f"AVWAP_BOUGHT_{t}") and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
-                        curr_time = now_est.time()
-                        time_1000 = datetime.time(10, 0)
-                        time_1500 = datetime.time(15, 0)
+                if status_code in ["PRE", "REG"] and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
+                    try:
+                        df_1min_base = await asyncio.wait_for(asyncio.to_thread(self.broker.get_1min_candles_df, avwap_base_ticker), timeout=3.0)
+                        base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, avwap_base_ticker), timeout=3.0) or 0.0)
                         
-                        if curr_time < time_1000:
-                            avwap_status_txt = "⏳ 10시 장초반 노이즈 대기"
-                        elif curr_time >= time_1500:
-                            avwap_status_txt = "⛔ 금일 감시 종료"
+                        if hasattr(self.strategy, 'v_avwap_plugin'):
+                            avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0), "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)}
+                            
+                            decision = self.strategy.v_avwap_plugin.get_decision(
+                                base_ticker=avwap_base_ticker, exec_ticker=t,
+                                base_curr_p=base_curr_p, exec_curr_p=curr,
+                                df_1min_base=df_1min_base, avwap_qty=avwap_qty,
+                                now_est=now_est, avwap_state=avwap_state_dict,
+                                context_data=avwap_ctx
+                            )
+                            avwap_base_price = decision.get('base_curr_p', base_curr_p)
+                            avwap_base_vwap = decision.get('vwap', 0.0)
+                            avwap_prev_vwap = decision.get('prev_vwap', 0.0)
+                            avwap_rolling_tp = decision.get('rolling_tp', 0.0)
+                            avwap_gap_pct = decision.get('gap_pct', 0.0)
+                            
+                            if "대기" in avwap_status_txt:
+                                reason = decision.get('reason', '타점 계산중')
+                                avwap_status_txt = f"⏳ 대기 ({reason})"
+                    except Exception as e:
+                        logging.error(f"🚨 [{t}] AVWAP 실시간 레이더 스캔 타임아웃/에러: {e}")
+
+                if not tracking_cache.get(f"AVWAP_BOUGHT_{t}") and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
+                    curr_time = now_est.time()
+                    time_1000 = datetime.time(10, 0)
+                    time_1500 = datetime.time(15, 0)
+                    
+                    if curr_time < time_1000:
+                        avwap_status_txt = "⏳ 10시 장초반 노이즈 대기"
+                    elif curr_time >= time_1500:
+                        avwap_status_txt = "⛔ 금일 감시 종료"
 
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
