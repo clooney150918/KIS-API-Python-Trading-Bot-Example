@@ -615,6 +615,7 @@ class TelegramCallbacks:
         # 🚨 MODIFIED: [V44.30 AVWAP 설정 콜백 라우터 디커플링]
         # 수동/자율 목표 모드 및 출장 모드 스위칭 시, 콘솔 화면 갱신을 소각하고
         # 즉시 /settlement(환경설정) 화면으로 직결되도록 라우팅 팩트 이식 완료.
+        # 🚨 MODIFIED: [V44.34 AVWAP 듀얼 모멘텀 미러링 팩트 교정] SOXL의 설정을 조작할 때 그림자 티커인 SOXS에도 100% 동일한 모드(다중/조기, 자동/수동)가 주입되도록 듀얼 락온(Dual-Mirroring) 이식 완료. UI 팝업 문구도 듀얼로 직관적 렌더링 교정.
         elif action == "AVWAP_SET":
             action_type = sub
             ticker = data[2]
@@ -626,43 +627,51 @@ class TelegramCallbacks:
             def set_tracking_mode(mode_value):
                 nonlocal render_app_data
                 context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = mode_value
+                if ticker == "SOXL":
+                    context.bot_data['app_data'].setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = mode_value
+                
                 if context.job_queue:
                     for job in context.job_queue.jobs():
                         if job.data is not None:
                             job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = mode_value
+                            if ticker == "SOXL":
+                                job.data.setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = mode_value
                             render_app_data = job.data
+
+            display_ticker = "SOXL/SOXS 듀얼" if ticker == "SOXL" else ticker
 
             if action_type == "TARGET_MANUAL":
                 set_tracking_mode("MANUAL")
                 controller.user_states[chat_id] = f"CONF_AVWAP_TARGET_{ticker}"
                 
-                # V44.30 팩트: /settlement 환경설정 메뉴 제자리 갱신
                 try:
                     await controller.cmd_settlement(update, context)
                 except Exception:
                     pass
 
                 try:
-                    await context.bot.send_message(chat_id, f"🖐️ <b>[{ticker}] 수동 고정 모드 전환!</b>\n🎯 <b>목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ -8.0% 하드스탑 컷은 안전을 위해 고정됩니다.", parse_mode='HTML')
-                    await query.answer(f"[{ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
+                    await context.bot.send_message(chat_id, f"🖐️ <b>[{display_ticker}] 수동 고정 모드 전환!</b>\n🎯 <b>목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ -8.0% 하드스탑 컷은 안전을 위해 고정됩니다.", parse_mode='HTML')
+                    await query.answer(f"[{display_ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
                 except Exception as e:
                     logging.error(f"프롬프트 발송 실패: {e}")
-                    await query.answer(f"[{ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
+                    await query.answer(f"[{display_ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
 
             elif action_type == "TARGET_AUTO":
                 set_tracking_mode("AUTO")
                 try:
                     await controller.cmd_settlement(update, context)
-                    await query.answer(f"✅ [{ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
+                    await query.answer(f"✅ [{display_ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
-                        await query.answer(f"✅ [{ticker}] 이미 최신 상태(🤖자율주행)입니다.", show_alert=False)
+                        await query.answer(f"✅ [{display_ticker}] 이미 최신 상태(🤖자율주행)입니다.", show_alert=False)
                     else:
                         logging.error(f"설정 새로고침 에러: {e}")
                         await query.answer("모드 변경 완료. /settlement를 다시 호출해주세요.", show_alert=False)
                     
             elif action_type == "EARLY":
                 self.cfg.set_avwap_multi_strike_mode(ticker, False)
+                if ticker == "SOXL":
+                    self.cfg.set_avwap_multi_strike_mode("SOXS", False)
                 try:
                     await controller.cmd_settlement(update, context)
                     await query.answer("✅ 조기퇴근 모드(1회 익절)로 전환되었습니다.", show_alert=False)
@@ -674,6 +683,8 @@ class TelegramCallbacks:
                 
             elif action_type == "MULTI":
                 self.cfg.set_avwap_multi_strike_mode(ticker, True)
+                if ticker == "SOXL":
+                    self.cfg.set_avwap_multi_strike_mode("SOXS", True)
                 try:
                     await controller.cmd_settlement(update, context)
                     await query.answer("✅ 무제한 다중 출장 모드로 전환되었습니다.", show_alert=False)
@@ -684,7 +695,6 @@ class TelegramCallbacks:
                         pass
                 
             elif action_type == "REFRESH":
-                # 🚨 [V44.30] 팩트 유지: /avwap 모니터의 새로고침 기능은 그대로 놔둡니다.
                 if context.job_queue:
                     for job in context.job_queue.jobs():
                         if job.data is not None:

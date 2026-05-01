@@ -138,33 +138,59 @@ class TelegramController:
         chat_id = update.effective_chat.id
         
         state = self.user_states.get(chat_id)
+        
+        # 🚨 MODIFIED: [V44.34 AVWAP 듀얼 모멘텀 미러링 팩트 교정] 목표수익률 입력 시 SOXL과 SOXS(그림자 티커)에 100% 동일한 수익률과 락온 모드가 주입되도록 듀얼 캐싱 파이프라인 이식 완료.
         if state and state.startswith("CONF_AVWAP_TARGET_"):
             ticker = state.split("_")[-1]
             try:
                 val = float(text)
                 if hasattr(self.cfg, 'set_avwap_target_profit'):
                     self.cfg.set_avwap_target_profit(ticker, val)
+                    if ticker == "SOXL":
+                        self.cfg.set_avwap_target_profit("SOXS", val)
+                        
                 self.user_states.pop(chat_id, None)
                 
-                # 🚨 [V44.30] 목표 수익률 입력 완료 후 'MANUAL' 상태 락온
                 if 'app_data' not in context.bot_data:
                     context.bot_data['app_data'] = {}
+                    
                 context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
+                if ticker == "SOXL":
+                    context.bot_data['app_data'].setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = "MANUAL"
                 
                 if context.job_queue:
                     for job in context.job_queue.jobs():
                         if job.data is not None:
                             job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
+                            if ticker == "SOXL":
+                                job.data.setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = "MANUAL"
                 
-                await update.message.reply_text(f"✅ <b>[{ticker}] 수동 목표 수익률이 {val}%로 설정되며 '🖐️수동 고정' 모드로 자동 전환되었습니다.</b>", parse_mode='HTML')
+                display_ticker = "SOXL/SOXS 듀얼" if ticker == "SOXL" else ticker
+                await update.message.reply_text(f"✅ <b>[{display_ticker}] 수동 목표 수익률이 {val}%로 설정되며 '🖐️수동 고정' 모드로 자동 전환되었습니다.</b>", parse_mode='HTML')
                 
-                # 🚨 [V44.30] 텍스트 입력 후 /settlement 화면으로 완벽 복귀
                 await self.cmd_settlement(update, context)
                 return
             except ValueError:
                 await update.message.reply_text("❌ 올바른 숫자를 입력하세요. (예: 2.5, 4.0)")
                 return
         
+        if "장부 조회" in text:
+            return await self.cmd_record(update, context)
+        elif "시드 변경" in text:
+            return await self.cmd_seed(update, context)
+        elif "모드 전환" in text:
+            return await self.cmd_ticker(update, context)
+        elif "분할 변경" in text or "환경 설정" in text or "세팅" in text:
+            return await self.cmd_settlement(update, context)
+        elif "스나이퍼" in text:
+            return await self.cmd_mode(update, context)
+        elif "명예의 전당" in text or "졸업" in text:
+            return await self.cmd_history(update, context)
+        elif "암살자" in text or "조기" in text or "avwap" in text.lower():
+            return await self.cmd_avwap(update, context)
+            
+        await self.states_handler.handle_message(update, context, self)
+
         if "장부 조회" in text:
             return await self.cmd_record(update, context)
         elif "시드 변경" in text:
