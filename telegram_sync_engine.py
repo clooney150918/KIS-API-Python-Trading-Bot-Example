@@ -5,6 +5,7 @@
 # MODIFIED: [V44.09 AVWAP 유령 매수 환각 원천 차단] V-REV 모드에서 0주 졸업 판별이 확정되었음에도 인메모리(tracking_cache)에 AVWAP 물량이 남아있을 경우, 이를 즉각 포맷하고 영속성 상태 파일(save_state)까지 100% 소각하여 허공에 익절 주문을 난사하는 런타임 환각 및 통신 과부하(Reject) 맹점 완벽 수술.
 # NEW: [V44.10 비파괴 보정(CALIB_SELL) 0달러 폭탄 방어막 이식] 실잔고가 0주가 되어 오차를 교정(CALIB_SELL)할 때, KIS 서버가 반환하는 평단가($0.00)를 그대로 매도가에 꽂아 수익률이 -100%로 붕괴하던 치명적 맹점 전면 수술. 체결 원장에서 실제 매도 평단가를 역산하여 주입하고, 실패 시 기존 장부 평단가(temp_sim_avg)를 강제 덮어씌워 PnL 훼손을 원천 차단 완료.
 # MODIFIED: [V44.44 이벤트 루프 교착 방어] KIS 잔고 조회 API, 큐 장부 스레드 락(Lock) 연산 및 파일 I/O(json.dump) 구간을 비동기 래핑(to_thread)하여 데드락 원천 차단 완료.
+# MODIFIED: [V44.44 핫픽스] SyntaxError(들여쓰기 붕괴)로 인한 런타임 크래시 엣지 케이스 완벽 교정 완료.
 # ==========================================================
 import logging
 import datetime
@@ -257,7 +258,8 @@ class TelegramSyncEngine:
                                 calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
                                 logging.info(f"🛡️ [{ticker}] CALIB_SELL 0달러 폴백 방어: 원장 결측으로 기존 장부 평단가(${calib_price:.4f})를 강제 주입했습니다.")
                                 
-                        calib_avg = temp_sim_avg
+                            # 🚨 MODIFIED: [V44.44 핫픽스] SyntaxError(들여쓰기 붕괴) 교정
+                            calib_avg = temp_sim_avg
                         elif calib_side == "BUY" and actual_avg <= 0.0:
                             calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
                             calib_avg = temp_sim_avg
