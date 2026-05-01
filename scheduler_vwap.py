@@ -8,6 +8,7 @@
 # 🚨 MODIFIED: [V43.28 그랜드 핫픽스] VWAP 스케줄러 기상 시간(15:27)과 타임 윈도우(15:30) 엇박자로 인한 100% 초과 덤핑 버그 원천 차단.
 # NEW: [V44.05 가상 에스크로] V-REV 예방적 덫 취소(Nuke) 텍스트를 '가상 에스크로 해제'로 팩트 교정 완료
 # 🚨 MODIFIED: [V44.08 팩트 교정] V-REV 타격 시 옴니 필터(omni_filter) 개입 전면 소각, 역추세 진입로 완벽 개방
+# NEW: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # ==========================================================
 import logging
 import datetime
@@ -45,6 +46,9 @@ async def scheduled_vwap_init_and_cancel(context):
     
     app_data = context.job.data
     cfg, broker, tx_lock = app_data['cfg'], app_data['broker'], app_data['tx_lock']
+    strategy = app_data.get('strategy')
+    strategy_rev = app_data.get('strategy_rev')
+    queue_ledger = app_data.get('queue_ledger')
     chat_id = context.job.chat_id
     
     vwap_cache = app_data.setdefault('vwap_cache', {})
@@ -65,6 +69,36 @@ async def scheduled_vwap_init_and_cancel(context):
                 if version == "V_REV" or (version == "V14" and is_manual_vwap):
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
+                            # NEW: [V44.25 AVWAP 디커플링 및 2중 교차 검증 페일세이프] 
+                            # VWAP 스케줄러 기상 직전 KIS 실시간 잔고를 스캔하여 0주 출발 맹점 및 스냅샷 증발 방어막 가동
+                            curr_p = float(await asyncio.to_thread(broker.get_current_price, t) or 0.0)
+                            prev_c = float(await asyncio.to_thread(broker.get_previous_close, t) or 0.0)
+                            
+                            _, holdings = await asyncio.to_thread(broker.get_account_balance)
+                            safe_holdings = holdings if isinstance(holdings, dict) else {}
+                            h = safe_holdings.get(t) or {}
+                            total_kis_qty = int(float(h.get('qty', 0)))
+                            avg_price = float(h.get('avg', 0.0))
+                            
+                            avwap_qty = 0
+                            if hasattr(strategy, 'load_avwap_state'):
+                                avwap_state = strategy.load_avwap_state(t, now_est)
+                                avwap_qty = int(avwap_state.get('qty', 0))
+                            
+                            if version == "V_REV" and strategy_rev and queue_ledger:
+                                rev_daily_budget = float(cfg.get_seed(t) or 0.0) * 0.15
+                                q_data = queue_ledger.get_queue(t)
+                                strategy_rev.ensure_failsafe_snapshot(
+                                    ticker=t, curr_p=curr_p, prev_c=prev_c, alloc_cash=rev_daily_budget, 
+                                    q_data=q_data, total_kis_qty=total_kis_qty, avwap_qty=avwap_qty
+                                )
+                            elif version == "V14" and is_manual_vwap and strategy and hasattr(strategy, 'v14_vwap_plugin'):
+                                _, alloc_cash, _ = cfg.calculate_v14_state(t)
+                                strategy.v14_vwap_plugin.ensure_failsafe_snapshot(
+                                    ticker=t, current_price=curr_p, total_qty=total_kis_qty, 
+                                    avwap_qty=avwap_qty, avg_price=avg_price, prev_close=prev_c, alloc_cash=alloc_cash
+                                )
+
                             # NEW: [V44.05 가상 에스크로] V14 VWAP만 물리적 취소를 수행, V-REV는 취소할 덫이 없으므로 바이패스하되 메시지만 출력
                             if version == "V14" and is_manual_vwap:
                                 await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
@@ -167,6 +201,37 @@ async def scheduled_vwap_trade(context):
                 if version == "V_REV" or (version == "V14" and is_manual_vwap):
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
+                            # NEW: [V44.25 AVWAP 디커플링 및 2중 교차 검증 페일세이프] 
+                            # 정규 루프 기상 시에도 스냅샷 방어막 가동 (타임 패러독스 보완)
+                            curr_p = float(await asyncio.to_thread(broker.get_current_price, t) or 0.0)
+                            prev_c = float(await asyncio.to_thread(broker.get_previous_close, t) or 0.0)
+                            
+                            h = safe_holdings.get(t) or {}
+                            total_kis_qty = int(float(h.get('qty', 0)))
+                            avg_price = float(h.get('avg', 0.0))
+                            
+                            avwap_qty = 0
+                            if hasattr(strategy, 'load_avwap_state'):
+                                avwap_state = strategy.load_avwap_state(t, now_est)
+                                avwap_qty = int(avwap_state.get('qty', 0))
+                            
+                            if version == "V_REV":
+                                strategy_rev = app_data.get('strategy_rev')
+                                queue_ledger = app_data.get('queue_ledger')
+                                if strategy_rev and queue_ledger:
+                                    rev_daily_budget = float(cfg.get_seed(t) or 0.0) * 0.15
+                                    q_data = queue_ledger.get_queue(t)
+                                    strategy_rev.ensure_failsafe_snapshot(
+                                        ticker=t, curr_p=curr_p, prev_c=prev_c, alloc_cash=rev_daily_budget, 
+                                        q_data=q_data, total_kis_qty=total_kis_qty, avwap_qty=avwap_qty
+                                    )
+                            elif version == "V14" and is_manual_vwap and hasattr(strategy, 'v14_vwap_plugin'):
+                                _, alloc_cash, _ = cfg.calculate_v14_state(t)
+                                strategy.v14_vwap_plugin.ensure_failsafe_snapshot(
+                                    ticker=t, current_price=curr_p, total_qty=total_kis_qty, 
+                                    avwap_qty=avwap_qty, avg_price=avg_price, prev_close=prev_c, alloc_cash=alloc_cash
+                                )
+
                             # NEW: [V44.05 가상 에스크로] 텍스트 디커플링
                             if version == "V14" and is_manual_vwap:
                                 await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")

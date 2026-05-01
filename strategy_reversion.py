@@ -39,6 +39,7 @@
 # 🚨 MODIFIED: [V44.08 팩트 교정] V-REV 매수 예산 잔차 버킷 이월 시 발생하는 수량(Qty) 소수점 섞임 차원 붕괴 영구 방어 완료 (순수 달러($) 캐싱 보장)
 # 🚨 MODIFIED: [V44.11 팩트 교정] 0주 새출발 시 1층 예산 100% 강제 진입을 보장하기 위해 Buy1 상한선을 15% 할증(* 1.15)으로 상향 락온.
 # 🚨 MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
+# NEW: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # ==========================================================
 import math
 import os
@@ -177,6 +178,31 @@ class ReversionStrategy:
             except Exception:
                 pass
         return None
+
+    # NEW: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증 및 암살자 물량 수학적 격리 페일세이프 엔진
+    def ensure_failsafe_snapshot(self, ticker, curr_p, prev_c, alloc_cash, q_data, total_kis_qty, avwap_qty):
+        snap = self.load_daily_snapshot(ticker)
+        if snap is not None:
+            return snap
+            
+        pure_qty = max(0, total_kis_qty - avwap_qty)
+        total_q = sum(int(item.get("qty", 0)) for item in q_data if float(item.get('price', 0.0)) > 0)
+        
+        logging.warning(f"🚨 [{ticker}] V_REV 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (KIS총잔고:{total_kis_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주 | 큐 장부:{total_q}주)")
+        
+        # 긴급 스냅샷을 04:05 EST 시점의 팩트로 생성 (VWAP 모멘텀 밖이므로 is_snapshot_mode=True 활용)
+        return self.get_dynamic_plan(
+            ticker=ticker,
+            curr_p=curr_p,
+            prev_c=prev_c,
+            current_weight=0.0,
+            vwap_status={},
+            min_idx=-1,
+            alloc_cash=alloc_cash,
+            q_data=q_data,
+            is_snapshot_mode=True,
+            market_type="REG"
+        )
 
     # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
     # 17:05에 장전된 LOC는 체결 확정이 아니므로 절대 record_execution으로 예산을 선차감하지 말 것.
@@ -397,7 +423,7 @@ class ReversionStrategy:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
             # 🚨 MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막]
-            # rem_budget을 반으로 가르는 기존 방식은 Buy2의 미사용 예산을 Buy1이 훔쳐서 무한 타격(34주 체결 등)하는 차원 붕괴를 유발.
+            # rem_budget을 반으로 가르는 기존 방식은 Buy2의 미사용 예산을 Buy1이 훔쳐와서 무한 타격(34주 체결 등)하는 차원 붕괴를 유발.
             # 전체 예산(alloc_cash)에 현재 분봉의 절대 가중치(current_weight)를 곱해 순수 1분 할당량을 도출하고,
             # 이를 정확히 50%씩 쪼개어 각각의 고립된 잔차 버킷(Residual)에 이월시키는 완벽한 디커플링 이식.
             raw_b1_slice = (float(alloc_cash) * 0.5) * current_weight

@@ -26,6 +26,7 @@
 # NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
 # NEW: [V40.XX 옴니 매트릭스] U-Curve 하드코딩 배열 전면 소각 및 config.py 동적 재정규화 파이프라인 이식 완료
 # 🚨 MODIFIED: [V43.28 그랜드 수술] 스케줄러가 가격 불만족으로 슬라이스를 스킵할 경우 발생하던 매수/매도 누수 버그를 방어하기 위해 조건 검사 전 무조건 달러 단위 잔차(Residual) 버킷에 예산을 이월(Carry-over)시켜 100% 소진 팩트 락온.
+# NEW: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # ==========================================================
 import math
 import logging
@@ -151,6 +152,28 @@ class V14VwapStrategy:
                 pass
         return None
 
+    # NEW: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증 및 암살자 물량 수학적 격리 페일세이프 엔진
+    def ensure_failsafe_snapshot(self, ticker, current_price, total_qty, avwap_qty, avg_price, prev_close, alloc_cash):
+        snap = self.load_daily_snapshot(ticker)
+        if snap is not None:
+            return snap
+            
+        pure_qty = max(0, total_qty - avwap_qty)
+        logging.warning(f"🚨 [{ticker}] V14_VWAP 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (총잔고:{total_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주)")
+        
+        return self.get_plan(
+            ticker=ticker,
+            current_price=current_price,
+            avg_price=avg_price,
+            qty=pure_qty,
+            prev_close=prev_close,
+            ma_5day=0.0,
+            market_type="REG",
+            available_cash=alloc_cash,
+            is_simulation=True,
+            is_snapshot_mode=True
+        )
+
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
     def _floor(self, val): return math.floor(val * 100) / 100.0
 
@@ -259,14 +282,12 @@ class V14VwapStrategy:
         initial_qty = int(plan_static.get('initial_qty', qty))
         is_zero_start_session = plan_static.get('is_zero_start', initial_qty == 0)
         
-        # NEW: [V40.XX] 옴니 매트릭스 U-Curve 동적 렌더링 및 슬라이스 재연산
         try:
             profile = self.cfg.get_vwap_profile(ticker) if hasattr(self.cfg, 'get_vwap_profile') else {}
         except Exception as e:
             logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
             profile = {}
             
-        # 🚨 MODIFIED: [V43.28 핫픽스] 스케줄러 기상 시간(15:27)과 엇박자를 교정하여 27분부터 스캔 궤적 매핑
         target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
@@ -282,7 +303,6 @@ class V14VwapStrategy:
             raw_weight = profile.get(time_str, 0.0)
             slice_ratio = (raw_weight / rem_weight) if rem_weight > 0 else 1.0
             
-            # V43.28 팩트 교정: 누락분 100% 자가 복구를 위해 전체 예산 대비 현재 분의 절대 비중 도출
             current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / len(target_keys))
         else:
             slice_ratio = 0.0
@@ -293,7 +313,6 @@ class V14VwapStrategy:
         total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
         rem_budget_global = max(0.0, total_budget - total_spent)
         
-        # 🚨 MODIFIED: [V43.28 엣지 케이스 수술] 가격 불만족 시 스킵되는 예산의 증발(Data Starvation) 버그를 방어하기 위해, 조건 검사 전 무조건 달러 단위 잔차 버킷에 이월(Carry-over)시켜 1회분 100% 소진을 락온.
         if rem_budget_global > 0 and current_weight > 0:
             slice_budget = total_budget * current_weight
             b_bucket = float(self.residual["BUY_STAR"].get(ticker, 0.0)) + slice_budget
