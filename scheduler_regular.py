@@ -1,3 +1,4 @@
+# MODIFIED: [V44.43 이벤트 루프 교착 방어 및 타임 쉴드 이식] 동기 함수 is_market_open을 asyncio.to_thread로 래핑하고 10초 타임아웃 족쇄를 채워 스케줄러 증발(Deadlock) 원천 차단. 타임아웃 시 평일 강제 개장(Fail-Open) 방어막 이식 완료.
 # MODIFIED: [V44.08 예방 덫 소각] V-REV 예방 덫 가상 에스크로 락온 로직 전면 소각. 자전거래 의심 회피 및 AVWAP 암살자의 가용 예산을 100% 개방하기 위해 04:05 EST의 모든 매수/매도 덫 장전을 0주 상태든 기보유 상태든 전면 백지화 완료.
 # MODIFIED: [V44.12 UX 팩트 교정] AVWAP 암살자가 1회분 예산을 사용한다는 시각적 환각(텍스트 오기) 맹점 전면 소각. V-REV 가상 에스크로 100% 격리 팩트를 지시서에 정확히 렌더링하도록 텍스트 디커플링 수술 완료.
 # ==========================================================
@@ -17,8 +18,17 @@ import pandas_market_calendars as mcal
 
 from scheduler_core import is_market_open, get_budget_allocation
 
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# pandas_market_calendars 등 무거운 I/O 동기 함수를 asyncio 루프 내에서 직접 호출하면 전체 스케줄러가 교착(Deadlock)에 빠져 스케줄이 증발합니다. 반드시 await asyncio.wait_for(asyncio.to_thread(...)) 패턴으로 래핑하세요.
 async def scheduled_regular_trade(context):
-    if not is_market_open():
+    try:
+        is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+    except asyncio.TimeoutError:
+        logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
+        est = ZoneInfo('America/New_York')
+        is_open = datetime.datetime.now(est).weekday() < 5
+
+    if not is_open:
         return
     
     app_data = context.job.data
@@ -177,7 +187,6 @@ async def scheduled_regular_trade(context):
                     is_rev = plan.get('is_reverse', False)
                     msgs[t] += f"🔄 <b>[{t}] 리버스 주문 실행</b>\n" if is_rev else f"💎 <b>[{t}] 정규장 주문 실행</b>\n"
 
-            # MODIFIED: [V44.12 UX 팩트 교정] AVWAP 암살자가 1회분 예산을 사용한다는 시각적 환각(텍스트 오기) 맹점 전면 소각. V-REV 가상 에스크로 100% 격리 팩트를 지시서에 정확히 렌더링하도록 텍스트 디커플링 수술 완료.
             for t, ver in v_rev_tickers:
                 mod_name = "V-REV" if ver == "V_REV" else "무매4(VWAP)"
                 if ver == "V_REV":
@@ -260,4 +269,4 @@ async def scheduled_regular_trade(context):
                 await context.bot.send_message(chat_id=context.job.chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️", parse_mode='HTML')
             await asyncio.sleep(RETRY_DELAY)
 
-    await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급 에러] 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')
+    await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급 에러] 통 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')
