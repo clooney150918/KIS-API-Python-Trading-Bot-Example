@@ -12,6 +12,12 @@
 # 🚨 MODIFIED: [V43.26] 당일 고가/저가/현재가 갭 렌더링 텍스트 다이어트 및 체력 소진율 렌더링 줄바꿈(Formatting) 수술.
 # 🚨 MODIFIED: [V43.27] 전일 종가(Previous Close) 0% 베이스라인 환원 수술. 렌더링되는 모든 등락률(%)을 증권사 앱(MTS/HTS)과 100% 팩트 동기화 완료.
 # 🚨 MODIFIED: [V43.28] 사용자 인지 혼선 방어. 전일 종가(0% 베이스라인) 팩트 렌더링 명시화 및 UI 포맷팅 다이어트 수술.
+# 🚨 MODIFIED: [V44.13 당일 저가 기반 팩트 교정] 체력 소진율(ATR5) 연산의 베이스라인을 전일 종가에서 '당일 저가(Day Low)'로 디커플링하여 실제 바닥 대비 상승 물리력을 100% 팩트 반영.
+# 🚨 MODIFIED: [V44.14 듀얼 팩트 시각화] 당일 고가 및 현재가 우측에 당일 저가 대비 반등폭(Rebound Gap) 퍼센트를 듀얼 표기(/)하여 직관력 극대화.
+# 🚨 MODIFIED: [V44.15 UI 해상도 업그레이드 및 시각적 환각 교정] 게이지 바(Bar) 연산 시 소수점 버림(int)으로 인한 왜곡 맹점을 반올림(round)으로 적출하고, 10분할로 해상도를 2배 정밀하게 렌더링.
+# 🚨 MODIFIED: [V44.16 기초자산 팩트 확장] 기초자산(SOXX) 스캔 시 당일 고가 및 저가를 추가 스캔하여 VWAP 레이더망 상단에 등락률과 함께 렌더링 완료.
+# 🚨 MODIFIED: [V44.17 UI 게이지 롤백 및 올림 연산 이식] 모바일 가독성을 위해 게이지를 다시 5분할로 환원하고, 보수적 체력 경고를 위해 소수점 올림(math.ceil) 엔진을 락온하여 즉각적인 UI 전진 배치.
+# 🚨 MODIFIED: [V44.22 UI 환각 영구 소각] '타점 대기' 하드코딩 텍스트를 전면 적출하고, 실제 코어 엔진(get_decision)이 반환하는 팩트 사유(Reason)를 직접 라우팅받아 실시간 상태창에 100% 동기화 출력하도록 디커플링 수술 완료.
 # ==========================================================
 import logging
 import datetime
@@ -49,7 +55,21 @@ class AvwapConsolePlugin:
         base_tkr = "SOXX"
         base_prev_vwap, base_curr_vwap = 0.0, 0.0
         avg_vwap_5m = 0.0
+        base_day_high, base_day_low, base_prev_c = 0.0, 0.0, 0.0
+        
+        df_1m = None
         try:
+            # 기초자산 당일 고/저/전일종가 스캔
+            try:
+                base_prev_c_val = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, base_tkr), timeout=2.0)
+                base_prev_c = float(base_prev_c_val) if base_prev_c_val else 0.0
+                
+                base_hl = await asyncio.wait_for(asyncio.to_thread(self.broker.get_day_high_low, base_tkr), timeout=2.0)
+                base_day_high = float(base_hl[0]) if base_hl else 0.0
+                base_day_low = float(base_hl[1]) if base_hl else 0.0
+            except Exception as e:
+                logging.debug(f"🚨 기초자산 H/L/PrevC 스캔 에러: {e}")
+
             avwap_ctx = None
             if hasattr(self.strategy, 'v_avwap_plugin'):
                 avwap_ctx = await asyncio.wait_for(
@@ -87,6 +107,12 @@ class AvwapConsolePlugin:
 
         msg = f"🔫 <b>[ 차세대 AVWAP 듀얼 모멘텀 관제탑 ]</b>\n\n"
         msg += f"🏛️ <b>[ 기초자산 ({base_tkr}) 모멘텀 스캔 ]</b>\n"
+        
+        if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
+            b_high_pct = ((base_day_high - base_prev_c) / base_prev_c) * 100
+            b_low_pct = ((base_day_low - base_prev_c) / base_prev_c) * 100
+            msg += f"▫️ 당일 고가: <b>${base_day_high:.2f}</b> ({b_high_pct:+.2f}%)\n"
+            msg += f"▫️ 당일 저가: <b>${base_day_low:.2f}</b> ({b_low_pct:+.2f}%)\n"
         
         if base_prev_vwap > 0:
             msg += f"▫️ 전일 VWAP: <b>${base_prev_vwap:,.2f}</b>\n"
@@ -178,28 +204,36 @@ class AvwapConsolePlugin:
                 ref_price = avwap_avg if (avwap_qty > 0 and avwap_avg > 0) else curr_p
                 ref_label = "매수평단" if (avwap_qty > 0 and avwap_avg > 0) else "현재가"
                 
-                # MODIFIED: [V43.28] 사용자 인지 혼선 방어. 전일 종가 기반 등락률 통일 및 포맷팅 다이어트
+                # 시각적 렌더링용 등락률 (MTS와 동일하게 전일 종가 베이스라인 유지)
                 high_pct = ((day_high - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 low_pct = ((day_low - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 curr_pct = ((ref_price - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 
-                abs_gap_pct = abs(curr_pct)
+                # 당일 저가 기반 팩트 교정
+                rebound_gap = ref_price - day_low if ref_price >= day_low else 0.0
+                actual_rebound_pct = (rebound_gap / prev_c) * 100 if prev_c > 0 else 0.0
                 
-                exh_5 = (abs_gap_pct / atr5 * 100) if atr5 > 0 else 0
-                rem_5_pct = atr5 - abs_gap_pct
+                # 당일 저가 대비 반등폭(Rebound Gap) 듀얼 시각화 연산
+                high_rebound_gap = day_high - day_low if day_high >= day_low else 0.0
+                high_rebound_pct = (high_rebound_gap / prev_c) * 100 if prev_c > 0 else 0.0
+                curr_rebound_pct = actual_rebound_pct
                 
-                rem_5_str = f"{rem_5_pct:+.2f}% 추가 변동 여력" if rem_5_pct >= 0 else "체력 완전 고갈 (오버슈팅)"
+                exh_5 = (actual_rebound_pct / atr5 * 100) if atr5 > 0 else 0
+                rem_5_pct = atr5 - actual_rebound_pct
+                
+                rem_5_str = f"+{rem_5_pct:.2f}% 추가 상승 여력" if rem_5_pct >= 0 else "체력 완전 고갈 (오버슈팅)"
 
+                # MODIFIED: [V44.17 5분할 환원 및 올림 처리] 20% 단위로 끊고, 다음 구간 진입 시 선제적 경고를 위해 math.ceil 적용
                 def make_bar(exh):
-                    pos = min(5, max(0, int(exh / 20)))
+                    pos = min(5, max(0, math.ceil(exh / 20.0)))
                     return "━" * pos + "🎯" + "━" * (5 - pos)
                 
-                # MODIFIED: [V43.28] 전일 종가(베이스라인) 명시적 렌더링 추가
+                # 듀얼 팩트 렌더링 반영
                 msg += f"\n📊 <b>[ {t} 당일 체력 정밀 분석 ]</b>\n"
                 msg += f"▫️ 전일 종가: <b>${prev_c:.2f}</b> (베이스라인)\n"
-                msg += f"▫️ 당일 고가: <b>${day_high:.2f}</b> ({high_pct:+.2f}%)\n"
-                msg += f"▫️ 당일 저가: <b>${day_low:.2f}</b> ({low_pct:+.2f}%)\n"
-                msg += f"▫️ {ref_label}: <b>${ref_price:.2f}</b> ({curr_pct:+.2f}%)\n\n"
+                msg += f"▫️ 당일 고가: <b>${day_high:.2f}</b> ({high_pct:+.2f}%/<b>+{high_rebound_pct:.2f}%</b>)\n"
+                msg += f"▫️ 당일 저가: <b>${day_low:.2f}</b> ({low_pct:+.2f}%/<b>베이스</b>)\n"
+                msg += f"▫️ {ref_label}: <b>${ref_price:.2f}</b> ({curr_pct:+.2f}%/<b>+{curr_rebound_pct:.2f}%</b>)\n\n"
                 
                 msg += f"🔋 <b>단기 체력 (ATR5 예상진폭: {atr5:.2f}%)</b>\n"
                 msg += f"▫️ 잔여 체력: <b>{rem_5_str}</b>\n"
@@ -244,9 +278,41 @@ class AvwapConsolePlugin:
             else:
                 msg += f"▫️ 목표 익절: <b>{target_display}</b> | 하드스탑: <b>-8.0%</b>\n"
 
-            status_txt = "👀 타점 대기"
-            if is_shutdown: status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
-            elif avwap_qty > 0: status_txt = "🎯 딥매수 완료 (익절 감시중)"
+            # 🚨 MODIFIED: [V44.22 UI 환각 영구 소각] 엔진 다이렉트 질의를 통한 100% 팩트 렌더링 디커플링
+            status_txt = "👀 타점 스캔중"
+            if is_shutdown: 
+                status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
+            elif avwap_qty > 0: 
+                status_txt = "🎯 딥매수 완료 (익절 감시중)"
+            else:
+                try:
+                    base_curr_p = float(df_1m['close'].iloc[-1]) if df_1m is not None and not df_1m.empty else 0.0
+                    avwap_state_dict = {"strikes": strikes}
+                    
+                    decision = self.strategy.v_avwap_plugin.get_decision(
+                        base_ticker=base_tkr,
+                        exec_ticker=t,
+                        base_curr_p=base_curr_p,
+                        exec_curr_p=curr_p,
+                        base_day_open=0.0,
+                        avwap_avg_price=avwap_avg,
+                        avwap_qty=avwap_qty,
+                        avwap_alloc_cash=0.0,
+                        context_data=avwap_ctx,
+                        df_1min_base=df_1m,
+                        now_est=now_est,
+                        avwap_state=avwap_state_dict,
+                        regime_data=None,
+                        prev_close=prev_c,
+                        day_low=day_low,
+                        atr5=atr5
+                    )
+                    reason = decision.get('reason', '')
+                    if reason:
+                        status_txt = f"⏳ 대기 ({reason})"
+                except Exception as e:
+                    logging.debug(f"AVWAP 상태 텍스트 추출 에러: {e}")
+
             msg += f"▫️ 상태: <b>{status_txt}</b>\n"
 
             btn_toggle_mode = InlineKeyboardButton(btn_mode_text, callback_data=f"AVWAP_SET:{toggle_target_action}:{t}")

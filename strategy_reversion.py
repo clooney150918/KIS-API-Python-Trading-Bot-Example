@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_reversion.py] - 🌟 V43.28 1회분 이중 집행 및 예산 누수 엣지 케이스 완결본 🌟
+# [strategy_reversion.py] - 🌟 V44.25 예산 탈취(Stealing) 락온 🌟
 # ⚠️ V-REV 하이브리드 엔진 전용 수학적 타격 모듈
 # 💡 5년 백테스트 기반 VWAP 유동성 정밀 가중치(U_CURVE_WEIGHTS) 적용 완료
 # 💡 [V24.16 팩트 동기화] 0주 새출발 디커플링 타점 (Buy1: 0.999, Buy2: /0.935) 원본 유지
@@ -36,6 +36,9 @@
 # NEW: [V40.XX 옴니 매트릭스] V-REV 내부 U_CURVE 배열 영구 소각 및 vwap_data.py 동적 30분 재정규화 파이프라인 연결 완료
 # 🚨 MODIFIED: [V43.28 그랜드 수술] BUY 슬라이싱 누수(부족 매수) 방어. 조건 불만족 스킵 시 예산을 무조건 잔차 달러 버킷(Residual)에 이월시켜 100% 소진을 락온.
 # 🚨 MODIFIED: [V43.28 엣지 케이스 수술] SELL 이중 차감 조기 종료 방어. LIFO 큐(total_q) 자체가 실시간 팩트이므로 executed 차감을 영구 소각하여 멱등성 확보.
+# 🚨 MODIFIED: [V44.08 팩트 교정] V-REV 매수 예산 잔차 버킷 이월 시 발생하는 수량(Qty) 소수점 섞임 차원 붕괴 영구 방어 완료 (순수 달러($) 캐싱 보장)
+# 🚨 MODIFIED: [V44.11 팩트 교정] 0주 새출발 시 1층 예산 100% 강제 진입을 보장하기 위해 Buy1 상한선을 15% 할증(* 1.15)으로 상향 락온.
+# 🚨 MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
 # ==========================================================
 import math
 import os
@@ -244,7 +247,8 @@ class ReversionStrategy:
         if not is_snapshot_mode and time_str not in target_keys:
             if cached_plan:
                 if total_q == 0:
-                    p1_trigger_fact = round(prev_c / 0.935, 2)
+                    # MODIFIED: [V44.11 0주 새출발 15% 상한가 락온] 0주 진입 시 예산 100% 강제 진입을 위해 Buy1 타점을 15% 할증(1.15배)으로 상향 팩트 교정
+                    p1_trigger_fact = round(prev_c * 1.15, 2)
                     p2_trigger_fact = round(prev_c * 0.999, 2)
                     b1_budget = alloc_cash * 0.5
                     b2_budget = alloc_cash - b1_budget
@@ -292,7 +296,8 @@ class ReversionStrategy:
 
         if is_zero_start_session or total_q == 0:
             side = "BUY"
-            p1_trigger = round(prev_c / 0.935, 2)
+            # MODIFIED: [V44.11 0주 새출발 15% 상한가 락온] 0주 진입 시 예산 100% 강제 진입을 위해 Buy1 타점을 15% 할증(1.15배)으로 상향 팩트 교정
+            p1_trigger = round(prev_c * 1.15, 2)
             p2_trigger = round(prev_c * 0.999, 2)
         else:
             side = "SELL" if curr_p > prev_c else "BUY"
@@ -391,13 +396,12 @@ class ReversionStrategy:
             if rem_budget <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
-            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-            # 미체결 예산을 이월(Carry-over)하기 위해 달러($) 단위의 독립 버킷(residual)을 활용해야 하며, 
-            # slice_ratio를 남은 예산(rem_budget)에 직접 곱하여 매수 1회분 뻥튀기(Double Spending)를 영구 소각할 것.
-            slice_budget = rem_budget * slice_ratio_buy
-            
-            raw_b1_slice = slice_budget * 0.5
-            raw_b2_slice = slice_budget - raw_b1_slice
+            # 🚨 MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막]
+            # rem_budget을 반으로 가르는 기존 방식은 Buy2의 미사용 예산을 Buy1이 훔쳐서 무한 타격(34주 체결 등)하는 차원 붕괴를 유발.
+            # 전체 예산(alloc_cash)에 현재 분봉의 절대 가중치(current_weight)를 곱해 순수 1분 할당량을 도출하고,
+            # 이를 정확히 50%씩 쪼개어 각각의 고립된 잔차 버킷(Residual)에 이월시키는 완벽한 디커플링 이식.
+            raw_b1_slice = (float(alloc_cash) * 0.5) * current_weight
+            raw_b2_slice = (float(alloc_cash) * 0.5) * current_weight
             
             b1_bucket = float(self.residual["BUY1"].get(ticker, 0.0)) + raw_b1_slice
             b2_bucket = float(self.residual["BUY2"].get(ticker, 0.0)) + raw_b2_slice
@@ -407,21 +411,23 @@ class ReversionStrategy:
 
             if curr_p > 0:
                 if is_zero_start_session or curr_p <= p1_trigger:
-                    exact_q1 = (b1_budget_slice / curr_p) + float(self.residual["BUY1"].get(ticker, 0.0))
-                    alloc_q1 = int(math.floor(exact_q1))
-                    self.residual["BUY1"][ticker] = float(exact_q1 - alloc_q1)
+                    alloc_q1 = int(math.floor(b1_budget_slice / curr_p))
+                    # 수량의 소수점이 아닌 '사용하고 남은 달러'를 버킷에 돌려줌
+                    self.residual["BUY1"][ticker] = b1_bucket - (alloc_q1 * curr_p)
                     if alloc_q1 > 0:
                         orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger})
                 else:
+                    # 조건 미충족 시 예산 100% 다음 분봉으로 이월 (달러 유지)
                     self.residual["BUY1"][ticker] = b1_bucket
                     
                 if curr_p <= p2_trigger:
-                    exact_q2 = (b2_budget_slice / curr_p) + float(self.residual["BUY2"].get(ticker, 0.0))
-                    alloc_q2 = int(math.floor(exact_q2))
-                    self.residual["BUY2"][ticker] = float(exact_q2 - alloc_q2)
+                    alloc_q2 = int(math.floor(b2_budget_slice / curr_p))
+                    # 수량의 소수점이 아닌 '사용하고 남은 달러'를 버킷에 돌려줌
+                    self.residual["BUY2"][ticker] = b2_bucket - (alloc_q2 * curr_p)
                     if alloc_q2 > 0:
                         orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger})
                 else:
+                    # 조건 미충족 시 예산 100% 다음 분봉으로 이월 (달러 유지)
                     self.residual["BUY2"][ticker] = b2_bucket
             else:
                 self.residual["BUY1"][ticker] = b1_bucket
@@ -443,7 +449,6 @@ class ReversionStrategy:
                     self.residual["SELL_JACKPOT"][ticker] = float(exact_qs - alloc_qs)
                     if alloc_qs > 0:
                         orders.append({"side": "SELL", "qty": alloc_qs, "price": trigger_jackpot})
-                
                 else:
                     if l1_qty > 0 and curr_p >= trigger_l1:
                         # 1층 물량이 이미 매도된 상태를 고려하여 1층 잔여량 정밀 스캔

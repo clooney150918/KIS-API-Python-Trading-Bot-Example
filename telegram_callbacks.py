@@ -1,6 +1,25 @@
-# MODIFIED: [V44.08 가상 락다운 콜백 해체] 불필요해진 V-REV 수동 덫 장전 우회(Virtual Escrow) 로직을 전면 도려내고, 해당 콜백 접근 시 즉각 락다운(Alert) 팝업을 띄우도록 클린 라우팅 수술 완료.
 # ==========================================================
-# FILE: telegram_callbacks.py
+# [telegram_callbacks.py] - 🌟 100% 통합 완성본 🌟 (Full Version)
+# MODIFIED: [V28.14 통이관 및 큐 삭제 런타임 에러 완전 소각]
+# MODIFIED: [V28.15 그랜드 수술] 물량 통이관(SET_INIT) 콜백 라우터 영구 소각 및 
+# V14 <-> V-REV 모드 전환 시 실잔고 '0주 락온(Lock-on)' 절대 방어막 이식 완료
+# MODIFIED: [V28.16 UX 팩트 패치] 0주 락온 발동 시 일회성 팝업(Alert) 무반응 맹점을 해체하고 옵션 A 텍스트 박제 완료
+# MODIFIED: [V28.18 UX 팩트 패치] 0주 락온 시 자기 자신의 모드(동일 모드) 서브메뉴 진입 허용 렌더링 완료
+# MODIFIED: [V28.19 그랜드 수술] KIS API 가짜 0주(Phantom 0-Share) 응답 맹점 원천 차단. 
+# holdings None Safe-Casting 쉴드 이식 및 V14 장부 + V-REV 큐 다이렉트 I/O를 결합한 삼중 교차 검증(Triple Verification) 방어막 최종 탑재 완료
+# MODIFIED: [V28.22 스냅샷 렌더링 디커플링 수술] 졸업 카드 발급(HIST:IMG) 시 
+# 콜백 데이터에 고유 식별자(ID)가 존재할 경우 해당 과거 지층(History)을 
+# 100% 정밀 타격하여 렌더링하도록 팩트 라우팅 엔진 이식.
+# MODIFIED: [V28.25 그랜드 수술] 동적 수수료율 설정을 위한 INPUT:FEE 콜백 라우팅 분기 신설 완료.
+# MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
+# MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
+# MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
+# 🚨 [V29.02 UX 팩트 패치] "역사 목록으로 돌아가기(HIST:LIST)" 콜백 시 cmd_history 호출에 따른 런타임 즉사 맹점 소각. 동적 리스트 렌더링 엔진 단독 이식 완료.
+# 🚨 [V29.03 핫픽스] UnboundLocalError 런타임 즉사 유발 원흉(AVWAP 내부 로컬 임포트 섀도잉) 100% 소각 완료.
+# NEW: [V29.04] queue_ledger.queues 객체 직접 참조 런타임 붕괴 데드코드 전면 소각 및 다이렉트 I/O 멱등성 방어막 이식
+# MODIFIED: [V30.09 핫픽스] 잔존 데드코드(pytz) 영구 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
+# 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 반영. 불필요해진 AVWAP 동적 파라미터(TARGET_SET, GAP_SET) 콜백 라우팅 전면 소각 완료.
+# 🚨 MODIFIED: [V44.24 V14_VWAP 플래그 원상 복구 및 EXEC 맹점 소각] V14_VWAP 모드를 V14_LOC와 완벽하게 구분하기 위해 manual 플래그를 True로 복원시키고, 이로 인해 수동 장전(EXEC)이 가로막히던 로직을 전면 철거하여 UI 렌더링과 엔진의 무결성을 동시 확보함.
 # ==========================================================
 import logging
 import datetime
@@ -394,15 +413,13 @@ class TelegramCallbacks:
             t = sub
             ver = self.cfg.get_version(t)
 
-            # 🚨 MODIFIED: [V44.09 예방 덫 영구 소각] V-REV는 자전거래 의심 회피를 위해 예방 덫을 완전히 소각했으므로 해당 콜백 접근 시 락다운 팝업 출력
             if ver == "V_REV":
                 await query.answer("🛑 [예방 덫 전면 소각] V-REV 모드는 자전거래 의심을 회피하고 AVWAP 암살자 가동을 위해 예방 덫 수동 장전 기능을 영구 소각했습니다.", show_alert=True)
                 return
 
             await query.answer()
-            if getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t):
-                await context.bot.send_message(chat_id, "🚨 [격발 차단] 수동(한투 알고리즘) 모드가 가동 중입니다. 지시서를 참고하여 한투 앱(V앱)에서 직접 매매를 걸어주십시오.")
-                return
+            
+            # 🚨 MODIFIED: [V44.24] V14 VWAP의 수동 장전을 허용하기 위해 블로킹 삭제 완료
             
             await query.edit_message_text(f"🚀 {t} 수동 강제 전송 시작 (교차 분리)...")
             
@@ -448,6 +465,11 @@ class TelegramCallbacks:
 
             plan = self.strategy.get_plan(t, curr_p, safe_avg, logic_qty_v14, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], is_simulation=True)
             
+            if safe_qty == 0:
+                for o in plan.get('core_orders', []):
+                    if o['side'] == 'BUY' and 'Buy1' in o.get('desc', ''):
+                        o['price'] = round(prev_c * 1.15, 2)
+
             title = f"💎 <b>[{t}] 무매4 정규장 주문 수동 실행</b>\n"
             msg = title
             
@@ -602,8 +624,9 @@ class TelegramCallbacks:
                     self.cfg.set_avwap_hybrid_mode(ticker, False)
                     
                 if mode_type == "V14_VWAP":
+                    # 🚨 MODIFIED: [V44.24 V14_VWAP 모드 플래그 원상 복구] V14 LOC와 완벽하게 구분되도록 True 락온
                     self.cfg.set_manual_vwap_mode(ticker, True)
-                    mode_txt = "🕒 VWAP 타임 슬라이싱 (유동성 추적)"
+                    mode_txt = "🕒 VWAP 타임 슬라이싱 (자동 유동성 추적)"
                 else:
                     self.cfg.set_manual_vwap_mode(ticker, False)
                     mode_txt = "📉 LOC 단일 타격 (초안정성)"

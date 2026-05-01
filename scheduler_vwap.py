@@ -7,6 +7,7 @@
 # 🚨 MODIFIED: [V43.00 갭 스위칭 자율주행] 수동 스위치 참조 소각 및 옴니 매트릭스 상승장 자동 가동 락온 이식
 # 🚨 MODIFIED: [V43.28 그랜드 핫픽스] VWAP 스케줄러 기상 시간(15:27)과 타임 윈도우(15:30) 엇박자로 인한 100% 초과 덤핑 버그 원천 차단.
 # NEW: [V44.05 가상 에스크로] V-REV 예방적 덫 취소(Nuke) 텍스트를 '가상 에스크로 해제'로 팩트 교정 완료
+# 🚨 MODIFIED: [V44.08 팩트 교정] V-REV 타격 시 옴니 필터(omni_filter) 개입 전면 소각, 역추세 진입로 완벽 개방
 # ==========================================================
 import logging
 import datetime
@@ -385,10 +386,8 @@ async def scheduled_vwap_trade(context):
                         
                         gap_thresh = getattr(cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(t)
                         
-                        omni_filter = {"allow_buy": False}
-                        if regime_data is not None:
-                            current_qty_for_filter = int(float(safe_holdings.get(t, {}).get('qty', 0)))
-                            omni_filter = strategy.apply_omni_matrix_filter(t, current_qty_for_filter, regime_data)
+                        # MODIFIED: [V44.08 팩트 교정] V-REV 매수 시 옴니 필터에 의한 과잉 락다운 100% 소각 완료, 역추세 진입로 완전 개방
+                        omni_filter = {"allow_buy": True}  
                             
                         if omni_filter["allow_buy"] and current_regime == "BUY" and not vwap_cache.get(f"REV_{t}_gap_hijack_fired"):
                             base_tkr = base_map.get(t, 'SOXX')
@@ -482,11 +481,12 @@ async def scheduled_vwap_trade(context):
                         target_price = o['price']
                         side = o['side']
 
-                        if side == "BUY" and regime_data is not None:
-                            current_qty_for_filter = int(float(safe_holdings.get(t, {}).get('qty', 0)))
-                            omni_filter = strategy.apply_omni_matrix_filter(t, current_qty_for_filter, regime_data)
-                            if not omni_filter["allow_buy"]:
-                                continue
+                        # MODIFIED: [V44.08 팩트 교정] VWAP 분할 타격 시 옴니 필터(omni_filter) 개입 100% 소각, V-REV 매수 온전하게 작동
+                        # if side == "BUY" and regime_data is not None:
+                        #    current_qty_for_filter = int(float(safe_holdings.get(t, {}).get('qty', 0)))
+                        #    omni_filter = strategy.apply_omni_matrix_filter(t, current_qty_for_filter, regime_data)
+                        #    if not omni_filter["allow_buy"]:
+                        #        continue
                         
                         ask_price = float(await asyncio.to_thread(broker.get_ask_price, t) or 0.0)
                         bid_price = float(await asyncio.to_thread(broker.get_bid_price, t) or 0.0)

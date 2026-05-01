@@ -1,5 +1,6 @@
 # MODIFIED: [V44.08 장부 오염 디커플링] KIS 실잔고 스캔 시 AVWAP 암살자가 확보한 물량을 사전에 차감(Decoupling)하여, 암살자 물량이 V-REV LIFO 큐에 '수동 매수'로 오판되어 강제 편입되는 치명적 장부 오염 엣지 케이스 원천 차단.
-# NEW: [V44.09 AVWAP 유령 매수 환각 원천 차단] V-REV 모드에서 0주 졸업 판별이 확정되었음에도 인메모리(tracking_cache)에 AVWAP 물량이 남아있을 경우, 이를 즉각 포맷하고 영속성 상태 파일(save_state)까지 100% 소각하여 허공에 익절 주문을 난사하는 런타임 환각 및 통신 과부하(Reject) 맹점 완벽 수술.
+# MODIFIED: [V44.09 AVWAP 유령 매수 환각 원천 차단] V-REV 모드에서 0주 졸업 판별이 확정되었음에도 인메모리(tracking_cache)에 AVWAP 물량이 남아있을 경우, 이를 즉각 포맷하고 영속성 상태 파일(save_state)까지 100% 소각하여 허공에 익절 주문을 난사하는 런타임 환각 및 통신 과부하(Reject) 맹점 완벽 수술.
+# NEW: [V44.10 비파괴 보정(CALIB_SELL) 0달러 폭탄 방어막 이식] 실잔고가 0주가 되어 오차를 교정(CALIB_SELL)할 때, KIS 서버가 반환하는 평단가($0.00)를 그대로 매도가에 꽂아 수익률이 -100%로 붕괴하던 치명적 맹점 전면 수술. 체결 원장에서 실제 매도 평단가를 역산하여 주입하고, 실패 시 기존 장부 평단가(temp_sim_avg)를 강제 덮어씌워 PnL 훼손을 원천 차단 완료.
 # ==========================================================
 # FILE: telegram_sync_engine.py
 # ==========================================================
@@ -222,15 +223,56 @@ class TelegramSyncEngine:
                     gap_qty = actual_qty - temp_sim_qty
                     if gap_qty != 0:
                         calib_side = "BUY" if gap_qty > 0 else "SELL"
+                        
+                        # 🚨 NEW: [V44.10 비파괴 보정 0달러 폭탄 방어막 이식]
+                        calib_price = actual_avg
+                        if calib_side == "SELL" and actual_avg <= 0.0:
+                            actual_clear_price_calib = 0.0
+                            if target_execs:
+                                sell_execs_calib = [ex for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01"]
+                                if sell_execs_calib:
+                                    tot_amt_calib = sum(int(float(ex.get('ft_ccld_qty') or '0')) * float(ex.get('ft_ccld_unpr3') or '0') for ex in sell_execs_calib)
+                                    tot_q_calib = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in sell_execs_calib)
+                                    if tot_q_calib > 0:
+                                        actual_clear_price_calib = round(tot_amt_calib / tot_q_calib, 4)
+                            
+                            if actual_clear_price_calib == 0.0 and raw_execs:
+                                recent_sells = [ex for ex in raw_execs if ex.get('sll_buy_dvsn_cd') == "01"]
+                                if recent_sells:
+                                    recent_sells.sort(key=lambda x: f"{x.get('ord_dt', '')}{x.get('ord_tmd', '')}", reverse=True)
+                                    last_sell_dt = recent_sells[0].get('ord_dt')
+                                    same_day_sells = [ex for ex in recent_sells if ex.get('ord_dt') == last_sell_dt]
+                                    tot_amt = sum(int(float(ex.get('ft_ccld_qty') or '0')) * float(ex.get('ft_ccld_unpr3') or '0') for ex in same_day_sells)
+                                    tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in same_day_sells)
+                                    if tot_q > 0:
+                                        actual_clear_price_calib = round(tot_amt / tot_q, 4)
+                            
+                            if actual_clear_price_calib > 0.0:
+                                calib_price = actual_clear_price_calib
+                                logging.info(f"🛡️ [{ticker}] CALIB_SELL 0달러 역산 방어: 당일/최근 체결 원장의 실제 매도 평균가(${calib_price:.4f})를 팩트 주입했습니다.")
+                            else:
+                                calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
+                                logging.info(f"🛡️ [{ticker}] CALIB_SELL 0달러 폴백 방어: 원장 결측으로 기존 장부 평단가(${calib_price:.4f})를 강제 주입했습니다.")
+                                
+                            calib_avg = temp_sim_avg
+                        elif calib_side == "BUY" and actual_avg <= 0.0:
+                            calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
+                            calib_avg = temp_sim_avg
+                            logging.info(f"🛡️ [{ticker}] CALIB_BUY 0달러 폴백 방어: 기존 장부 평단가(${calib_price:.4f})를 강제 주입했습니다.")
+                        else:
+                            calib_price = actual_avg if actual_avg > 0 else temp_sim_avg
+                            calib_avg = actual_avg if actual_avg > 0 else temp_sim_avg
+                            
                         calib_item = {
                             'date': target_ledger_str, 
                             'side': calib_side,
                             'qty': abs(gap_qty), 
-                            'price': actual_avg, 
-                            'avg_price': actual_avg,
+                            'price': calib_price, 
+                            'avg_price': calib_avg,
                             'exec_id': f"CALIB_{int(time.time())}",
                             'desc': "비파괴 보정"
                         }
+                        
                         if is_rev:
                             calib_item['is_reverse'] = True
                         new_target_records.append(calib_item)
