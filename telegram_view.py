@@ -1,6 +1,7 @@
-# MODIFIED: [V44.30 AVWAP 설정 제어 통합] /settlement 뷰포트에 AVWAP 목표 스위치(자율/수동), 근무 모드(조기/다중) 버튼을 전면 이식 완료.
 # ==========================================================
 # FILE: telegram_view.py
+# ==========================================================
+# MODIFIED: [V44.41 UI 팩트 교정] 지시서 렌더링 시 스냅샷 락온 상태를 동적으로 시각화하는 [📸락온] 꼬리표 부착 완료.
 # ==========================================================
 import os
 import math
@@ -236,7 +237,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V44.30 AVWAP 설정 통제소 대통합</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V44.41 스냅샷 락온 및 UX 동기화</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -353,15 +354,19 @@ class TelegramView:
             if is_rev:
                 bdg_txt = f"리버스 잔금쿼터: ${safe_one_portion:,.0f}"
                 icon = "🩸" if proc_status == "🩸리버스(긴급수혈)" else "🔄"
-                body_msg += f"{icon} <b>[{t}] {v_mode_display} 리버스</b>\n"
+                # MODIFIED: [V44.41 UI 팩트 교정] 스냅샷 락온 상태 시각화
+                snap_tag = " <code>[📸락온]</code>" if t_info.get('has_snapshot') else ""
+                body_msg += f"{icon} <b>[{t}] {v_mode_display} 리버스</b>{snap_tag}\n"
                 body_msg += f"📈 진행: <b>{safe_t_val:.4f}T / {int(safe_split)}분할</b>\n"
             elif v_mode == "V_REV":
                 bdg_txt = f"1회(1배수) 예산: ${safe_one_portion:,.0f}"
-                body_msg += f"{main_icon} <b>[{t}] {v_mode_display}</b>\n"
+                snap_tag = " <code>[📸락온]</code>" if t_info.get('has_snapshot') else ""
+                body_msg += f"{main_icon} <b>[{t}] {v_mode_display}</b>{snap_tag}\n"
                 body_msg += f"📈 큐(Queue): <b>{t_info.get('v_rev_q_lots', 0)}개 지층 대기 중 (총 {t_info.get('v_rev_q_qty', 0)}주)</b>\n"
             else:
                 bdg_txt = f"당일 예산: ${safe_one_portion:,.0f}"
-                body_msg += f"{main_icon} <b>[{t}] {v_mode_display}</b>\n"
+                snap_tag = " <code>[📸락온]</code>" if t_info.get('has_snapshot') else ""
+                body_msg += f"{main_icon} <b>[{t}] {v_mode_display}</b>{snap_tag}\n"
                 body_msg += f"📈 진행: <b>{safe_t_val:.4f}T / {int(safe_split)}분할</b>\n"
             
             body_msg += f"💵 총 시드: ${safe_seed:,.0f}\n"
@@ -524,10 +529,6 @@ class TelegramView:
 
         return final_msg, InlineKeyboardMarkup(keyboard) if keyboard else None
 
-    # 🚨 MODIFIED: [V44.30 AVWAP 설정 라우터 통합] /settlement 뷰포트에 AVWAP의 모든 설정(자율/수동, 다중/조기퇴근) 기능을 전면 팩트 이식 완료.
-# MODIFIED: [V44.31 AVWAP 수동 목표 수익률 표출 팩트 교정] /settlement 뷰포트에 수동 목표 수익률(%)이 렌더링되지 않던 맹점 원천 차단. config에서 타겟 수익률을 동적 스캔하여 UI에 100% 락온 렌더링 완료.
-# MODIFIED: [V44.32 UI 텍스트 다이어트 및 듀얼 모멘텀 팩트 교정] AVWAP 제어 버튼 텍스트가 모바일에서 잘리는 현상을 막기 위해 종목명(SOXL)을 도려내고 진공 압축. SOXS는 SOXL의 설정을 100% 추종하는 그림자 티커이므로 종목명 생략이 아키텍처상 더 정확함.
-# MODIFIED: [V44.33 AVWAP 관제탑 버튼 렌더링 락다운 해체] AVWAP 모드가 OFF 상태일 때도 실시간 레이더(모니터)를 상시 조회할 수 있도록, 관제탑 버튼의 렌더링을 is_avwap 조건문에서 전면 디커플링(적출)하여 100% 상시 표출되도록 팩트 수술 완료.
     def get_settlement_message(self, active_tickers, config, atr_data, tracking_cache=None):
         if tracking_cache is None: tracking_cache = {}
         
@@ -555,7 +556,7 @@ class TelegramView:
             if ver == "V_REV":
                 msg += "▫️ 1회 예산: 총 시드의 15% (고정 할당)\n"
                 msg += "▫️ 목표: [가상1층] 매수단가+0.6%\n"
-                msg += "              [상위층] 평단가+0.5% (디커플링)\n"
+                msg += "               [상위층] 평단가+0.5% (디커플링)\n"
                 msg += f"▫️ 자동복리: {comp_rate}%\n"
                 msg += f"▫️ 증권사 수수료: <b>{fee_rate}%</b>\n"
             
@@ -610,7 +611,6 @@ class TelegramView:
                 keyboard.append([InlineKeyboardButton(avwap_txt, callback_data=avwap_cb)])
                 
                 if t == "SOXL":
-                    # 🚨 팩트 교정: 관제탑 모니터 버튼은 AVWAP ON/OFF 상태와 무관하게 100% 항시 렌더링되도록 분리
                     keyboard.append([InlineKeyboardButton(f"🔫 {t} (롱) + SOXS (숏) 모멘텀 관제탑 (모니터)", callback_data=f"AVWAP:MENU:{t}")])
                     
                     if is_avwap:

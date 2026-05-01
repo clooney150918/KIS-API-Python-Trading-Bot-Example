@@ -1,12 +1,7 @@
 # ==========================================================
-# [telegram_bot.py] - 🌟 100% 통합 무결점 완성본 (V44.35) 🌟
-# 🚨 [V27.15 핫픽스] tx_lock 병목 해체 및 런타임 방어막 이식
-# 🚨 [V28.03 그랜드 수술] 10시 정각 확정 정산 및 졸업 발급 락온 구축
-# 🚨 [V28.10 스냅샷 디커플링 수술] 지시서 렌더링 시 실잔고 오염 방어막 이식
-# 🚨 [V29.01 평단가 하방 오염 영구 소각] KIS 평단가 대신 큐 장부 진성 평단가 역산 디커플링 적용
-# 🚨 [V30.04 AVWAP 타임라인 시간 텍스트 진공 압축] 사용자 인지 혼란 유발 텍스트 전면 도려냄
-# 🚨 [V44.09 AVWAP 유령 매수 환각 방어막 이식] V-REV 0주 졸업 판별 확정 시 AVWAP 인메모리 및 영속성 상태 파일을 100% 포맷 소각하여 허공에 주문을 난사하는 맹점 완벽 교정
-# 🚨 MODIFIED: [V44.35 0주 팩트 디커플링 수술] 실잔고가 0주(전량 익절 완료)임에도 과거 스냅샷의 물량(total_q)을 참조하여 지시서에 잭팟 텍스트를 유령 렌더링하던 시각적 맹점 영구 소각 완료.
+# FILE: telegram_bot.py
+# ==========================================================
+# MODIFIED: [V44.41 UI 팩트 교정] 지시서 렌더링 시 스냅샷 락온 상태를 뷰포트로 직결 전달(has_snapshot 팩트 이식)
 # ==========================================================
 import logging
 import datetime
@@ -18,6 +13,7 @@ import asyncio
 import html
 import yfinance as yf
 import pandas_market_calendars as mcal 
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
@@ -89,6 +85,7 @@ class TelegramController:
 
     def _calculate_budget_allocation(self, cash, tickers):
         sorted_tickers = sorted(tickers, key=lambda x: 0 if x == "SOXL" else (1 if x == "TQQQ" else 2))
+        
         allocated = {}
         rem_cash = cash
         
@@ -199,7 +196,7 @@ class TelegramController:
         if not self._is_admin(update):
             return
             
-        status_msg = await update.message.reply_text("⏳ <b>[AVWAP 듀얼 모멘텀 관제탑]</b>\n레이더망을 가동하여 시장 데이터를 스캔 중입니다...", parse_mode='HTML')
+        status_msg = await update.message.reply_text("⏳ <b>[AVWAP 듀얼 모멘텀 관제탑]</b>\n레이더망을 가동하여 시장 데이터를 스캔 중...")
             
         try:
             from telegram_avwap_console import AvwapConsolePlugin
@@ -480,7 +477,7 @@ class TelegramController:
             is_zero_start_fact = (actual_qty == 0)
             if cached_snap:
                 if actual_qty == 0:
-                    # 🚨 MODIFIED: [V44.35 0주 팩트 디커플링 수술] 0주 스윕 후에도 과거 스냅샷의 수량을 참조하여 '잭팟' 유령 텍스트가 렌더링되던 맹점 영구 소각.
+                    # MODIFIED: [V44.35 0주 팩트 디커플링 수술]
                     logic_qty = 0
                     is_zero_start_fact = True
                 else:
@@ -725,7 +722,9 @@ class TelegramController:
                 'vrev_gap_switch': getattr(self.cfg, 'get_vrev_gap_switching_mode', lambda x: False)(t),
                 'vrev_gap_thresh': getattr(self.cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(t),
                 'is_manual_vwap': is_manual_vwap,
-                'is_zero_start': is_zero_start_fact
+                'is_zero_start': is_zero_start_fact,
+                # MODIFIED: [V44.41 UI 팩트 교정] 스냅샷 락온 상태 전달
+                'has_snapshot': bool(cached_snap)
             })
             
             total_buy_needed += sum(o['price']*o['qty'] for o in plan.get('orders', []) if o.get('side')=='BUY')
@@ -806,7 +805,7 @@ class TelegramController:
     async def cmd_mode(self, update, context):
         if not self._is_admin(update):
             return
-            
+        
         active_tickers = self.cfg.get_active_tickers()
 
         report = "📊 <b>[ 자율주행 변동성 마스터 지표 상세 분석 ]</b>\n\n"
