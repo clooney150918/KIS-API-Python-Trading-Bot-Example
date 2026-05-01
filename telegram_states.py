@@ -1,18 +1,7 @@
+# MODIFIED: [V44.30 수동 입력 렌더링 수술] 텔레그램 창에 수동 목표 수익률(%) 입력 후, /avwap 콘솔 갱신이 아닌 /settlement(환경설정) 화면으로 직결되도록 제자리 렌더링(edit_message_text) 파이프라인 개조 완료.
 # ==========================================================
-# [telegram_states.py] - 🌟 100% 통합 완성본 🌟 (Part 1)
-# MODIFIED: [V28.13 장부 텍스트 수정 런타임 에러 완전 소각]
-# QueueLedger 객체 의존성(AttributeError) 전면 철거. 
-# 복잡한 클래스를 거치지 않고 data/queue_ledger.json 파일을 직접 열어 
-# 덮어쓰는 순수 다이렉트 파일 I/O(Direct File I/O) 우회망 완벽 이식.
-# MODIFIED: [V28.25 동적 수수료율 텍스트 입력 라우터 수술] 
-# 사용자가 텔레그램 창에 입력한 수수료(%)를 파싱하여 config에 저장하는 CONF_FEE 상태 처리 로직 완벽 이식.
-# NEW: [V28.31] 텔레그램 하단 고정 키보드 텍스트 라우팅 복구 (코파일럿 방식 채택)
-# MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo('America/New_York') 이식으로 타임존 무결성 달성
-# 🚨 MODIFIED: [V32.00] 12차 AVWAP 백테스트 팩트 반영. 불필요해진 동적 파라미터(AVWAP_TARGET 등) 텍스트 입력 라우터 전면 소각.
-# NEW: [V40.XX 옴니 매트릭스] V-REV 장막판 갭 스위칭 임계치(Gap Threshold) 텍스트 수신 라우터 신설 탑재
-# 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 사용자가 설정하는 커스텀 목표 수익률(Target) 텍스트 수신 라우터 부활 수술 완료.
+# FILE: telegram_states.py
 # ==========================================================
-# NEW: [리팩토링 2단계] 유저 텍스트 입력 및 상태 기계(State Machine) 독립 클래스 분리
 import logging
 import datetime
 from zoneinfo import ZoneInfo
@@ -133,7 +122,7 @@ class TelegramStates:
             val = float(text)
             parts = state.split("_")
             
-            # 🚨 [V43.00 복원] AVWAP 타겟 수익률 설정 라우터
+            # 🚨 [V44.30] AVWAP 수동 목표수익률 입력 후 /settlement 뷰포트로 즉결 이식
             if state.startswith("CONF_AVWAP_TARGET"):
                 if val <= 0:
                     return await update.message.reply_text("❌ 오류: 목표 수익률은 0보다 커야 합니다.")
@@ -141,12 +130,26 @@ class TelegramStates:
                 if hasattr(self.cfg, 'set_avwap_target_profit'):
                     self.cfg.set_avwap_target_profit(ticker, val)
                 
-                # 설정 후 다시 콘솔 렌더링 호출을 위해 뷰 객체 임포트
-                from telegram_view import TelegramView
-                tmp_view = TelegramView(self.cfg)
-                msg, markup = tmp_view.get_avwap_console_menu(ticker)
-                await update.message.reply_text(f"✅ <b>[{ticker}] AVWAP 목표 수익률이 +{val:.1f}%로 즉시 변경되었습니다!</b>", parse_mode='HTML')
-                await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
+                del controller.user_states[chat_id]
+                
+                # 메모리에 MANUAL 상태를 확실히 인젝션
+                if 'app_data' not in context.bot_data:
+                    context.bot_data['app_data'] = {}
+                context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
+                
+                if context.job_queue:
+                    for job in context.job_queue.jobs():
+                        if job.data is not None:
+                            job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
+                
+                await update.message.reply_text(f"✅ <b>[{ticker}] 수동 목표 수익률이 {val}%로 설정되며 '🖐️수동 고정' 모드로 자동 전환되었습니다.</b>", parse_mode='HTML')
+                
+                # 설정 완료 후 /settlement(설정) 화면으로 직결
+                try:
+                    await controller.cmd_settlement(update, context)
+                except Exception as e:
+                    logging.error(f"수동 목표 설정 후 환경설정 복귀 에러: {e}")
+                return
 
             elif state.startswith("SEED"):
                 if val < 0:

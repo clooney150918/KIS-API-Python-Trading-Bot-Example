@@ -1,25 +1,7 @@
+# MODIFIED: [V44.30 AVWAP 설정 콜백 라우터 디커플링] 사용자가 AVWAP 타겟 모드(수동/자동) 및 출장 모드(조기/다중)를 변경할 때, AVWAP 콘솔이 아닌 /settlement 뷰포트를 갱신하도록 라우팅 배선 전면 교체 완료.
+# MODIFIED: [V44.30 순수 모니터 호출 개통] /avwap 레이더(모니터) 호출 시 더 이상 모드 활성화 유무에 막히지 않고 즉시 독립 관제탑을 띄우도록 필터링 가드 전면 해체.
 # ==========================================================
-# [telegram_callbacks.py] - 🌟 100% 통합 완성본 🌟 (Full Version)
-# MODIFIED: [V28.14 통이관 및 큐 삭제 런타임 에러 완전 소각]
-# MODIFIED: [V28.15 그랜드 수술] 물량 통이관(SET_INIT) 콜백 라우터 영구 소각 및 
-# V14 <-> V-REV 모드 전환 시 실잔고 '0주 락온(Lock-on)' 절대 방어막 이식 완료
-# MODIFIED: [V28.16 UX 팩트 패치] 0주 락온 발동 시 일회성 팝업(Alert) 무반응 맹점을 해체하고 옵션 A 텍스트 박제 완료
-# MODIFIED: [V28.18 UX 팩트 패치] 0주 락온 시 자기 자신의 모드(동일 모드) 서브메뉴 진입 허용 렌더링 완료
-# MODIFIED: [V28.19 그랜드 수술] KIS API 가짜 0주(Phantom 0-Share) 응답 맹점 원천 차단. 
-# holdings None Safe-Casting 쉴드 이식 및 V14 장부 + V-REV 큐 다이렉트 I/O를 결합한 삼중 교차 검증(Triple Verification) 방어막 최종 탑재 완료
-# MODIFIED: [V28.22 스냅샷 렌더링 디커플링 수술] 졸업 카드 발급(HIST:IMG) 시 
-# 콜백 데이터에 고유 식별자(ID)가 존재할 경우 해당 과거 지층(History)을 
-# 100% 정밀 타격하여 렌더링하도록 팩트 라우팅 엔진 이식.
-# MODIFIED: [V28.25 그랜드 수술] 동적 수수료율 설정을 위한 INPUT:FEE 콜백 라우팅 분기 신설 완료.
-# MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
-# MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
-# MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
-# 🚨 [V29.02 UX 팩트 패치] "역사 목록으로 돌아가기(HIST:LIST)" 콜백 시 cmd_history 호출에 따른 런타임 즉사 맹점 소각. 동적 리스트 렌더링 엔진 단독 이식 완료.
-# 🚨 [V29.03 핫픽스] UnboundLocalError 런타임 즉사 유발 원흉(AVWAP 내부 로컬 임포트 섀도잉) 100% 소각 완료.
-# NEW: [V29.04] queue_ledger.queues 객체 직접 참조 런타임 붕괴 데드코드 전면 소각 및 다이렉트 I/O 멱등성 방어막 이식
-# MODIFIED: [V30.09 핫픽스] 잔존 데드코드(pytz) 영구 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
-# 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 반영. 불필요해진 AVWAP 동적 파라미터(TARGET_SET, GAP_SET) 콜백 라우팅 전면 소각 완료.
-# 🚨 MODIFIED: [V44.24 V14_VWAP 플래그 원상 복구 및 EXEC 맹점 소각] V14_VWAP 모드를 V14_LOC와 완벽하게 구분하기 위해 manual 플래그를 True로 복원시키고, 이로 인해 수동 장전(EXEC)이 가로막히던 로직을 전면 철거하여 UI 렌더링과 엔진의 무결성을 동시 확보함.
+# FILE: telegram_callbacks.py
 # ==========================================================
 import logging
 import datetime
@@ -419,8 +401,6 @@ class TelegramCallbacks:
 
             await query.answer()
             
-            # 🚨 MODIFIED: [V44.24] V14 VWAP의 수동 장전을 허용하기 위해 블로킹 삭제 완료
-            
             await query.edit_message_text(f"🚀 {t} 수동 강제 전송 시작 (교차 분리)...")
             
             async with self.tx_lock:
@@ -624,7 +604,6 @@ class TelegramCallbacks:
                     self.cfg.set_avwap_hybrid_mode(ticker, False)
                     
                 if mode_type == "V14_VWAP":
-                    # 🚨 MODIFIED: [V44.24 V14_VWAP 모드 플래그 원상 복구] V14 LOC와 완벽하게 구분되도록 True 락온
                     self.cfg.set_manual_vwap_mode(ticker, True)
                     mode_txt = "🕒 VWAP 타임 슬라이싱 (자동 유동성 추적)"
                 else:
@@ -633,6 +612,9 @@ class TelegramCallbacks:
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ <b>집행 방식:</b> {mode_txt}\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
 
+        # 🚨 MODIFIED: [V44.30 AVWAP 설정 콜백 라우터 디커플링]
+        # 수동/자율 목표 모드 및 출장 모드 스위칭 시, 콘솔 화면 갱신을 소각하고
+        # 즉시 /settlement(환경설정) 화면으로 직결되도록 라우팅 팩트 이식 완료.
         elif action == "AVWAP_SET":
             action_type = sub
             ticker = data[2]
@@ -654,11 +636,9 @@ class TelegramCallbacks:
                 set_tracking_mode("MANUAL")
                 controller.user_states[chat_id] = f"CONF_AVWAP_TARGET_{ticker}"
                 
+                # V44.30 팩트: /settlement 환경설정 메뉴 제자리 갱신
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                 except Exception:
                     pass
 
@@ -672,25 +652,19 @@ class TelegramCallbacks:
             elif action_type == "TARGET_AUTO":
                 set_tracking_mode("AUTO")
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                     await query.answer(f"✅ [{ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
                         await query.answer(f"✅ [{ticker}] 이미 최신 상태(🤖자율주행)입니다.", show_alert=False)
                     else:
-                        logging.error(f"관제탑 새로고침 에러: {e}")
-                        await query.answer("모드 변경 완료. /avwap을 다시 호출해주세요.", show_alert=False)
+                        logging.error(f"설정 새로고침 에러: {e}")
+                        await query.answer("모드 변경 완료. /settlement를 다시 호출해주세요.", show_alert=False)
                     
             elif action_type == "EARLY":
                 self.cfg.set_avwap_multi_strike_mode(ticker, False)
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                     await query.answer("✅ 조기퇴근 모드(1회 익절)로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
@@ -701,10 +675,7 @@ class TelegramCallbacks:
             elif action_type == "MULTI":
                 self.cfg.set_avwap_multi_strike_mode(ticker, True)
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                     await query.answer("✅ 무제한 다중 출장 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
@@ -713,6 +684,7 @@ class TelegramCallbacks:
                         pass
                 
             elif action_type == "REFRESH":
+                # 🚨 [V44.30] 팩트 유지: /avwap 모니터의 새로고침 기능은 그대로 놔둡니다.
                 if context.job_queue:
                     for job in context.job_queue.jobs():
                         if job.data is not None:
@@ -733,11 +705,8 @@ class TelegramCallbacks:
             await query.answer()
             if sub == "MENU":
                 ticker = data[2]
-                is_hybrid_on = getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False)(ticker)
-                if not is_hybrid_on:
-                    await context.bot.send_message(chat_id, f"⚠️ [{ticker}] AVWAP 하이브리드 모드가 꺼져있습니다. 먼저 활성화해주세요.")
-                    return
-                    
+                
+                # 🚨 [V44.30 순수 모니터링 팩트 교정] 활성화 유무 검사 로직을 전면 소각하여 무조건 레이더에 접근 가능하게 함.
                 try:
                     from telegram_avwap_console import AvwapConsolePlugin
                     plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
@@ -763,12 +732,26 @@ class TelegramCallbacks:
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
                     self.cfg.set_avwap_hybrid_mode(ticker, True)
                 self.cfg.set_upward_sniper_mode(ticker, False) 
-                await query.edit_message_text(f"🔥 <b>[{ticker}] 차세대 12차 AVWAP 암살자 모드가 락온(Lock-on) 되었습니다!</b>\n▫️ 남은 가용 예산 100%를 활용하여 장중 딥매수 타점을 정밀 사냥합니다.\n▫️ <code>/avwap</code> 명령어로 독립 관제탑에 접속하세요.", parse_mode='HTML')
+                
+                # 🚨 MODIFIED: [V44.30 UI 연결성 보강] AVWAP ON 격발 즉시 /settlement 뷰포트를 갱신하여 켜진 상태를 확인시킴
+                try:
+                    await controller.cmd_settlement(update, context)
+                except Exception:
+                    pass
+                    
+                await context.bot.send_message(chat_id, f"🔥 <b>[{ticker}] 차세대 12차 AVWAP 암살자 모드가 락온(Lock-on) 되었습니다!</b>\n▫️ 남은 가용 예산 100%를 활용하여 장중 딥매수 타점을 정밀 사냥합니다.\n▫️ <code>/avwap</code> 명령어로 독립 관제탑 레이더망에 접속하세요.", parse_mode='HTML')
                 return
             elif mode_val == "AVWAP_OFF":
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
                     self.cfg.set_avwap_hybrid_mode(ticker, False)
-                await query.edit_message_text(f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리 전술이 즉시 해제되었습니다.</b>", parse_mode='HTML')
+                
+                # 🚨 MODIFIED: [V44.30 UI 연결성 보강] AVWAP OFF 격발 즉시 /settlement 뷰포트 갱신
+                try:
+                    await controller.cmd_settlement(update, context)
+                except Exception:
+                    pass
+                    
+                await context.bot.send_message(chat_id, f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리드 전술이 즉시 해제되었습니다.</b>", parse_mode='HTML')
                 return
 
             current_ver = self.cfg.get_version(ticker)

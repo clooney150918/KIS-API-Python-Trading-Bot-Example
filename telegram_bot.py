@@ -1,24 +1,7 @@
+# MODIFIED: [V44.30 AVWAP 설정 라우터 통합] /settlement 호출 시 AVWAP의 실시간 타겟 모드(수동/자동)를 팩트로 스캔하여 뷰포트에 100% 주입하도록 동기화 엔진 수술 완료.
+# MODIFIED: [V44.30 수동 입력 렌더링 수술] 텔레그램 창에 수동 목표 수익률(%) 입력 후, /avwap 콘솔 갱신이 아닌 /settlement(환경설정) 화면으로 직결되도록 제자리 렌더링(edit_message_text) 파이프라인 개조 완료.
 # ==========================================================
-# [telegram_bot.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
-# 🚨 MODIFIED: [V31.00] AVWAP 암살자 제어 콘솔 모드 토글링 전면 소각 (다중 출장 100% 락온)
-# 🚨 MODIFIED: [V31.00] /sync 지시서 실시간 레이더 시각화를 위한 prev_vwap, rolling_tp 추출 파이프라인 개통
-# 🚨 MODIFIED: [V30.09 핫픽스] pytz 소각 및 ZoneInfo 이식을 통한 타임존 오차 차단.
-# 🚨 MODIFIED: [V30.18 그랜드 핫픽스] 스냅샷 렌더링 디커플링 무결성 확보 및 실시간 잔고 오염 원천 차단
-# 🚨 MODIFIED: [V32.00] 12차 팩트 반영. cmd_avwap 내부의 파라미터 조회 찌꺼기 완벽 소각.
-# NEW: [V40.XX 옴니 매트릭스] SOXS 티커 진입 시 기초자산을 QQQ로 오인하는 치명적 맹점 전면 수술 및 /avwap 듀얼 라우팅 개방
-# 🚨 MODIFIED: [V41.XX 파격적 수술] 지시서 실시간 레이더 시각화를 위한 avg_vwap_5m 추출 파이프라인 개통 및 낡은 롤링 TP, 갭 이탈률 소각
-# 🚨 MODIFIED: [V42.00 아키텍처 개편] SOXS 메인 장부 폐기에 따른 지시서 듀얼 렌더링 강제 병합 파이프라인(디커플링) 대수술
-# 🚨 MODIFIED: [V42.15 핫픽스] AVWAP 매수 후 지시서 0주 표출(환각) 맹점 원천 차단. /sync 조회 시 디스크 상태 파일(JSON)을 강제 로드하여 메모리 디커플링 100% 영구 소각 완료.
-# NEW: [V43.04] 일일 체력(ATR) 소진율 팩트 스캔 및 뷰포트 인젝션 파이프라인 개통 완료.
-# 🚨 MODIFIED: [V43.05] 일일 체력 지시계 기준을 14일(ATR14)에서 5일(ATR5)로 교체하여 단기 민감도 극대화.
-# 🚨 MODIFIED: [V43.06 다이어트 수술] 통합지시서(/sync) 내부의 비대한 AVWAP 스캔 엔진을 전면 적출하고 독립 플러그인으로 라우팅 이관 완료.
-# 🚨 MODIFIED: [V43.08 라우터 복원] 유실된 /avwap 명령어 핸들러를 완벽히 재등록하고 에러 캡처 방어막 이식.
-# 🚨 MODIFIED: [V43.13 상태 인터셉터 이식] AVWAP 수동 목표가 입력을 가로채어 팩트 업데이트 후 UI를 자동 갱신하는 쉴드 장착.
-# 🚨 MODIFIED: [V43.14 직관적 렌더링 연동] 수동 목표값 입력 완료 후, 봇 데몬 메모리에 '수동(MANUAL)' 상태를 확실하게 각인하여 원터치 스위칭의 무결성 확보.
-# 🚨 MODIFIED: [V43.16 코어 메모리 강제 동기화] 숫자 입력 시 변경된 MANUAL 상태가 증발(Amnesia)하지 않도록 백그라운드 Job Queue Data에 딥 인젝션(Deep Injection) 수술 완료.
-# NEW: [V44.07 암살자 타임라인 전진 배치] 옴니 매트릭스 스캔 및 스나이퍼 격발 10:20 -> 10:00 EST 락온 수술 완료.
-# 🚨 MODIFIED: [V44.11 팩트 교정] 0주 새출발 시 1층 예산 100% 강제 진입을 보장하기 위해 Buy1 상한선을 15% 할증(* 1.15)으로 상향 락온하여 지시서 렌더링 동기화.
-# 🚨 MODIFIED: [V44.12 런타임 붕괴 방어] cmd_sync 루프 내 AVWAP 하이브리드 미가동 시 발생하는 UnboundLocalError 연쇄 맹점 원천 차단을 위한 변수 사전 락온 이식 완료.
+# FILE: telegram_bot.py
 # ==========================================================
 import logging
 import datetime
@@ -163,28 +146,20 @@ class TelegramController:
                     self.cfg.set_avwap_target_profit(ticker, val)
                 self.user_states.pop(chat_id, None)
                 
-                # 🚨 [V43.16 코어 메모리 강제 동기화]
-                # 숫자를 입력하는 순간, 껍데기 메모리(bot_data)와 심장부 메모리(job.data)에 'MANUAL' 팩트를 양방향 인젝션!
+                # 🚨 [V44.30] 목표 수익률 입력 완료 후 'MANUAL' 상태 락온
                 if 'app_data' not in context.bot_data:
                     context.bot_data['app_data'] = {}
                 context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
                 
-                render_app_data = context.bot_data['app_data']
                 if context.job_queue:
                     for job in context.job_queue.jobs():
                         if job.data is not None:
                             job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
-                            render_app_data = job.data
                 
                 await update.message.reply_text(f"✅ <b>[{ticker}] 수동 목표 수익률이 {val}%로 설정되며 '🖐️수동 고정' 모드로 자동 전환되었습니다.</b>", parse_mode='HTML')
                 
-                try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
-                except Exception as e:
-                    logging.error(f"AVWAP 콘솔 리프레시 에러: {e}")
+                # 🚨 [V44.30] 텍스트 입력 후 /settlement 화면으로 완벽 복귀
+                await self.cmd_settlement(update, context)
                 return
             except ValueError:
                 await update.message.reply_text("❌ 올바른 숫자를 입력하세요. (예: 2.5, 4.0)")
@@ -410,12 +385,10 @@ class TelegramController:
             if not schedule.empty:
                 market_open = schedule.iloc[0]['market_open'].astimezone(est)
                 
-                # 🚨 MODIFIED: [V44.07] 정규장 오픈 후 50분 -> 30분 전진 배치
                 switch_time = market_open + datetime.timedelta(minutes=30)
                 if now_est >= switch_time:
                     is_sniper_active_time = True
         except Exception:
-            # 🚨 MODIFIED: [V44.07] 타임라인 10:20 -> 10:00 EST 락온
             if now_est.weekday() < 5 and now_est.time() >= datetime.time(10, 0):
                 is_sniper_active_time = True
 
@@ -423,7 +396,6 @@ class TelegramController:
             if t == "SOXS":
                 continue
 
-            # NEW: [V44.12 런타임 붕괴 방어] 하이브리드 모드 우회 시 연쇄적으로 증발하는 변수들을 사전 락온하여 UnboundLocalError 원천 차단
             is_avwap_active = False
             avwap_budget = 0.0
             avwap_qty = 0
@@ -604,7 +576,6 @@ class TelegramController:
                     v_rev_guidance += " 🔵 매도: 대기 물량 없음 (관망)\n"
                 
                 if safe_prev_close > 0:
-                    # 🚨 MODIFIED: [V44.11 팩트 교정] 0주 새출발 시 1층 예산 100% 강제 진입을 보장하기 위해 Buy1 상한선을 15% 할증(* 1.15)으로 상향 락온하여 지시서 렌더링 동기화.
                     b1_price = round(safe_prev_close * 1.15 if is_zero_start_fact else safe_prev_close * 0.995, 2)
                     b2_price = round(safe_prev_close * 0.999 if is_zero_start_fact else safe_prev_close * 0.9725, 2)
                     
@@ -901,26 +872,42 @@ class TelegramController:
         msg, markup = self.view.get_ticker_menu(self.cfg.get_active_tickers())
         await update.message.reply_text(msg, reply_markup=markup, parse_mode='HTML')
 
+    # 🚨 MODIFIED: [V44.28 제자리 갱신 수술] 수동 타겟 설정 등 콜백에서 호출 시 
+    # 채팅방에 불필요한 메시지가 추가되지 않고 제자리에서 뷰포트가 갱신(edit_text)되도록 라우터 교정 완료.
     async def cmd_settlement(self, update, context):
         if not self._is_admin(update):
             return
         
         active_tickers = self.cfg.get_active_tickers()
         atr_data = {}
-        dynamic_target_data = {} 
         
-        status_msg = await update.message.reply_text("⏳ <b>실시간 시장 지표(HV/VXN) 연산 중...</b>", parse_mode='HTML')
+        if update.callback_query:
+            status_msg = await update.callback_query.message.reply_text("⏳ <b>실시간 시장 지표 연산 중...</b>", parse_mode='HTML')
+        else:
+            status_msg = await update.message.reply_text("⏳ <b>실시간 시장 지표 연산 중...</b>", parse_mode='HTML')
         
-        est = ZoneInfo('America/New_York')
-        now_est = datetime.datetime.now(est)
+        try:
+            jobs = context.job_queue.jobs() if context.job_queue else []
+            app_data = jobs[0].data if jobs and len(jobs) > 0 and jobs[0].data is not None else context.bot_data.get('app_data', {})
+        except Exception:
+            app_data = context.bot_data.get('app_data', {})
+            
+        tracking_cache = app_data.get('sniper_tracking', {})
 
         for t in active_tickers:
             atr_data[t] = (0.0, 0.0)
-            dynamic_target_data[t] = None
                 
-        msg, markup = self.view.get_settlement_message(active_tickers, self.cfg, atr_data, dynamic_target_data)
+        msg, markup = self.view.get_settlement_message(active_tickers, self.cfg, atr_data, tracking_cache)
         
-        await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
+        if update.callback_query:
+            try:
+                await update.callback_query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                await status_msg.delete()
+            except Exception as e:
+                if "Message is not modified" not in str(e):
+                    await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
+        else:
+            await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
 
     async def cmd_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update):

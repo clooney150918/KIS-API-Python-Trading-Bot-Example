@@ -1,8 +1,6 @@
+# MODIFIED: [V44.30 AVWAP 설정 제어 통합] /settlement 뷰포트에 AVWAP 목표 스위치(자율/수동), 근무 모드(조기/다중) 버튼을 전면 이식 완료.
 # ==========================================================
-# [telegram_view.py]
-# MODIFIED: [V44.08 수동 덫 UI 영구 소각] V-REV 모드에 한하여 자전거래 의심을 차단하기 위해 [🚀 주문 실행] (수동 장전) 버튼 렌더링을 100% 영구 소각.
-# 🚨 MODIFIED: [V44.23 UI 런타임 붕괴 방어막 이식] 데이터 누락(KeyError: 'target')으로 인해 지시서 출력이 기절하는 현상을 원천 차단하기 위해, dict.get() 기반의 Safe-Casting 쉴드를 전면 이식하여 무결점 렌더링 보장.
-# 🚨 MODIFIED: [V44.24 AVWAP 메뉴 하단 렌더링 조건부 이식] AVWAP 하이브리드 암살자가 가동 중인 종목이 있을 때만 지시서 하단에 `/avwap` 관제탑 호출 안내가 표출되도록 UI 렌더링 팩트 교정 완료.
+# FILE: telegram_view.py
 # ==========================================================
 import os
 import math
@@ -81,7 +79,7 @@ class TelegramView:
         msg += "▶️ /ticker : 🔄 운용 종목 선택\n"
         msg += "▶️ /mode : 🎯 상방 스나이퍼 ON/OFF\n"
         msg += "▶️ /version : 🛠️ 버전 및 업데이트 내역\n"
-        msg += "▶️ /avwap : 🔫 AVWAP 독립 관제탑 호출\n\n"
+        msg += "▶️ /avwap : 🔫 실시간 AVWAP 레이더 관제탑\n\n"
         
         msg += "⚠️ /reset : 🔓 비상 해제 메뉴 (락/리버스)\n"
         msg += "┗ 🚨 수동 닻 올리기: 예산 부족으로 리버스 진입 후 외화RP매도 등 예수금을 추가 입금하셨다면, 이 메뉴에서 반드시 '리버스 강제 해제' 버튼을 눌러주세요!\n\n"
@@ -238,7 +236,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V44.08 수동 덫 렌더링 소각</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V44.30 AVWAP 설정 통제소 대통합</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -499,7 +497,6 @@ class TelegramView:
                         if prices:
                             body_msg += f" 🧹 줍줍({len(jup_orders)}개): <b>${prices[0]} ~ ${prices[-1]} (LOC)</b>\n"
                     
-                    # 🚨 NEW: [V44.08 수동 덫 UI 영구 소각] V-REV 모드 수동 덫 장전 버튼 렌더링을 완전히 배제함
                     if is_trade_active:
                         if v_mode == "V_REV":
                             body_msg += " (🔒 예방 덫 수동 장전 영구 소각 완료)\n"
@@ -522,13 +519,15 @@ class TelegramView:
             final_msg += f"💡 <i>※ 현재 표출된 계획은 전일 {fact_hour}:05 기준 박제된 스냅샷이며, 금일 {fact_hour}:05에 최신 팩트 잔고를 바탕으로 리셋됩니다.</i>\n\n"
             final_msg += "⛔ 장마감/애프터마켓: 주문 불가"
             
-        # 🚨 MODIFIED: [V44.24 AVWAP 메뉴 하단 렌더링 조건부 이식]
         if any(t_info.get('avwap_active', False) for t_info in ticker_data):
-            final_msg += "\n\n▶️ /avwap : 🔫 AVWAP 독립 관제탑 호출"
+            final_msg += "\n\n▶️ /avwap : 🔫 실시간 AVWAP 레이더 관제탑"
 
         return final_msg, InlineKeyboardMarkup(keyboard) if keyboard else None
 
-    def get_settlement_message(self, active_tickers, config, atr_data, dynamic_target_data=None):
+    # 🚨 MODIFIED: [V44.30 AVWAP 설정 라우터 통합] /settlement 뷰포트에 AVWAP의 모든 설정(자율/수동, 다중/조기퇴근) 기능을 전면 팩트 이식 완료.
+    def get_settlement_message(self, active_tickers, config, atr_data, tracking_cache=None):
+        if tracking_cache is None: tracking_cache = {}
+        
         msg = "⚙️ <b>[ 현재 설정 및 복리 상태 ]</b>\n\n"
         keyboard = []
         
@@ -562,7 +561,9 @@ class TelegramView:
                 if hasattr(config, 'get_avwap_hybrid_mode') and config.get_avwap_hybrid_mode(t):
                     is_multi = getattr(config, 'get_avwap_multi_strike_mode', lambda x: False)(t)
                     mode_str = "다중 출장" if is_multi else "조기 퇴근"
-                    status_label = f"💼 {mode_str} 락온"
+                    target_mode = tracking_cache.get(f"AVWAP_TARGET_MODE_{t}", "AUTO")
+                    target_str = "🤖 자율주행 목표" if target_mode == "AUTO" else "🖐️ 수동고정 목표"
+                    status_label = f"💼 {mode_str} / {target_str} 락온"
                     msg += f"▫️ AVWAP 암살자: <b>{status_label}</b>\n"
                 elif hasattr(config, 'get_avwap_hybrid_mode'):
                     msg += f"▫️ AVWAP 암살자: <b>비활성 (OFF)</b>\n"
@@ -603,7 +604,26 @@ class TelegramView:
                 keyboard.append([InlineKeyboardButton(avwap_txt, callback_data=avwap_cb)])
                 
                 if is_avwap and t == "SOXL":
-                    keyboard.append([InlineKeyboardButton(f"🔫 {t} (롱) + SOXS (숏) 모멘텀 콘솔", callback_data=f"AVWAP:MENU:{t}")])
+                    # 🚨 MODIFIED: [V44.30] AVWAP 모니터 호출 링크
+                    keyboard.append([InlineKeyboardButton(f"🔫 {t} (롱) + SOXS (숏) 모멘텀 관제탑 (모니터)", callback_data=f"AVWAP:MENU:{t}")])
+                    
+                    # 🚨 MODIFIED: [V44.30] 다중/조기 및 수동/자율 모드 설정 버튼 전면 편입
+                    is_multi = getattr(config, 'get_avwap_multi_strike_mode', lambda x: False)(t)
+                    strike_action = "MULTI" if not is_multi else "EARLY"
+                    strike_icon_btn = f"💼 {t} 조기퇴근 모드로 변경" if is_multi else f"🔁 {t} 다중출장 모드로 변경"
+                    
+                    target_mode = tracking_cache.get(f"AVWAP_TARGET_MODE_{t}", "AUTO")
+                    if target_mode == "AUTO":
+                        btn_mode_text = f"🖐️ {t} 수동 목표수익률로 전환"
+                        toggle_target_action = "TARGET_MANUAL"
+                    else:
+                        btn_mode_text = f"🤖 {t} 자율 목표수익률로 전환"
+                        toggle_target_action = "TARGET_AUTO"
+                        
+                    keyboard.append([
+                        InlineKeyboardButton(btn_mode_text, callback_data=f"AVWAP_SET:{toggle_target_action}:{t}"),
+                        InlineKeyboardButton(strike_icon_btn, callback_data=f"AVWAP_SET:{strike_action}:{t}")
+                    ])
             
             if ver == "V_REV":
                 row2 = [
