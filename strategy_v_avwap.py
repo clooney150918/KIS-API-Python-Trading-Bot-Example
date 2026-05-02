@@ -1,5 +1,5 @@
 # ==========================================================
-# [strategy_v_avwap.py] - 🌟 V44.22 앱솔루트 팩트 교정 🌟
+# [strategy_v_avwap.py] - 🌟 V44.23 앱솔루트 팩트 교정 🌟
 # 💡 V-REV 하이브리드 전용 차세대 AVWAP 스나이퍼 플러그인 (Dual-Referencing)
 # ⚠️ 초공격형 당일 청산 암살자 (V-REV 잉여 현금 100% 몰빵 & -8% 하드스탑)
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막 (Persistence 엔진 탑재)
@@ -14,7 +14,7 @@
 # 🚨 MODIFIED: [V44.08 팩트 교정] 5분 평균 VWAP 부등호 역배선 100% 원상 복구 및 절대 헌법 락온
 # 🚨 MODIFIED: [V44.19 완전 돌파 즉각 타격 락온] 과거의 낡은 -0.67% 이격도(Gap) 대기 조건이 100% 완벽히 소각되었음을 교차 검증 완료. 모멘텀 충족 시 즉시 방아쇠(VWAP_MOMENTUM_BREAKOUT) 격발 보장.
 # 🚨 MODIFIED: [V44.22 증거금 방어막 탑재] 암살자가 현금 100%를 무지성으로 긁을 때 수수료/슬리피지로 인해 한투 API에서 '주문가능금액 초과'로 리젝(거절)되는 사태를 막기 위해, 예산에 5% 안전 마진(0.95)을 강제 적용하는 락온 이식.
-# NEW: [1단계 타임라인 수술] 10:00 EST 타임쉴드 버그를 10:20 EST로 절대 락온.
+# MODIFIED: [V44.23 타임라인 롤백] 10:20 EST 락온을 10:00 EST (개장 후 30분)로 완벽히 원상 복구.
 # ==========================================================
 import logging
 import datetime
@@ -173,8 +173,8 @@ class VAvwapHybridPlugin:
         avwap_state = avwap_state or {}
         curr_time = now_est.time()
         
-        # MODIFIED: [10:20 EST 절대 락온] time_1000을 time_1020으로 팩트 교정
-        time_1020 = datetime.time(10, 20)
+        # MODIFIED: [10:00 EST 롤백] 10:20 락온을 10:00(개장 후 30분)으로 원상 복구
+        time_1000 = datetime.time(10, 0)
         time_1500 = datetime.time(15, 0)
         time_1555 = datetime.time(15, 55)
 
@@ -281,9 +281,9 @@ class VAvwapHybridPlugin:
         if avwap_state.get('shutdown', False):
             return _build_res('WAIT', '작전완수_또는_강제청산으로_인한_당일영구동결')
 
-        # MODIFIED: [10:20 EST 절대 락온] 타임쉴드 판별 및 반환 텍스트 100% 팩트 교정
-        if curr_time < time_1020:
-            return _build_res('WAIT', '10:20_이전_타임쉴드_대기')
+        # MODIFIED: [10:00 EST 롤백] 타임쉴드 판별 및 반환 텍스트 100% 팩트 교정
+        if curr_time < time_1000:
+            return _build_res('WAIT', '10:00_이전_타임쉴드_대기')
             
         if curr_time > time_1500:
             return _build_res('WAIT', '15:00_이후_신규진입_차단')
@@ -315,4 +315,3 @@ class VAvwapHybridPlugin:
             return _build_res('WAIT', '순수현금예산_부족_관망')
             
         return _build_res('WAIT', '타점_대기중')
-
