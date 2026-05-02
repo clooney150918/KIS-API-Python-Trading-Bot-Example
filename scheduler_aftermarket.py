@@ -1,8 +1,10 @@
+# ==========================================================
+# FILE: scheduler_aftermarket.py
+# ==========================================================
 # MODIFIED: [V44.08 평단가 팩트 디커플링] AVWAP 암살자 매수로 인해 한투 실잔고 평단가가 희석되는 맹점을 원천 차단.
 # V-REV 모드일 경우 KIS 실잔고 평단가를 전면 무시하고, 오직 V-REV 큐 장부의 진성 평단가를 역산하여 3% 로터리 덫 타점에 반영하도록 락온 완료.
 # NEW: [V44.09 AVWAP 물량 물귀신 덤핑 원천 차단 및 디커플링 팩트 수술] AVWAP 암살자가 장중 딥매수한 물량이 장 마감 직후 애프터마켓 덫에 묶여 동반 투매(물귀신)되는 치명적 맹점을 완벽 수술. V-REV 큐에 해당하는 수량만을 수학적으로 핀셋 차감하여 로터리 덫으로 전송하도록 물량 디커플링 락온 완료.
-# ==========================================================
-# FILE: scheduler_aftermarket.py
+# MODIFIED: [V44.44 이벤트 루프 교착 방어] 달력 API(pandas_market_calendars) 동기 블로킹 비동기 래핑 및 타임아웃 Fail-Open 족쇄 체결 완료.
 # ==========================================================
 import logging
 import asyncio
@@ -25,11 +27,19 @@ async def scheduled_after_market_lottery(context):
     est = ZoneInfo('America/New_York')
     now_est = datetime.datetime.now(est)
     
-    import pandas_market_calendars as mcal
-    try:
+    # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] 동기 연산을 비동기 스레드로 격리
+    def _check_market_schedule():
+        import pandas_market_calendars as mcal
         nyse = mcal.get_calendar('NYSE')
         schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
-        is_trading_day = not schedule.empty
+        return not schedule.empty
+
+    try:
+        # 달력 라이브러리 연산을 별도 스레드로 밀어내어 이벤트 루프 보호 및 10초 타임아웃 설정
+        is_trading_day = await asyncio.wait_for(asyncio.to_thread(_check_market_schedule), timeout=10.0)
+    except asyncio.TimeoutError:
+        logging.error("⚠️ [애프터마켓] 달력 라이브러리 타임아웃. 평일 강제 개장 처리.")
+        is_trading_day = now_est.weekday() < 5
     except Exception as e:
         logging.error(f"⚠️ [애프터마켓] 달력 라이브러리 에러. 평일 강제 개장 처리: {e}")
         is_trading_day = now_est.weekday() < 5

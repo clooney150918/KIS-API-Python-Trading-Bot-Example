@@ -1,24 +1,27 @@
-# MODIFIED: [V44.08 예방 덫 소각] V-REV 예방 덫 가상 에스크로 락온 로직 전면 소각. 자전거래 의심 회피 및 AVWAP 암살자의 가용 예산을 100% 개방하기 위해 04:05 EST의 모든 매수/매도 덫 장전을 0주 상태든 기보유 상태든 전면 백지화 완료.
-# MODIFIED: [V44.12 UX 팩트 교정] AVWAP 암살자가 1회분 예산을 사용한다는 시각적 환각(텍스트 오기) 맹점 전면 소각. V-REV 가상 에스크로 100% 격리 팩트를 지시서에 정확히 렌더링하도록 텍스트 디커플링 수술 완료.
 # ==========================================================
 # FILE: scheduler_regular.py
+# ==========================================================
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
+# MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출 전면 비동기 래핑.
 # ==========================================================
 import logging
 import datetime
 from zoneinfo import ZoneInfo
 import asyncio
-import traceback
-import math
-import os
-import time
-import json
 import random
-import pandas_market_calendars as mcal
 
 from scheduler_core import is_market_open, get_budget_allocation
 
 async def scheduled_regular_trade(context):
-    if not is_market_open():
+    try:
+        is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+    except asyncio.TimeoutError:
+        logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
+        est = ZoneInfo('America/New_York')
+        is_open = datetime.datetime.now(est).weekday() < 5
+
+    if not is_open:
         return
     
     app_data = context.job.data
@@ -57,7 +60,8 @@ async def scheduled_regular_trade(context):
             
             safe_holdings = holdings if isinstance(holdings, dict) else {}
 
-            sorted_tickers, allocated_cash = get_budget_allocation(cash, cfg.get_active_tickers(), cfg)
+            # 🚨 [비동기 래핑] get_budget_allocation 내부 파일 I/O 데드락 방어
+            sorted_tickers, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, cfg.get_active_tickers(), cfg)
             
             plans = {}
             msgs = {t: "" for t in sorted_tickers}
@@ -66,7 +70,9 @@ async def scheduled_regular_trade(context):
             v_rev_tickers = [] 
 
             for t in sorted_tickers:
-                if cfg.check_lock(t, "REG"):
+                # 🚨 [비동기 래핑] 파일 I/O 데드락 방어
+                is_locked = await asyncio.to_thread(cfg.check_lock, t, "REG")
+                if is_locked:
                     skip_msg = (
                         f"⚠️ <b>[{t}] REG 잠금 미해제 — 주문 스킵</b>\n"
                         f"▫️ 전날 REG 잠금이 자정 초기화 시 해제되지 않아 오늘 04:05 EST 주문 루프에서 제외되었습니다.\n"
@@ -97,11 +103,12 @@ async def scheduled_regular_trade(context):
                     await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
                     continue
                 
-                version = cfg.get_version(t)
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+                # 🚨 [비동기 래핑] 파일 I/O 데드락 방어
+                version = await asyncio.to_thread(cfg.get_version, t)
+                is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
 
                 if version == "V_REV" and is_manual_vwap:
-                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모 가동 중</b>\n"
+                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모드 가동 중</b>\n"
                     msgs[t] += "▫️ 봇 자동 주문이 락다운되었습니다. V앱에서 장 마감 30분 전 세팅으로 수동 장전하십시오.\n"
                     await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
                     continue
@@ -110,7 +117,8 @@ async def scheduled_regular_trade(context):
                     loc_orders = []
                     
                     if version == "V_REV":
-                        q_data = queue_ledger.get_queue(t)
+                        # 🚨 [비동기 래핑] 큐 장부 스레드 락 점유 원천 차단
+                        q_data = await asyncio.to_thread(queue_ledger.get_queue, t)
                         v_rev_q_qty = sum(item.get("qty", 0) for item in q_data)
                         
                         msgs[t] += f"🛡️ <b>[{t}] V-REV 예방적 덫 장전 기능 전면 소각</b>\n"
@@ -118,9 +126,9 @@ async def scheduled_regular_trade(context):
                         
                         plan_result = {"orders": [], "trigger_loc": False, "total_q": v_rev_q_qty}
                         if hasattr(strategy_rev, 'save_daily_snapshot'):
-                            strategy_rev.save_daily_snapshot(t, plan_result)
+                            await asyncio.to_thread(strategy_rev.save_daily_snapshot, t, plan_result)
 
-                        cfg.set_lock(t, "REG")
+                        await asyncio.to_thread(cfg.set_lock, t, "REG")
                         all_success_map[t] = True
                         v_rev_tickers.append((t, version))
                         continue 
@@ -129,7 +137,9 @@ async def scheduled_regular_trade(context):
                         ma_5day = float(await asyncio.to_thread(broker.get_5day_ma, t) or 0.0)
                         v14_vwap_plugin = strategy.v14_vwap_plugin
                         
-                        v14_plan = v14_vwap_plugin.get_plan(
+                        # 🚨 [비동기 래핑] 내부 스냅샷 저장 등 파일 I/O 방어
+                        v14_plan = await asyncio.to_thread(
+                            v14_vwap_plugin.get_plan,
                             ticker=t, current_price=curr_p, avg_price=safe_avg, qty=safe_qty, 
                             prev_close=prev_c, ma_5day=ma_5day, market_type="REG", 
                             available_cash=allocated_cash.get(t, 0.0), is_simulation=False,
@@ -152,10 +162,10 @@ async def scheduled_regular_trade(context):
                         await asyncio.sleep(0.2)
                         
                     if all_success_map[t] and len(loc_orders) > 0:
-                        cfg.set_lock(t, "REG")
+                        await asyncio.to_thread(cfg.set_lock, t, "REG")
                         msgs[t] += "\n🔒 <b>방어선 전송 완료 (매매 잠금 설정됨)</b>"
                     elif sell_success_count > 0:
-                        cfg.set_lock(t, "REG")
+                        await asyncio.to_thread(cfg.set_lock, t, "REG")
                         msgs[t] += "\n⚠️ <b>일부 방어선 구축 실패 (반쪽짜리 잠금 설정됨)</b>"
                     elif len(loc_orders) == 0:
                         msgs[t] += "\n⚠️ <b>전송할 방어선(예산/수량)이 없습니다.</b>"
@@ -167,17 +177,21 @@ async def scheduled_regular_trade(context):
                     continue
                 
                 ma_5day = float(await asyncio.to_thread(broker.get_5day_ma, t) or 0.0)
-                plan = strategy.get_plan(t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True)
+                
+                # 🚨 [비동기 래핑] 내부 파일 I/O 및 로드 방어
+                plan = await asyncio.to_thread(
+                    strategy.get_plan,
+                    t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True
+                )
                 
                 if hasattr(strategy, 'v14_plugin') and hasattr(strategy.v14_plugin, 'save_daily_snapshot'):
-                    strategy.v14_plugin.save_daily_snapshot(t, plan)
+                    await asyncio.to_thread(strategy.v14_plugin.save_daily_snapshot, t, plan)
                     
                 plans[t] = plan
                 if plan.get('core_orders', []) or plan.get('orders', []):
                     is_rev = plan.get('is_reverse', False)
                     msgs[t] += f"🔄 <b>[{t}] 리버스 주문 실행</b>\n" if is_rev else f"💎 <b>[{t}] 정규장 주문 실행</b>\n"
 
-            # MODIFIED: [V44.12 UX 팩트 교정] AVWAP 암살자가 1회분 예산을 사용한다는 시각적 환각(텍스트 오기) 맹점 전면 소각. V-REV 가상 에스크로 100% 격리 팩트를 지시서에 정확히 렌더링하도록 텍스트 디커플링 수술 완료.
             for t, ver in v_rev_tickers:
                 mod_name = "V-REV" if ver == "V_REV" else "무매4(VWAP)"
                 if ver == "V_REV":
@@ -218,12 +232,12 @@ async def scheduled_regular_trade(context):
                 if not target_orders and not target_bonus: continue
                 
                 if all_success_map[t] and len(target_orders) > 0:
-                    cfg.set_lock(t, "REG")
+                    await asyncio.to_thread(cfg.set_lock, t, "REG")
                     msgs[t] += "\n🔒 <b>필수 주문 정상 전송 완료 (잠금 설정됨)</b>"
                 elif not all_success_map[t] and len(target_orders) > 0:
                     msgs[t] += "\n⚠️ <b>일부 필수 주문 실패 (매매 잠금 보류)</b>"
                 elif len(target_bonus) > 0:
-                    cfg.set_lock(t, "REG")
+                    await asyncio.to_thread(cfg.set_lock, t, "REG")
                     msgs[t] += "\n🔒 <b>보너스 주문만 전송 완료 (잠금 설정됨)</b>"
                     
                 if not any(tx[0] == t for tx in v_rev_tickers): 

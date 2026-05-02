@@ -1,44 +1,9 @@
+# MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, VWAP이 장중 매수한 로트를 기보유 물량으로 오판하여 매도를 재개(하극상)하던 맹점 원천 차단. 큐 장부에서 당일 날짜(EST)의 로트를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
+# MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
+# MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
+# MODIFIED: [V44.36 큐 장부 vs 브로커 실잔고 불일치 팩트 스캔] 페일세이프 스냅샷 복원 시 KIS 순수 본대 수량과 큐 장부 이월 수량 간의 팩트 불일치가 발생할 경우 명시적으로 경고를 타전하여 CALIB 보정을 유도하도록 감시망(EC-3) 이식 완료.
 # ==========================================================
-# [strategy_reversion.py] - 🌟 V44.25 예산 탈취(Stealing) 락온 🌟
-# ⚠️ V-REV 하이브리드 엔진 전용 수학적 타격 모듈
-# 💡 5년 백테스트 기반 VWAP 유동성 정밀 가중치(U_CURVE_WEIGHTS) 적용 완료
-# 💡 [V24.16 팩트 동기화] 0주 새출발 디커플링 타점 (Buy1: 0.999, Buy2: /0.935) 원본 유지
-# 💡 [V24.16 팩트 동기화] 하락장 방어 매수 Buy2 타점 (0.9725) 교정
-# 💡 [V24.16 팩트 동기화] 1층 전량 익절 타점 고유 매수가 기반(layer_price * 1.006) 원복
-# 🚨 [V25.13 디커플링 스왑 패치] UI와 동일하게 Buy1과 Buy2의 타점을 고가->저가 순으로 스왑 연동
-# 🚨 [V25.14 팩트 동기화] 1층 물귀신 덤핑 차단 및 지층별 평단가 완벽 분리 개별 탈출(Decoupling) 이식
-# 🚨 [V25.15 잔여물량 격리] SELL_L1 / SELL_UPPER / SELL_JACKPOT 독립 큐(Residual) 분리 및 줍줍 무손실 복원 완료
-# 🚨 [V25.17 잔재 소각] 수동 통제망(Telegram) 전환에 따른 자동 긴급 수혈(get_emergency_liquidation_qty) 레거시 함수 영구 삭제
-# 🚨 [V25.20 엣지 케이스 패치] 0주 새출발 시 줍줍(Sweep) 타점 생성 원천 차단 (단일 라우터 방어막 이식)
-# 🚀 [V26.03 영속성 캐시 이식] 서버 재시작 시 잔차 증발(기억상실)을 방어하는 L1/L2 듀얼 캐싱 엔진 탑재
-# 🚀 [V27.01 지시서 스냅샷] 매일 17:05 확정 지시서를 박제하여 장중 잔고 변이에 따른 타점 왜곡 원천 차단
-# 🚨 [V27.03 핫픽스] 스냅샷 로드 시 내부 날짜 검사(Validation) 전면 폐기로 무한루프 영구 방어
-# 🚨 [V27.05 그랜드 수술] API Reject 방어(소수점 덤핑 차단), ZeroDivision 방어 및 Safe Casting 완벽 이식
-# 🚨 [V27.15 코파일럿 합작] FD 누수 방어, 스냅샷 덮어쓰기 락온, 0달러 로트 배제 및 TypeError 런타임 붕괴 방어막 이식 완료
-# MODIFIED: [V28.08 그랜드 수술] 스냅샷 영구 박제에 따른 VWAP 디커플링 방어막 완벽 이식 (0주 새출발 타임 패러독스 영구 소각)
-# MODIFIED: [V28.19 타임존 락온] datetime.now()를 EST(미국 동부) 기준으로 강제 고정하여 KST 자정 경계 스냅샷 증발 버그 완벽 수술
-# MODIFIED: [V28.20 무조건 진입 투트랙] 0주 새출발 시 VWAP 런타임 타격에서 Buy1 상한선 방어막 철거 (스냅샷 락온과 완벽 무결점 디커플링 이식)
-# NEW: [V28.22 AI 환각 방어 백신 이식] 공수 교대 로직에 AI 에이전트 오판 차단 경고 주석 하드코딩
-# NEW: [V28.27 자전거래 락온 방어막] 매도 단가 역전 시 매수 단가 강제 캡핑(Capping) 적용하여 API Reject 엣지 케이스 완벽 수술
-# MODIFIED: [V28.28 하이브리드 병합] 0주 -> 1주 전환 시 텔레그램 스냅샷(UI) 렌더링 디커플링 맹점 완벽 수술 (매도 팩트 동적 덮어쓰기 이식)
-# MODIFIED: [V28.42] U_CURVE_WEIGHTS 동기화(합산 1.0) 및 0주 새출발 Buy1 타점 고정 락온 수술 완료
-# MODIFIED: [V28.43] 0주 새출발 예산 분리 팩트 체크 및 안심 주석 하드코딩 (Buy1: 무제한 50% 20주 / Buy2: 조건부 50% 21주 락온)
-# MODIFIED: [V28.44] 0주 새출발 Buy1 상한제 완전 철거 (50% 예산 20주 무조건 매수 락온 및 타점 붕괴 영구 방어)
-# 🚨 [V29.06 팩트 증명] 한투 평단가 하방 오염 100% 영구 차단 검증. 본 엔진은 외부 평단가(actual_avg) 개입을 일절 불허하며 오직 큐(q_data) 기반 순수 역산 평단가만 사용함이 검증됨.
-# MODIFIED: [V29.07] 0주 새출발 VWAP 타점 붕괴 및 호가 스프레드(Ask) 스킵 맹점 100% 영구 차단 (스냅샷 앵커 복원)
-# MODIFIED: [V29.09] 0주 새출발 시각적 디커플링 차단 (스냅샷 강제 덮어쓰기) 및 0주 타점 역배선(Swap) 팩트 교정 수술 완료
-# 🚨 [V30.07 NEW] 0주 새출발 당일 매도 영구 동결 락온 이식:
-# 당일 0주로 스냅샷이 박제된 세션(is_zero_start_fact=True)에서는 1주가 부분 체결되더라도
-# 정규장(REG) 내의 모든 SELL 지시를 100% 강제 소각하고 오직 애프터마켓(AFTER)에서만 덫을 놓도록
-# get_dynamic_plan 렌더링 파이프라인에 강력한 필터링 방어막 이식.
-# MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
-# NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
-# NEW: [V40.XX 옴니 매트릭스] V-REV 내부 U_CURVE 배열 영구 소각 및 vwap_data.py 동적 30분 재정규화 파이프라인 연결 완료
-# 🚨 MODIFIED: [V43.28 그랜드 수술] BUY 슬라이싱 누수(부족 매수) 방어. 조건 불만족 스킵 시 예산을 무조건 잔차 달러 버킷(Residual)에 이월시켜 100% 소진을 락온.
-# 🚨 MODIFIED: [V43.28 엣지 케이스 수술] SELL 이중 차감 조기 종료 방어. LIFO 큐(total_q) 자체가 실시간 팩트이므로 executed 차감을 영구 소각하여 멱등성 확보.
-# 🚨 MODIFIED: [V44.08 팩트 교정] V-REV 매수 예산 잔차 버킷 이월 시 발생하는 수량(Qty) 소수점 섞임 차원 붕괴 영구 방어 완료 (순수 달러($) 캐싱 보장)
-# 🚨 MODIFIED: [V44.11 팩트 교정] 0주 새출발 시 1층 예산 100% 강제 진입을 보장하기 위해 Buy1 상한선을 15% 할증(* 1.15)으로 상향 락온.
-# 🚨 MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
+# FILE: strategy_reversion.py
 # ==========================================================
 import math
 import os
@@ -178,9 +143,36 @@ class ReversionStrategy:
                 pass
         return None
 
-    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-    # 17:05에 장전된 LOC는 체결 확정이 아니므로 절대 record_execution으로 예산을 선차감하지 말 것.
-    # 공수 교대 시 reset_residual은 소수점 잔차만 초기화해야 하며, 이미 집행된 executed 예산을 소각하면 이중 합산(Double Spending) 버그가 발생하므로 절대 건드리지 말 것.
+    def ensure_failsafe_snapshot(self, ticker, curr_p, prev_c, alloc_cash, q_data, total_kis_qty, avwap_qty):
+        snap = self.load_daily_snapshot(ticker)
+        if snap is not None:
+            return snap
+            
+        pure_qty = max(0, total_kis_qty - avwap_qty)
+        
+        today_str_est = self._get_logical_date_str()
+        legacy_lots = [item for item in q_data if not str(item.get("date", "")).startswith(today_str_est)]
+        legacy_q = sum(int(item.get("qty", 0)) for item in legacy_lots if float(item.get('price', 0.0)) > 0)
+        
+        # NEW: [V44.36 큐 장부 vs 브로커 실잔고 불일치 팩트 스캔]
+        if pure_qty != legacy_q:
+            logging.warning(f"⚠️ [{ticker}] V-REV 페일세이프 경고: KIS 순수 본대 수량({pure_qty}주)과 이월 큐 장부 수량({legacy_q}주) 불일치 감지. CALIB 비파괴 보정 또는 수동 동기화 요망.")
+            
+        logging.warning(f"🚨 [{ticker}] V_REV 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (KIS총잔고:{total_kis_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주 | 이월 큐 장부:{legacy_q}주)")
+        
+        return self.get_dynamic_plan(
+            ticker=ticker,
+            curr_p=curr_p,
+            prev_c=prev_c,
+            current_weight=0.0,
+            vwap_status={},
+            min_idx=-1,
+            alloc_cash=alloc_cash,
+            q_data=legacy_lots,
+            is_snapshot_mode=True,
+            market_type="REG"
+        )
+
     def reset_residual(self, ticker):
         self._load_state_if_needed(ticker)
         self.residual["BUY1"][ticker] = 0.0
@@ -202,7 +194,6 @@ class ReversionStrategy:
             self.executed["SELL_QTY"][ticker] = int(self.executed.get("SELL_QTY", {}).get(ticker, 0)) + safe_qty
         self._save_state(ticker)
 
-    # 🚨 [V30.07] market_type 파라미터 추가 (기본값 "REG")
     def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, vwap_status, min_idx, alloc_cash, q_data, is_snapshot_mode=False, market_type="REG"):
         self._load_state_if_needed(ticker)
 
@@ -232,22 +223,24 @@ class ReversionStrategy:
         if is_snapshot_mode:
             is_zero_start_session = (total_q == 0)
         else:
-            is_zero_start_session = cached_plan.get("is_zero_start", cached_plan.get("snapshot_total_q", cached_plan.get("total_q", -1)) == 0) if cached_plan else (total_q == 0)
+            if cached_plan:
+                is_zero_start_session = cached_plan.get("is_zero_start", cached_plan.get("snapshot_total_q", cached_plan.get("total_q", -1)) == 0)
+            else:
+                today_str_est = self._get_logical_date_str()
+                legacy_lots = [item for item in valid_q_data if not str(item.get("date", "")).startswith(today_str_est)]
+                legacy_q = sum(int(item.get("qty", 0)) for item in legacy_lots)
+                is_zero_start_session = (legacy_q == 0)
 
-        # NEW: [V40.XX] 동적 U-Curve 30분 재정규화 파이프라인 세팅
         profile = VWAP_PROFILES.get(ticker, {})
-        # 🚨 MODIFIED: [V43.28 핫픽스] 스케줄러 기상 시간(15:27)과 엇박자를 교정하여 27분부터 스캔 궤적 매핑
         target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
         now_est = datetime.now(ZoneInfo('America/New_York'))
         time_str = now_est.strftime('%H:%M')
 
-        # 🚨 MODIFIED: [V40.XX 수술] min_idx가 아닌 time_str 매핑으로 VWAP 가동/대기 판별
         if not is_snapshot_mode and time_str not in target_keys:
             if cached_plan:
-                if total_q == 0:
-                    # MODIFIED: [V44.11 0주 새출발 15% 상한가 락온] 0주 진입 시 예산 100% 강제 진입을 위해 Buy1 타점을 15% 할증(1.15배)으로 상향 팩트 교정
+                if is_zero_start_session:
                     p1_trigger_fact = round(prev_c * 1.15, 2)
                     p2_trigger_fact = round(prev_c * 0.999, 2)
                     b1_budget = alloc_cash * 0.5
@@ -289,14 +282,12 @@ class ReversionStrategy:
                     
                 return cached_plan
 
-        # 정규장 30분 미만 & VWAP 구간 밖일 경우 HOLD
         if time_str not in target_keys:
             if not vwap_status.get('is_strong_up') and not vwap_status.get('is_strong_down'):
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
 
         if is_zero_start_session or total_q == 0:
             side = "BUY"
-            # MODIFIED: [V44.11 0주 새출발 15% 상한가 락온] 0주 진입 시 예산 100% 강제 진입을 위해 Buy1 타점을 15% 할증(1.15배)으로 상향 팩트 교정
             p1_trigger = round(prev_c * 1.15, 2)
             p2_trigger = round(prev_c * 0.999, 2)
         else:
@@ -375,14 +366,12 @@ class ReversionStrategy:
                 
             return plan_result
 
-        # NEW: [V40.XX] V-REV 동적 재정규화 분할 연산 파이프라인
         rem_weight = 0.0
         if time_str in target_keys:
             start_idx = target_keys.index(time_str)
             rem_vol = sum(profile.get(k, 0.0) for k in target_keys[start_idx:])
             rem_weight = (rem_vol / total_target_vol) if total_target_vol > 0 else (30 - start_idx) / 30.0
             
-            # 🚨 MODIFIED: [V43.28 핫픽스] 매수(BUY)도 매도(SELL)와 동일하게 동적 이월(Carry-over) 재정규화 비율 적용
             slice_ratio_sell = current_weight / rem_weight if rem_weight > 0 else 1.0
             slice_ratio_buy = current_weight / rem_weight if rem_weight > 0 else 1.0
         else:
@@ -396,10 +385,6 @@ class ReversionStrategy:
             if rem_budget <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
-            # 🚨 MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막]
-            # rem_budget을 반으로 가르는 기존 방식은 Buy2의 미사용 예산을 Buy1이 훔쳐서 무한 타격(34주 체결 등)하는 차원 붕괴를 유발.
-            # 전체 예산(alloc_cash)에 현재 분봉의 절대 가중치(current_weight)를 곱해 순수 1분 할당량을 도출하고,
-            # 이를 정확히 50%씩 쪼개어 각각의 고립된 잔차 버킷(Residual)에 이월시키는 완벽한 디커플링 이식.
             raw_b1_slice = (float(alloc_cash) * 0.5) * current_weight
             raw_b2_slice = (float(alloc_cash) * 0.5) * current_weight
             
@@ -410,33 +395,26 @@ class ReversionStrategy:
             b2_budget_slice = min(b2_bucket, max(0.0, rem_budget - b1_budget_slice))
 
             if curr_p > 0:
-                if is_zero_start_session or curr_p <= p1_trigger:
+                if buy_star_price > 0 and (is_zero_start_session or curr_p <= p1_trigger):
                     alloc_q1 = int(math.floor(b1_budget_slice / curr_p))
-                    # 수량의 소수점이 아닌 '사용하고 남은 달러'를 버킷에 돌려줌
                     self.residual["BUY1"][ticker] = b1_bucket - (alloc_q1 * curr_p)
                     if alloc_q1 > 0:
                         orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger})
                 else:
-                    # 조건 미충족 시 예산 100% 다음 분봉으로 이월 (달러 유지)
                     self.residual["BUY1"][ticker] = b1_bucket
                     
                 if curr_p <= p2_trigger:
                     alloc_q2 = int(math.floor(b2_budget_slice / curr_p))
-                    # 수량의 소수점이 아닌 '사용하고 남은 달러'를 버킷에 돌려줌
                     self.residual["BUY2"][ticker] = b2_bucket - (alloc_q2 * curr_p)
                     if alloc_q2 > 0:
                         orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger})
                 else:
-                    # 조건 미충족 시 예산 100% 다음 분봉으로 이월 (달러 유지)
                     self.residual["BUY2"][ticker] = b2_bucket
             else:
                 self.residual["BUY1"][ticker] = b1_bucket
                 self.residual["BUY2"][ticker] = b2_bucket
 
         else: # SELL
-            # 🚨 MODIFIED: [V43.28 핫픽스] 큐(Queue) 팩트 기반 이중 차감 맹점 원천 차단
-            # queue_ledger.pop_lots 에 의해 total_q 자체가 실시간으로 줄어들고 있으므로 
-            # executed["SELL_QTY"]를 다시 빼는 이중 차감 버그(매도 조기 종료 현상)를 영구 소각함.
             rem_qty_total = total_q
             
             if rem_qty_total <= 0:
@@ -451,7 +429,6 @@ class ReversionStrategy:
                         orders.append({"side": "SELL", "qty": alloc_qs, "price": trigger_jackpot})
                 else:
                     if l1_qty > 0 and curr_p >= trigger_l1:
-                        # 1층 물량이 이미 매도된 상태를 고려하여 1층 잔여량 정밀 스캔
                         sold_so_far = int(total_q) - rem_qty_total
                         rem_l1_qty = max(0, l1_qty - sold_so_far)
                         if rem_l1_qty > 0:

@@ -1,31 +1,8 @@
+# MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, 메인 장부에서 당일 날짜(EST)의 거래를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
+# MODIFIED: [V44.27 AVWAP 잔고 오염 방어] V14_VWAP 런타임 엔진에 KIS 총잔고 대신 암살자 물량이 배제된 pure_qty를 주입하여 동적 플랜 훼손 원천 차단
+# MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # ==========================================================
-# [strategy_v14_vwap.py]
-# 💡 오리지널 V14(무매4) 공식 & VWAP 타임 슬라이싱 하이브리드 플러그인
-# ⚠️ 수술 내역: 
-# 1. V14의 T값/별값/예산 산출 로직과 V-REV의 VWAP 슬라이싱 엔진 융합
-# 2. 17:05 프리장 오픈 시 '예방적 LOC 덫'을 Fail-Safe로 자동 장전
-# 3. 장 마감 30분 전(15:30 EST)부터 1분 단위 유동성 가중치 분할 타격
-# 🚨 [V26.02 팩트 동기화] 비파괴 보정(CALIB) 및 Safe Casting 완벽 이식
-# 🚨 [V26.02 핫픽스] UI 렌더링 누락 버그(별%, 진행상태) 팩트 복원
-# 🚀 [V26.03 영속성 캐시 이식] 서버 재시작 시 잔차 증발(기억상실)을 방어하는 L1/L2 듀얼 캐싱 엔진 탑재
-# 🚀 [V27.01 지시서 스냅샷] 매일 17:05 확정 지시서를 박제하여 장중 잔고 변이에 따른 타점 왜곡 원천 차단
-# 🚨 [V27.03 핫픽스] 스냅샷 로드 시 내부 날짜 검사(Validation) 전면 폐기로 무한루프 영구 방어
-# 🚨 [V27.04 자전거래 방어] 별값매수 타점을 별값매도 대비 -$0.01 차감(Decoupling)하여 동시 타격 시 주문 거절 맹점 소각
-# 🚨 [V27.05 그랜드 수술] 기억상실, 자전거래 하극상, API Reject(소수점 주문), 인자 누락 등 5대 치명적 맹점 전면 철거
-# 🚨 [V27.06 코파일럿 합작] VWAP 매도 제논의 역설(목표량 실시간 축소) 앵커링 수술 및 fsync 객체 무결성 강화
-# 🚨 [V27.17 핫픽스] 상태 저장 I/O 예외 침묵(Amnesia) 방어 및 고립된 임시 파일(FD) 누수 원천 차단
-# 🚨 [V27.22 그랜드 수술] 0주 새출발 시 VWAP 매수 실종(Ghost Town) 버그 원천 차단 (상한선 1.15배 팩트 주입)
-# MODIFIED: [V28.19 타임존 락온] datetime.now()를 EST(미국 동부) 기준으로 강제 고정하여 KST 자정 경계 스냅샷 증발 버그 완벽 수술
-# NEW: [V28.20 무조건 진입] 0주 새출발 시 VWAP 런타임 타격에서 상한선 방어막 철거 (스냅샷 락온 디커플링 이식)
-# NEW: [V29.04] 스냅샷 중복 덮어쓰기 원천 차단 멱등성 가드 이식 및 AI 환각 방어막 하드코딩 완료
-# 🚨 [V30.07 NEW] 0주 새출발 당일 매도 영구 동결 락온 이식:
-# 0주로 스냅샷이 박제된 세션(is_zero_start_fact=True)에서는
-# 정규장(market_type="REG") 내 모든 SELL 주문을 100% 강제 소각하고 홀딩을 강제함.
-# MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
-# MODIFIED: [V30.09 핫픽스] get_dynamic_plan 파라미터 시그니처(current_price, prev_close) 표준화로 TypeError 런타임 붕괴 완벽 차단
-# NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
-# NEW: [V40.XX 옴니 매트릭스] U-Curve 하드코딩 배열 전면 소각 및 config.py 동적 재정규화 파이프라인 이식 완료
-# 🚨 MODIFIED: [V43.28 그랜드 수술] 스케줄러가 가격 불만족으로 슬라이스를 스킵할 경우 발생하던 매수/매도 누수 버그를 방어하기 위해 조건 검사 전 무조건 달러 단위 잔차(Residual) 버킷에 예산을 이월(Carry-over)시켜 100% 소진 팩트 락온.
+# FILE: strategy_v14_vwap.py
 # ==========================================================
 import math
 import logging
@@ -151,6 +128,40 @@ class V14VwapStrategy:
                 pass
         return None
 
+    def ensure_failsafe_snapshot(self, ticker, current_price, total_qty, avwap_qty, avg_price, prev_close, alloc_cash):
+        snap = self.load_daily_snapshot(ticker)
+        if snap is not None:
+            return snap
+            
+        pure_qty = max(0, total_qty - avwap_qty)
+        
+        # 🚨 [V44.27 0주 스냅샷 환각 락온] 페일세이프 시점에도 메인 장부 타임머신으로 과거 물량 팩트 교차 검증
+        today_str_est = self._get_logical_date_str()
+        legacy_qty = pure_qty
+        legacy_avg = avg_price
+        try:
+            recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker and not str(r.get("date", "")).startswith(today_str_est)]
+            ledger_qty, ledger_avg, _, _ = self.cfg.calculate_holdings(ticker, recs)
+            legacy_qty = ledger_qty
+            legacy_avg = ledger_avg if ledger_qty > 0 else avg_price
+        except Exception:
+            pass
+            
+        logging.warning(f"🚨 [{ticker}] V14_VWAP 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (총잔고:{total_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주 | 이월 장부:{legacy_qty}주)")
+        
+        return self.get_plan(
+            ticker=ticker,
+            current_price=current_price,
+            avg_price=legacy_avg,
+            qty=legacy_qty,
+            prev_close=prev_close,
+            ma_5day=0.0,
+            market_type="REG",
+            available_cash=alloc_cash,
+            is_simulation=True,
+            is_snapshot_mode=True
+        )
+
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
     def _floor(self, val): return math.floor(val * 100) / 100.0
 
@@ -257,16 +268,26 @@ class V14VwapStrategy:
         total_budget = float(plan_static['one_portion'])
         
         initial_qty = int(plan_static.get('initial_qty', qty))
-        is_zero_start_session = plan_static.get('is_zero_start', initial_qty == 0)
         
-        # NEW: [V40.XX] 옴니 매트릭스 U-Curve 동적 렌더링 및 슬라이스 재연산
+        cached_plan = self.load_daily_snapshot(ticker)
+        if cached_plan:
+            is_zero_start_session = cached_plan.get('is_zero_start', initial_qty == 0)
+        else:
+            # 🚨 [V44.27 0주 스냅샷 환각 락온] 스냅샷이 끝내 로드되지 않을 경우의 최후의 타임머신 역산 보루
+            today_str_est = self._get_logical_date_str()
+            try:
+                recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker and not str(r.get("date", "")).startswith(today_str_est)]
+                ledger_qty, _, _, _ = self.cfg.calculate_holdings(ticker, recs)
+                is_zero_start_session = (ledger_qty == 0)
+            except Exception:
+                is_zero_start_session = (qty == 0)
+        
         try:
             profile = self.cfg.get_vwap_profile(ticker) if hasattr(self.cfg, 'get_vwap_profile') else {}
         except Exception as e:
             logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
             profile = {}
             
-        # 🚨 MODIFIED: [V43.28 핫픽스] 스케줄러 기상 시간(15:27)과 엇박자를 교정하여 27분부터 스캔 궤적 매핑
         target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
@@ -282,7 +303,6 @@ class V14VwapStrategy:
             raw_weight = profile.get(time_str, 0.0)
             slice_ratio = (raw_weight / rem_weight) if rem_weight > 0 else 1.0
             
-            # V43.28 팩트 교정: 누락분 100% 자가 복구를 위해 전체 예산 대비 현재 분의 절대 비중 도출
             current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / len(target_keys))
         else:
             slice_ratio = 0.0
@@ -293,19 +313,18 @@ class V14VwapStrategy:
         total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
         rem_budget_global = max(0.0, total_budget - total_spent)
         
-        # 🚨 MODIFIED: [V43.28 엣지 케이스 수술] 가격 불만족 시 스킵되는 예산의 증발(Data Starvation) 버그를 방어하기 위해, 조건 검사 전 무조건 달러 단위 잔차 버킷에 이월(Carry-over)시켜 1회분 100% 소진을 락온.
         if rem_budget_global > 0 and current_weight > 0:
             slice_budget = total_budget * current_weight
             b_bucket = float(self.residual["BUY_STAR"].get(ticker, 0.0)) + slice_budget
             b_budget_slice = min(b_bucket, rem_budget_global)
 
             if current_price > 0:
-                if buy_star_price > 0 and (initial_qty == 0 or current_price <= buy_star_price):
+                if buy_star_price > 0 and (is_zero_start_session or current_price <= buy_star_price):
                     alloc_qty = int(math.floor(b_budget_slice / current_price))
                     if alloc_qty > 0:
                         spent_b = alloc_qty * current_price
                         self.residual["BUY_STAR"][ticker] = max(0.0, b_bucket - spent_b)
-                        orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if initial_qty > 0 else current_price, "desc": "VWAP분할매수"})
+                        orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if not is_zero_start_session else current_price, "desc": "VWAP분할매수"})
                     else:
                         self.residual["BUY_STAR"][ticker] = b_bucket
                 else:

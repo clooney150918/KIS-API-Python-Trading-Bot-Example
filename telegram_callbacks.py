@@ -1,25 +1,10 @@
 # ==========================================================
-# [telegram_callbacks.py] - 🌟 100% 통합 완성본 🌟 (Full Version)
-# MODIFIED: [V28.14 통이관 및 큐 삭제 런타임 에러 완전 소각]
-# MODIFIED: [V28.15 그랜드 수술] 물량 통이관(SET_INIT) 콜백 라우터 영구 소각 및 
-# V14 <-> V-REV 모드 전환 시 실잔고 '0주 락온(Lock-on)' 절대 방어막 이식 완료
-# MODIFIED: [V28.16 UX 팩트 패치] 0주 락온 발동 시 일회성 팝업(Alert) 무반응 맹점을 해체하고 옵션 A 텍스트 박제 완료
-# MODIFIED: [V28.18 UX 팩트 패치] 0주 락온 시 자기 자신의 모드(동일 모드) 서브메뉴 진입 허용 렌더링 완료
-# MODIFIED: [V28.19 그랜드 수술] KIS API 가짜 0주(Phantom 0-Share) 응답 맹점 원천 차단. 
-# holdings None Safe-Casting 쉴드 이식 및 V14 장부 + V-REV 큐 다이렉트 I/O를 결합한 삼중 교차 검증(Triple Verification) 방어막 최종 탑재 완료
-# MODIFIED: [V28.22 스냅샷 렌더링 디커플링 수술] 졸업 카드 발급(HIST:IMG) 시 
-# 콜백 데이터에 고유 식별자(ID)가 존재할 경우 해당 과거 지층(History)을 
-# 100% 정밀 타격하여 렌더링하도록 팩트 라우팅 엔진 이식.
-# MODIFIED: [V28.25 그랜드 수술] 동적 수수료율 설정을 위한 INPUT:FEE 콜백 라우팅 분기 신설 완료.
-# MODIFIED: [V28.27] 수동 매도로 인한 0주 락온 디커플링 상태 감지 및 /reset 유도 방어막 추가
-# MODIFIED: [V28.32] 코파일럿 아키텍처 채택: V14 전용 상방 스나이퍼 로직 충돌 방지를 위한 V-REV 락다운 방어막 원상 복구
-# MODIFIED: [V28.33] TQQQ 등 타 종목의 V-REV 횡단 진입 맹점 100% 소각 (SOXL 하드웨어 락온 이식)
-# 🚨 [V29.02 UX 팩트 패치] "역사 목록으로 돌아가기(HIST:LIST)" 콜백 시 cmd_history 호출에 따른 런타임 즉사 맹점 소각. 동적 리스트 렌더링 엔진 단독 이식 완료.
-# 🚨 [V29.03 핫픽스] UnboundLocalError 런타임 즉사 유발 원흉(AVWAP 내부 로컬 임포트 섀도잉) 100% 소각 완료.
-# NEW: [V29.04] queue_ledger.queues 객체 직접 참조 런타임 붕괴 데드코드 전면 소각 및 다이렉트 I/O 멱등성 방어막 이식
-# MODIFIED: [V30.09 핫픽스] 잔존 데드코드(pytz) 영구 소각 및 ZoneInfo 이식을 통한 타임존 무결성 락온 통일
-# 🚨 MODIFIED: [V32.00] 12차 백테스트 팩트 반영. 불필요해진 AVWAP 동적 파라미터(TARGET_SET, GAP_SET) 콜백 라우팅 전면 소각 완료.
-# 🚨 MODIFIED: [V44.24 V14_VWAP 플래그 원상 복구 및 EXEC 맹점 소각] V14_VWAP 모드를 V14_LOC와 완벽하게 구분하기 위해 manual 플래그를 True로 복원시키고, 이로 인해 수동 장전(EXEC)이 가로막히던 로직을 전면 철거하여 UI 렌더링과 엔진의 무결성을 동시 확보함.
+# FILE: telegram_callbacks.py
+# ==========================================================
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
+# MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 다이렉트 파일 I/O 및 config/ledger 접근 메서드 전면 비동기 래핑 완료.
+# MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보] 큐 장부에 존재하지 않는 _load 메서드 호출 찌꺼기 100% 소각.
 # ==========================================================
 import logging
 import datetime
@@ -29,6 +14,7 @@ import json
 import time
 import math
 import asyncio
+import tempfile
 import yfinance as yf
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -43,12 +29,13 @@ class TelegramCallbacks:
         self.view = view
         self.tx_lock = tx_lock
 
-    def _get_max_holdings_qty(self, ticker, kis_qty):
+    # 🚨 [비동기 래핑] 파일 I/O 데드락 방어
+    async def _get_max_holdings_qty(self, ticker, kis_qty):
         v14_qty = 0
         vrev_qty = 0
         
         try:
-            ledger = self.cfg.get_ledger()
+            ledger = await asyncio.to_thread(self.cfg.get_ledger)
             net = 0
             for r in ledger:
                 if r.get('ticker') == ticker:
@@ -60,10 +47,13 @@ class TelegramCallbacks:
 
         try:
             q_file = "data/queue_ledger.json"
-            if os.path.exists(q_file):
-                with open(q_file, 'r', encoding='utf-8') as f:
-                    q_data = json.load(f)
-                vrev_qty = sum(int(float(lot.get('qty', 0))) for lot in q_data.get(ticker, []) if int(float(lot.get('qty', 0))) > 0)
+            def _read_q_file(f):
+                if os.path.exists(f):
+                    with open(f, 'r', encoding='utf-8') as file:
+                        return json.load(file)
+                return {}
+            q_data = await asyncio.to_thread(_read_q_file, q_file)
+            vrev_qty = sum(int(float(lot.get('qty', 0))) for lot in q_data.get(ticker, []) if int(float(lot.get('qty', 0))) > 0)
         except Exception:
             pass
 
@@ -103,13 +93,18 @@ class TelegramCallbacks:
             if sub == "VIEW":
                 ticker = data[2]
                 if getattr(self, 'queue_ledger', None):
-                    q_data = self.queue_ledger.get_queue(ticker)
+                    # 🚨 [비동기 래핑]
+                    q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                 else:
                     q_data = []
-                    try:
+                    # 🚨 MODIFIED: 파일 I/O 비동기 래핑
+                    def _read_q():
                         if os.path.exists("data/queue_ledger.json"):
                             with open("data/queue_ledger.json", "r", encoding='utf-8') as f:
-                                q_data = json.load(f).get(ticker, [])
+                                return json.load(f).get(ticker, [])
+                        return []
+                    try:
+                        q_data = await asyncio.to_thread(_read_q)
                     except Exception:
                         pass
                         
@@ -118,7 +113,7 @@ class TelegramCallbacks:
 
         elif action == "EMERGENCY_REQ":
             ticker = sub
-            status_code, _ = controller._get_market_status()
+            status_code, _ = await controller._get_market_status()
             if status_code not in ["PRE", "REG"]:
                 await query.answer("❌ [격발 차단] 현재 장운영시간(정규장/프리장)이 아닙니다.", show_alert=True)
                 return
@@ -126,8 +121,9 @@ class TelegramCallbacks:
             if not getattr(self, 'queue_ledger', None):
                 from queue_ledger import QueueLedger
                 self.queue_ledger = QueueLedger()
-                
-            q_data = self.queue_ledger.get_queue(ticker)
+            
+            # 🚨 [비동기 래핑]
+            q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
             total_q = sum(item.get("qty", 0) for item in q_data)
             
             if total_q == 0:
@@ -143,7 +139,7 @@ class TelegramCallbacks:
 
         elif action == "EMERGENCY_EXEC":
             ticker = sub
-            status_code, _ = controller._get_market_status()
+            status_code, _ = await controller._get_market_status()
             
             if status_code not in ["PRE", "REG"]:
                 await query.answer("❌ [격발 차단] 현재 장운영시간(정규장/프리장)이 아닙니다.", show_alert=True)
@@ -153,7 +149,8 @@ class TelegramCallbacks:
                 from queue_ledger import QueueLedger
                 self.queue_ledger = QueueLedger()
                 
-            q_data = self.queue_ledger.get_queue(ticker)
+            # 🚨 [비동기 래핑]
+            q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
             if not q_data:
                 await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
                 return
@@ -167,13 +164,14 @@ class TelegramCallbacks:
                     res = await asyncio.to_thread(self.broker.send_order, ticker, "SELL", emergency_qty, 0.0, "MOC")
                     
                     if res.get('rt_cd') == '0':
-                        self.queue_ledger.pop_lots(ticker, emergency_qty)
+                        # 🚨 MODIFIED: 파일 I/O 비동기 래핑
+                        await asyncio.to_thread(self.queue_ledger.pop_lots, ticker, emergency_qty)
                         
                         msg = f"🚨 <b>[{ticker}] 수동 긴급 수혈 (Emergency MOC) 격발 완료!</b>\n"
                         msg += f"▫️ 포트폴리오 매니저의 승인 하에 최근 로트 <b>{emergency_qty}주</b>를 시장가(MOC)로 강제 청산했습니다.\n"
                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                         
-                        new_q_data = self.queue_ledger.get_queue(ticker)
+                        new_q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                         new_msg, markup = self.view.get_queue_management_menu(ticker, new_q_data)
                         await query.edit_message_text(new_msg, reply_markup=markup, parse_mode='HTML')
                     else:
@@ -185,13 +183,16 @@ class TelegramCallbacks:
             ticker = sub
             target_date = ":".join(data[2:])
             
-            q_data = self.queue_ledger.get_queue(ticker) if getattr(self, 'queue_ledger', None) else []
+            q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker) if getattr(self, 'queue_ledger', None) else []
             if not q_data:
-                try:
-                    with open("data/queue_ledger.json", "r") as f:
-                        q_data = json.load(f).get(ticker, [])
-                except Exception:
-                    pass
+                # 🚨 MODIFIED: 파일 I/O 비동기 래핑
+                def _read_q():
+                    try:
+                        with open("data/queue_ledger.json", "r") as f:
+                            return json.load(f).get(ticker, [])
+                    except Exception:
+                        return []
+                q_data = await asyncio.to_thread(_read_q)
             
             qty, price = 0, 0.0
             for item in q_data:
@@ -199,7 +200,7 @@ class TelegramCallbacks:
                     qty = item.get('qty', 0)
                     price = item.get('price', 0.0)
                     break
-                    
+            
             msg, markup = self.view.get_queue_action_confirm_menu(ticker, target_date, qty, price)
             await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
@@ -210,25 +211,42 @@ class TelegramCallbacks:
             try:
                 q_file = "data/queue_ledger.json"
                 all_q = {}
-                if os.path.exists(q_file):
-                    with open(q_file, 'r', encoding='utf-8') as f:
-                        all_q = json.load(f)
+                
+                # 🚨 MODIFIED: 파일 I/O 비동기 래핑
+                def _read_all_q():
+                    if os.path.exists(q_file):
+                        with open(q_file, 'r', encoding='utf-8') as f:
+                            return json.load(f)
+                    return {}
+                all_q = await asyncio.to_thread(_read_all_q)
                 
                 ticker_q = all_q.get(ticker, [])
                 
                 if action == "DEL_Q":
                     new_q = [item for item in ticker_q if item.get('date') != target_date]
-                    
                     all_q[ticker] = new_q
-                    os.makedirs(os.path.dirname(q_file), exist_ok=True)
-                    with open(q_file, 'w', encoding='utf-8') as f:
-                        json.dump(all_q, f, ensure_ascii=False, indent=4)
-                        
-                    if getattr(self, 'queue_ledger', None) and hasattr(self.queue_ledger, '_load'):
+                    
+                    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                    # 파일 I/O 동기 블로킹 방지 및 원자적 쓰기(Atomic Write) 강제
+                    def _write_q(file_path, q_dict):
+                        dir_name = os.path.dirname(file_path) or '.'
+                        os.makedirs(dir_name, exist_ok=True)
+                        fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
                         try:
-                            self.queue_ledger._load()
-                        except:
-                            pass
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                json.dump(q_dict, f_out, ensure_ascii=False, indent=4)
+                                f_out.flush()
+                                os.fsync(f_out.fileno())
+                            os.replace(tmp_path, file_path)
+                        except Exception as e:
+                            if os.path.exists(tmp_path):
+                                os.remove(tmp_path)
+                            raise e
+                    
+                    await asyncio.to_thread(_write_q, q_file, all_q)
+                    
+                    # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보]
+                    # (기존 hasattr(self.queue_ledger, '_load') 찌꺼기 소각)
                     
                     await query.answer("✅ 지층 삭제 완료. KIS 원장과 동기화합니다.", show_alert=False)
                     
@@ -237,7 +255,7 @@ class TelegramCallbacks:
                     if not self.sync_engine.sync_locks[ticker].locked():
                         await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=True)
                         
-                    final_q = self.queue_ledger.get_queue(ticker) if getattr(self, 'queue_ledger', None) else new_q
+                    final_q = await asyncio.to_thread(self.queue_ledger.get_queue, ticker) if getattr(self, 'queue_ledger', None) else new_q
                     msg, markup = self.view.get_queue_management_menu(ticker, final_q)
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                     
@@ -257,7 +275,8 @@ class TelegramCallbacks:
 
         elif action == "VERSION":
             await query.answer()
-            history_data = self.cfg.get_full_version_history()
+            # 🚨 [비동기 래핑]
+            history_data = await asyncio.to_thread(self.cfg.get_full_version_history)
             if sub == "LATEST":
                 msg, markup = self.view.get_version_message(history_data, page_index=None)
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
@@ -269,12 +288,13 @@ class TelegramCallbacks:
         elif action == "RESET":
             await query.answer()
             if sub == "MENU":
-                active_tickers = self.cfg.get_active_tickers()
+                # 🚨 [비동기 래핑]
+                active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
                 msg, markup = self.view.get_reset_menu(active_tickers)
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
             elif sub == "LOCK": 
                 ticker = data[2]
-                self.cfg.reset_lock_for_ticker(ticker)
+                await asyncio.to_thread(self.cfg.reset_lock_for_ticker, ticker)
                 await query.edit_message_text(f"✅ <b>[{ticker}] 금일 매매 잠금이 해제되었습니다.</b>", parse_mode='HTML')
             elif sub == "REV":
                 ticker = data[2]
@@ -283,41 +303,55 @@ class TelegramCallbacks:
             elif sub == "CONFIRM":
                 ticker = data[2]
                 
-                self.cfg.set_reverse_state(ticker, False, 0)
-                self.cfg.clear_escrow_cash(ticker) 
+                await asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0)
+                await asyncio.to_thread(self.cfg.clear_escrow_cash, ticker)
                 
-                ledger_data = [r for r in self.cfg.get_ledger() if r.get('ticker') != ticker]
-                self.cfg._save_json(self.cfg.FILES["LEDGER"], ledger_data)
+                # 🚨 [비동기 래핑]
+                ledger = await asyncio.to_thread(self.cfg.get_ledger)
+                ledger_data = [r for r in ledger if r.get('ticker') != ticker]
+                await asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["LEDGER"], ledger_data)
                 
-                backup_file = self.cfg.FILES["LEDGER"].replace(".json", "_backup.json")
-                if os.path.exists(backup_file):
-                    try:
-                        with open(backup_file, 'r', encoding='utf-8') as f:
-                            b_data = json.load(f)
-                        b_data = [r for r in b_data if r.get('ticker') != ticker]
-                        with open(backup_file, 'w', encoding='utf-8') as f:
-                            json.dump(b_data, f, ensure_ascii=False, indent=4)
-                    except Exception:
-                        pass
-                
-                q_file = "data/queue_ledger.json"
-                if os.path.exists(q_file):
-                    try:
-                        with open(q_file, 'r', encoding='utf-8') as f:
-                            q_data = json.load(f)
-                        if ticker in q_data:
-                            del q_data[ticker]
-                        with open(q_file, 'w', encoding='utf-8') as f:
-                            json.dump(q_data, f, ensure_ascii=False, indent=4)
-                    except Exception:
-                        pass
+                # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                # 백업 장부 및 큐 장부 초기화 시 파일 I/O 원자적 쓰기(Atomic Write) 강제 및 비동기 래핑
+                def _process_reset_files():
+                    backup_file = self.cfg.FILES["LEDGER"].replace(".json", "_backup.json")
+                    if os.path.exists(backup_file):
+                        try:
+                            with open(backup_file, 'r', encoding='utf-8') as f:
+                                b_data = json.load(f)
+                            b_data = [r for r in b_data if r.get('ticker') != ticker]
+                            
+                            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(backup_file) or '.')
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                json.dump(b_data, f_out, ensure_ascii=False, indent=4)
+                                f_out.flush()
+                                os.fsync(f_out.fileno())
+                            os.replace(tmp_path, backup_file)
+                        except Exception:
+                            pass
                     
-                if getattr(self, 'queue_ledger', None) and hasattr(self.queue_ledger, '_load'):
-                    try:
-                        self.queue_ledger._load()
-                    except Exception:
-                        pass
+                    q_file = "data/queue_ledger.json"
+                    if os.path.exists(q_file):
+                        try:
+                            with open(q_file, 'r', encoding='utf-8') as f:
+                                q_data = json.load(f)
+                            if ticker in q_data:
+                                del q_data[ticker]
+                            
+                            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(q_file) or '.')
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                json.dump(q_data, f_out, ensure_ascii=False, indent=4)
+                                f_out.flush()
+                                os.fsync(f_out.fileno())
+                            os.replace(tmp_path, q_file)
+                        except Exception:
+                            pass
+                 
+                await asyncio.to_thread(_process_reset_files)
                     
+                # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보]
+                # (기존 hasattr(self.queue_ledger, '_load') 찌꺼기 소각)
+            
                 await query.edit_message_text(f"✅ <b>[{ticker}] 삼위일체 소각(Nuke) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 큐(Queue), 에스크로의 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 다음 매수 진입 시 0주 새출발 디커플링 타점 모드로 완벽히 재시작합니다.", parse_mode='HTML')
             
             elif sub == "CANCEL":
@@ -347,7 +381,9 @@ class TelegramCallbacks:
             await query.answer()
             if sub == "VIEW":
                 hid = int(data[2])
-                target = next((h for h in self.cfg.get_history() if h['id'] == hid), None)
+                # 🚨 [비동기 래핑]
+                hist_data = await asyncio.to_thread(self.cfg.get_history)
+                target = next((h for h in hist_data if h['id'] == hid), None)
                 if target:
                     safe_trades = target.get('trades', [])
                     for t_rec in safe_trades:
@@ -356,7 +392,7 @@ class TelegramCallbacks:
                         if 'side' not in t_rec:
                             t_rec['side'] = 'BUY'
                             
-                    qty, avg, invested, sold = self.cfg.calculate_holdings(target['ticker'], safe_trades)
+                    qty, avg, invested, sold = await asyncio.to_thread(self.cfg.calculate_holdings, target['ticker'], safe_trades)
                     
                     try:
                         msg, markup = self.view.create_ledger_dashboard(target['ticker'], qty, avg, invested, sold, safe_trades, 0, 0, is_history=True, history_id=hid)
@@ -373,7 +409,9 @@ class TelegramCallbacks:
                 ticker = data[2]
                 target_id = int(data[3]) if len(data) > 3 else None
                 
-                hist_list = [h for h in self.cfg.get_history() if h['ticker'] == ticker]
+                # 🚨 [비동기 래핑]
+                hist_data = await asyncio.to_thread(self.cfg.get_history)
+                hist_list = [h for h in hist_data if h['ticker'] == ticker]
                 
                 if not hist_list:
                     await context.bot.send_message(chat_id, f"📭 <b>[{ticker}]</b> 발급 가능한 졸업 기록이 존재하지 않습니다.", parse_mode='HTML')
@@ -388,7 +426,10 @@ class TelegramCallbacks:
                 
                 try:
                     await query.edit_message_text(f"🎨 <b>[{ticker}] 프리미엄 졸업 카드를 렌더링 중입니다...</b>", parse_mode='HTML')
-                    img_path = self.view.create_profit_image(
+
+                    # 🚨 MODIFIED: 비동기 래핑
+                    img_path = await asyncio.to_thread(
+                        self.view.create_profit_image,
                         ticker=target_hist['ticker'],
                         profit=target_hist['profit'],
                         yield_pct=target_hist['yield'],
@@ -396,6 +437,7 @@ class TelegramCallbacks:
                         revenue=target_hist['revenue'],
                         end_date=target_hist['end_date']
                     )
+                    
                     if os.path.exists(img_path):
                         with open(img_path, 'rb') as f_out:
                             if img_path.lower().endswith('.gif'):
@@ -411,15 +453,14 @@ class TelegramCallbacks:
             
         elif action == "EXEC":
             t = sub
-            ver = self.cfg.get_version(t)
+            # 🚨 [비동기 래핑]
+            ver = await asyncio.to_thread(self.cfg.get_version, t)
 
             if ver == "V_REV":
                 await query.answer("🛑 [예방 덫 전면 소각] V-REV 모드는 자전거래 의심을 회피하고 AVWAP 암살자 가동을 위해 예방 덫 수동 장전 기능을 영구 소각했습니다.", show_alert=True)
                 return
 
             await query.answer()
-            
-            # 🚨 MODIFIED: [V44.24] V14 VWAP의 수동 장전을 허용하기 위해 블로킹 삭제 완료
             
             await query.edit_message_text(f"🚀 {t} 수동 강제 전송 시작 (교차 분리)...")
             
@@ -429,7 +470,8 @@ class TelegramCallbacks:
             if holdings is None:
                 return await query.edit_message_text("❌ API 통신 오류로 주문을 실행할 수 없습니다.")
                 
-            _, allocated_cash = controller._calculate_budget_allocation(cash, self.cfg.get_active_tickers())
+            active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
+            _, allocated_cash = await asyncio.to_thread(controller._calculate_budget_allocation, cash, active_tickers)
             h = holdings.get(t, {'qty':0, 'avg':0})
             
             curr_p = float(await asyncio.to_thread(self.broker.get_current_price, t) or 0.0)
@@ -437,7 +479,7 @@ class TelegramCallbacks:
             safe_avg = float(h.get('avg') or 0.0)
             safe_qty = int(float(h.get('qty') or 0))
 
-            status_code, _ = controller._get_market_status()
+            status_code, _ = await controller._get_market_status()
             
             if status_code in ["AFTER", "CLOSE", "PRE"]:
                 try:
@@ -455,15 +497,17 @@ class TelegramCallbacks:
             ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
             
             logic_qty_v14 = safe_qty
-            is_manual_vwap = getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+            # 🚨 [비동기 래핑]
+            is_manual_vwap = await asyncio.to_thread(getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False), t)
             if is_manual_vwap:
                 cached_snap_v14 = None
                 if hasattr(self.strategy, 'v14_vwap_plugin'):
-                    cached_snap_v14 = self.strategy.v14_vwap_plugin.load_daily_snapshot(t)
+                    cached_snap_v14 = await asyncio.to_thread(self.strategy.v14_vwap_plugin.load_daily_snapshot, t)
                 if cached_snap_v14 and "total_q" in cached_snap_v14:
                     logic_qty_v14 = cached_snap_v14["total_q"]
 
-            plan = self.strategy.get_plan(t, curr_p, safe_avg, logic_qty_v14, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], is_simulation=True)
+            # 🚨 [비동기 래핑]
+            plan = await asyncio.to_thread(self.strategy.get_plan, t, curr_p, safe_avg, logic_qty_v14, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], is_simulation=True)
             
             if safe_qty == 0:
                 for o in plan.get('core_orders', []):
@@ -495,7 +539,7 @@ class TelegramCallbacks:
                 await asyncio.sleep(0.2) 
             
             if all_success and len(plan.get('core_orders', [])) > 0:
-                self.cfg.set_lock(t, "REG")
+                await asyncio.to_thread(self.cfg.set_lock, t, "REG")
                 msg += "\n🔒 <b>필수 주문 전송 완료 (잠금 설정됨)</b>"
             else:
                 msg += "\n⚠️ <b>일부 필수 주문 실패 (매매 잠금 보류)</b>"
@@ -506,7 +550,8 @@ class TelegramCallbacks:
             await query.answer()
             new_ver = sub
             ticker = data[2]
-            current_ver = self.cfg.get_version(ticker)
+            # 🚨 [비동기 래핑]
+            current_ver = await asyncio.to_thread(self.cfg.get_version, ticker)
             
             if ticker == "TQQQ" and new_ver == "V_REV":
                 await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.")
@@ -523,7 +568,7 @@ class TelegramCallbacks:
                 return
                 
             kis_qty = int(float(holdings.get(ticker, {}).get('qty', 0)))
-            max_qty = self._get_max_holdings_qty(ticker, kis_qty)
+            max_qty = await self._get_max_holdings_qty(ticker, kis_qty)
             
             if kis_qty == 0 and max_qty > 0 and current_ver != new_ver:
                 msg = f"🚨 <b>[ 퀀트 모드 전환 강제 차단: 수동 매도 감지 ]</b>\n\n"
@@ -553,12 +598,12 @@ class TelegramCallbacks:
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
                 return
                 
-            self.cfg.set_version(ticker, new_ver)
-            self.cfg.set_upward_sniper_mode(ticker, False)
+            await asyncio.to_thread(self.cfg.set_version, ticker, new_ver)
+            await asyncio.to_thread(self.cfg.set_upward_sniper_mode, ticker, False)
             if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
-                self.cfg.set_avwap_hybrid_mode(ticker, False)
+                await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, False)
             if hasattr(self.cfg, 'set_manual_vwap_mode'):
-                self.cfg.set_manual_vwap_mode(ticker, False)
+                await asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, False)
                 
             await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
 
@@ -566,7 +611,8 @@ class TelegramCallbacks:
             await query.answer()
             mode_type = sub 
             ticker = data[2]
-            current_ver = self.cfg.get_version(ticker)
+            # 🚨 [비동기 래핑]
+            current_ver = await asyncio.to_thread(self.cfg.get_version, ticker)
             
             target_ver = "V_REV" if mode_type in ["AUTO", "MANUAL"] else "V14"
 
@@ -585,7 +631,7 @@ class TelegramCallbacks:
                 return
                 
             kis_qty = int(float(holdings.get(ticker, {}).get('qty', 0)))
-            max_qty = self._get_max_holdings_qty(ticker, kis_qty)
+            max_qty = await self._get_max_holdings_qty(ticker, kis_qty)
             
             if kis_qty == 0 and max_qty > 0 and current_ver != target_ver:
                 msg = f"🚨 <b>[ 퀀트 모드 전환 강제 차단: 수동 매도 감지 ]</b>\n\n"
@@ -603,32 +649,31 @@ class TelegramCallbacks:
                 return
             
             if mode_type in ["AUTO", "MANUAL"]:
-                self.cfg.set_version(ticker, "V_REV")
-                self.cfg.set_upward_sniper_mode(ticker, False)
+                await asyncio.to_thread(self.cfg.set_version, ticker, "V_REV")
+                await asyncio.to_thread(self.cfg.set_upward_sniper_mode, ticker, False)
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
-                    self.cfg.set_avwap_hybrid_mode(ticker, False)
-                    
+                    await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, False)
+                
                 if mode_type == "MANUAL":
-                    self.cfg.set_manual_vwap_mode(ticker, True)
+                    await asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, True)
                     mode_txt = "🖐️ 수동 모드 (한투 VWAP 알고리즘 위임)"
                 else:
-                    self.cfg.set_manual_vwap_mode(ticker, False)
+                    await asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, False)
                     mode_txt = "🤖 자동 모드 (자체 VWAP 엔진 정밀타격)"
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V_REV 역추세 하이브리드</b>로 전환되었습니다.\n▫️ <b>운용 방식:</b> {mode_txt}\n▫️ /sync 지시서를 확인해 주십시오.", parse_mode='HTML')
             
             elif mode_type in ["V14_LOC", "V14_VWAP"]:
-                self.cfg.set_version(ticker, "V14")
-                self.cfg.set_upward_sniper_mode(ticker, False)
+                await asyncio.to_thread(self.cfg.set_version, ticker, "V14")
+                await asyncio.to_thread(self.cfg.set_upward_sniper_mode, ticker, False)
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
-                    self.cfg.set_avwap_hybrid_mode(ticker, False)
+                    await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, False)
                     
                 if mode_type == "V14_VWAP":
-                    # 🚨 MODIFIED: [V44.24 V14_VWAP 모드 플래그 원상 복구] V14 LOC와 완벽하게 구분되도록 True 락온
-                    self.cfg.set_manual_vwap_mode(ticker, True)
+                    await asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, True)
                     mode_txt = "🕒 VWAP 타임 슬라이싱 (자동 유동성 추적)"
                 else:
-                    self.cfg.set_manual_vwap_mode(ticker, False)
+                    await asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, False)
                     mode_txt = "📉 LOC 단일 타격 (초안정성)"
                     
                 await query.edit_message_text(f"✅ <b>[{ticker}]</b> 퀀트 엔진이 <b>V14 무매4</b> 모드로 전환되었습니다.\n▫️ <b>집행 방식:</b> {mode_txt}\n▫️ /sync 명령어에서 변경된 지시서를 확인하세요.", parse_mode='HTML')
@@ -644,53 +689,53 @@ class TelegramCallbacks:
             def set_tracking_mode(mode_value):
                 nonlocal render_app_data
                 context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = mode_value
+                if ticker == "SOXL":
+                    context.bot_data['app_data'].setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = mode_value
+                
                 if context.job_queue:
                     for job in context.job_queue.jobs():
                         if job.data is not None:
                             job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = mode_value
+                            if ticker == "SOXL":
+                                job.data.setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = mode_value
                             render_app_data = job.data
+
+            display_ticker = "SOXL/SOXS 듀얼" if ticker == "SOXL" else ticker
 
             if action_type == "TARGET_MANUAL":
                 set_tracking_mode("MANUAL")
                 controller.user_states[chat_id] = f"CONF_AVWAP_TARGET_{ticker}"
                 
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                 except Exception:
                     pass
 
                 try:
-                    await context.bot.send_message(chat_id, f"🖐️ <b>[{ticker}] 수동 고정 모드 전환!</b>\n🎯 <b>목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ -8.0% 하드스탑 컷은 안전을 위해 고정됩니다.", parse_mode='HTML')
-                    await query.answer(f"[{ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
+                    await context.bot.send_message(chat_id, f"🖐️ <b>[{display_ticker}] 수동 고정 모드 전환!</b>\n🎯 <b>목표 수익률(%)</b>을 숫자로 입력하세요.\n(예: 2.0, 3.5, 4.0)\n※ -8.0% 하드스탑 컷은 안전을 위해 고정됩니다.", parse_mode='HTML')
+                    await query.answer(f"[{display_ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
                 except Exception as e:
                     logging.error(f"프롬프트 발송 실패: {e}")
-                    await query.answer(f"[{ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
+                    await query.answer(f"[{display_ticker}] 채팅창에 목표 수익률을 숫자로 입력하세요!", show_alert=True)
 
             elif action_type == "TARGET_AUTO":
                 set_tracking_mode("AUTO")
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
-                    await query.answer(f"✅ [{ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
+                    await controller.cmd_settlement(update, context)
+                    await query.answer(f"✅ [{display_ticker}] 🤖 자율주행 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
-                        await query.answer(f"✅ [{ticker}] 이미 최신 상태(🤖자율주행)입니다.", show_alert=False)
+                        await query.answer(f"✅ [{display_ticker}] 이미 최신 상태(🤖자율주행)입니다.", show_alert=False)
                     else:
-                        logging.error(f"관제탑 새로고침 에러: {e}")
-                        await query.answer("모드 변경 완료. /avwap을 다시 호출해주세요.", show_alert=False)
+                        logging.error(f"설정 새로고침 에러: {e}")
+                        await query.answer("모드 변경 완료. /settlement를 다시 호출해주세요.", show_alert=False)
                     
             elif action_type == "EARLY":
-                self.cfg.set_avwap_multi_strike_mode(ticker, False)
+                await asyncio.to_thread(self.cfg.set_avwap_multi_strike_mode, ticker, False)
+                if ticker == "SOXL":
+                    await asyncio.to_thread(self.cfg.set_avwap_multi_strike_mode, "SOXS", False)
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                     await query.answer("✅ 조기퇴근 모드(1회 익절)로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
@@ -699,12 +744,11 @@ class TelegramCallbacks:
                         pass
                 
             elif action_type == "MULTI":
-                self.cfg.set_avwap_multi_strike_mode(ticker, True)
+                await asyncio.to_thread(self.cfg.set_avwap_multi_strike_mode, ticker, True)
+                if ticker == "SOXL":
+                    await asyncio.to_thread(self.cfg.set_avwap_multi_strike_mode, "SOXS", True)
                 try:
-                    from telegram_avwap_console import AvwapConsolePlugin
-                    plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-                    msg, markup = await plugin.get_console_message(render_app_data)
-                    await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
+                    await controller.cmd_settlement(update, context)
                     await query.answer("✅ 무제한 다중 출장 모드로 전환되었습니다.", show_alert=False)
                 except Exception as e:
                     if "Message is not modified" in str(e):
@@ -733,11 +777,6 @@ class TelegramCallbacks:
             await query.answer()
             if sub == "MENU":
                 ticker = data[2]
-                is_hybrid_on = getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False)(ticker)
-                if not is_hybrid_on:
-                    await context.bot.send_message(chat_id, f"⚠️ [{ticker}] AVWAP 하이브리드 모드가 꺼져있습니다. 먼저 활성화해주세요.")
-                    return
-                    
                 try:
                     from telegram_avwap_console import AvwapConsolePlugin
                     plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
@@ -761,22 +800,51 @@ class TelegramCallbacks:
                 return
             elif mode_val == "AVWAP_ON":
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
-                    self.cfg.set_avwap_hybrid_mode(ticker, True)
-                self.cfg.set_upward_sniper_mode(ticker, False) 
-                await query.edit_message_text(f"🔥 <b>[{ticker}] 차세대 12차 AVWAP 암살자 모드가 락온(Lock-on) 되었습니다!</b>\n▫️ 남은 가용 예산 100%를 활용하여 장중 딥매수 타점을 정밀 사냥합니다.\n▫️ <code>/avwap</code> 명령어로 독립 관제탑에 접속하세요.", parse_mode='HTML')
+                    await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, True)
+                await asyncio.to_thread(self.cfg.set_upward_sniper_mode, ticker, False)
+                try:
+                    await controller.cmd_settlement(update, context)
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id, f"🔥 <b>[{ticker}] 차세대 12차 AVWAP 암살자 모드가 락온(Lock-on) 되었습니다!</b>\n▫️ 남은 가용 예산 100%를 활용하여 장중 딥매수 타점을 정밀 사냥합니다.\n▫️ <code>/avwap</code> 명령어로 독립 관제탑 레이더망에 접속하세요.", parse_mode='HTML')
                 return
             elif mode_val == "AVWAP_OFF":
                 if hasattr(self.cfg, 'set_avwap_hybrid_mode'):
-                    self.cfg.set_avwap_hybrid_mode(ticker, False)
-                await query.edit_message_text(f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리 전술이 즉시 해제되었습니다.</b>", parse_mode='HTML')
+                    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                    # 파일 I/O 동기 블로킹 방지를 위해 asyncio.to_thread 유지
+                    await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, False)
+                    # 🚨 MODIFIED: [V44.45 듀얼 모멘텀 그림자 동기화] SOXL 해제 시 SOXS(그림자 티커)도 논리적 강제 해제
+                    if ticker == "SOXL":
+                        await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, "SOXS", False)
+
+                # NEW: [V44.45 AVWAP 물리적 킬 스위치 (Kill-Switch) 이식]
+                # 논리적 OFF 시 거래소 호가창에 고아(Orphan)로 살아남은 지정가(LIMIT, "00") 딥매수 덫을 100% 팩트 스캔하여 강제 소각(Nuke)
+                nuke_msg = ""
+                try:
+                    cancelled_buys = await asyncio.to_thread(self.broker.cancel_targeted_orders, ticker, "BUY", "00")
+                    if cancelled_buys > 0:
+                        nuke_msg += f"\n🛡️ <b>물리적 킬 스위치 가동:</b> [{ticker}] 미체결 딥매수 덫 {cancelled_buys}건 강제 소각 완료."
+                    
+                    if ticker == "SOXL":
+                        cancelled_soxs = await asyncio.to_thread(self.broker.cancel_targeted_orders, "SOXS", "BUY", "00")
+                        if cancelled_soxs > 0:
+                            nuke_msg += f"\n🛡️ <b>그림자 티커 킬 스위치:</b> [SOXS] 미체결 딥매수 덫 {cancelled_soxs}건 강제 소각 완료."
+                except Exception as e:
+                    logging.error(f"🚨 AVWAP 물리적 킬 스위치 가동 중 에러: {e}")
+
+                try:
+                    await controller.cmd_settlement(update, context)
+                except Exception:
+                    pass
+                await context.bot.send_message(chat_id, f"🛑 <b>[{ticker}] 차세대 AVWAP 하이브리드 전술이 즉시 해제되었습니다.</b>{nuke_msg}", parse_mode='HTML')
                 return
 
-            current_ver = self.cfg.get_version(ticker)
+            current_ver = await asyncio.to_thread(self.cfg.get_version, ticker)
             if current_ver == "V_REV" and mode_val == "ON":
                 await context.bot.send_message(chat_id, f"🚨 {current_ver} 모드에서는 로직 충돌 방지를 위해 상방 스나이퍼를 켤 수 없습니다!")
                 return
 
-            self.cfg.set_upward_sniper_mode(ticker, mode_val == "ON")
+            await asyncio.to_thread(self.cfg.set_upward_sniper_mode, ticker, mode_val == "ON")
             await query.edit_message_text(f"✅ <b>[{ticker}]</b> 상방 스나이퍼 모드 변경 완료: {'🎯 ON (가동중)' if mode_val == 'ON' else '⚪ OFF (대기중)'}", parse_mode='HTML')
             
         elif action == "TICKER":
@@ -797,7 +865,7 @@ class TelegramCallbacks:
                 target_tickers = [sub]
                 msg_txt = sub + " 전용"
                 
-            self.cfg.set_active_tickers(target_tickers)
+            await asyncio.to_thread(self.cfg.set_active_tickers, target_tickers)
             await query.edit_message_text(f"✅ <b>[운용 종목 락온 완료]</b>\n▫️ <b>{msg_txt}</b> 모드로 전환되었습니다.\n▫️ /sync를 눌러 확인하십시오.", parse_mode='HTML')
             
         elif action == "SEED":

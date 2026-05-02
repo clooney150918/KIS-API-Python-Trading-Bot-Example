@@ -1,8 +1,10 @@
-# MODIFIED: [V44.08 장부 오염 디커플링] KIS 실잔고 스캔 시 AVWAP 암살자가 확보한 물량을 사전에 차감(Decoupling)하여, 암살자 물량이 V-REV LIFO 큐에 '수동 매수'로 오판되어 강제 편입되는 치명적 장부 오염 엣지 케이스 원천 차단.
-# MODIFIED: [V44.09 AVWAP 유령 매수 환각 원천 차단] V-REV 모드에서 0주 졸업 판별이 확정되었음에도 인메모리(tracking_cache)에 AVWAP 물량이 남아있을 경우, 이를 즉각 포맷하고 영속성 상태 파일(save_state)까지 100% 소각하여 허공에 익절 주문을 난사하는 런타임 환각 및 통신 과부하(Reject) 맹점 완벽 수술.
-# NEW: [V44.10 비파괴 보정(CALIB_SELL) 0달러 폭탄 방어막 이식] 실잔고가 0주가 되어 오차를 교정(CALIB_SELL)할 때, KIS 서버가 반환하는 평단가($0.00)를 그대로 매도가에 꽂아 수익률이 -100%로 붕괴하던 치명적 맹점 전면 수술. 체결 원장에서 실제 매도 평단가를 역산하여 주입하고, 실패 시 기존 장부 평단가(temp_sim_avg)를 강제 덮어씌워 PnL 훼손을 원천 차단 완료.
 # ==========================================================
 # FILE: telegram_sync_engine.py
+# ==========================================================
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
+# MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출(장부 I/O, JSON 파싱) 전면 비동기 래핑 및 Atomic Write 적용 완료.
+# MODIFIED: [V44.48 데드코드 소각] 클래스 내부에 잔존하는 _verify_and_update_queue 메서드 전체 100% 영구 소각.
 # ==========================================================
 import logging
 import datetime
@@ -27,13 +29,15 @@ class TelegramSyncEngine:
         self.tx_lock = tx_lock
         self.sync_locks = sync_locks
 
-    def _sync_escrow_cash(self, ticker):
-        is_rev = self.cfg.get_reverse_state(ticker).get("is_active", False)
+    # 🚨 [비동기 래핑] 파일 I/O 데드락 방어를 위한 async 전환
+    async def _sync_escrow_cash(self, ticker):
+        rev_state = await asyncio.to_thread(self.cfg.get_reverse_state, ticker)
+        is_rev = rev_state.get("is_active", False)
         if not is_rev:
-            self.cfg.clear_escrow_cash(ticker)
+            await asyncio.to_thread(self.cfg.clear_escrow_cash, ticker)
             return
 
-        ledger = self.cfg.get_ledger()
+        ledger = await asyncio.to_thread(self.cfg.get_ledger)
         
         target_recs = []
         for r in reversed(ledger):
@@ -51,7 +55,7 @@ class TelegramSyncEngine:
             elif r['side'] == 'BUY':
                 escrow -= amt
                 
-        self.cfg.set_escrow_cash(ticker, max(0.0, escrow))
+        await asyncio.to_thread(self.cfg.set_escrow_cash, ticker, max(0.0, escrow))
 
     async def process_auto_sync(self, ticker, chat_id, context, silent_ledger=False):
         if ticker not in self.sync_locks:
@@ -63,7 +67,7 @@ class TelegramSyncEngine:
         async with self.sync_locks[ticker]:
             async with self.tx_lock:
                 
-                last_split_date = self.cfg.get_last_split_date(ticker)
+                last_split_date = await asyncio.to_thread(self.cfg.get_last_split_date, ticker)
                 
                 try:
                     split_ratio, split_date = await asyncio.wait_for(
@@ -75,8 +79,8 @@ class TelegramSyncEngine:
                     logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 액면분할 조회 타임아웃 (10초 초과), 이번 싱크에서 스킵")
                 
                 if split_ratio > 0.0 and split_date != "":
-                    self.cfg.apply_stock_split(ticker, split_ratio)
-                    self.cfg.set_last_split_date(ticker, split_date)
+                    await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
+                    await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
                     split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
                     await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
                 
@@ -85,16 +89,24 @@ class TelegramSyncEngine:
                 
                 est = ZoneInfo('America/New_York')
                 now_est = datetime.datetime.now(est)
-                nyse = mcal.get_calendar('NYSE')
-                schedule = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
                 
-                if not schedule.empty:
-                    last_trade_date = schedule.index[-1]
-                    target_ledger_str = last_trade_date.strftime('%Y-%m-%d')
-                else:
+                def _get_last_trade_date():
+                    nyse = mcal.get_calendar('NYSE')
+                    schedule = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
+                    return schedule
+
+                try:
+                    schedule = await asyncio.wait_for(asyncio.to_thread(_get_last_trade_date), timeout=10.0)
+                    if not schedule.empty:
+                        last_trade_date = schedule.index[-1]
+                        target_ledger_str = last_trade_date.strftime('%Y-%m-%d')
+                    else:
+                        target_ledger_str = now_est.strftime('%Y-%m-%d')
+                except Exception as e:
+                    logging.error(f"⚠️ [{ticker}] 달력 API 에러/타임아웃. Fallback으로 현재 날짜 세팅: {e}")
                     target_ledger_str = now_est.strftime('%Y-%m-%d')
 
-                _, holdings = self.broker.get_account_balance()
+                _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
                 if holdings is None:
                     await context.bot.send_message(chat_id, f"❌ <b>[{ticker}] API 오류</b>\n잔고를 불러오지 못했습니다.", parse_mode='HTML')
                     return "ERROR"
@@ -102,17 +114,21 @@ class TelegramSyncEngine:
                 actual_qty = int(float(holdings.get(ticker, {'qty': 0}).get('qty') or 0))
                 actual_avg = float(holdings.get(ticker, {'avg': 0}).get('avg') or 0.0)
 
-                recs_for_check = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker]
-                ledger_qty_for_check, _, _, _ = self.cfg.calculate_holdings(ticker, recs_for_check)
+                # 🚨 [비동기 래핑] 장부 파일 I/O 데드락 방어
+                full_ledger = await asyncio.to_thread(self.cfg.get_ledger)
+                recs_for_check = [r for r in full_ledger if r['ticker'] == ticker]
+                ledger_qty_for_check, _, _, _ = await asyncio.to_thread(self.cfg.calculate_holdings, ticker, recs_for_check)
                 
                 vrev_ledger_qty_for_check = 0
-                is_rev = (self.cfg.get_version(ticker) == "V_REV")
+                is_rev = (await asyncio.to_thread(self.cfg.get_version, ticker) == "V_REV")
                 
                 if is_rev:
                     if not getattr(self, 'queue_ledger', None):
                         from queue_ledger import QueueLedger
                         self.queue_ledger = QueueLedger()
-                    vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in self.queue_ledger.get_queue(ticker))
+                    
+                    q_data_check = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
+                    vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in q_data_check)
                 
                 max_check_qty = max(ledger_qty_for_check, vrev_ledger_qty_for_check)
 
@@ -166,12 +182,13 @@ class TelegramSyncEngine:
                     target_execs = filter_to_est(raw_execs)
 
                 if target_execs:
-                    calibrated_count = self.cfg.calibrate_ledger_prices(ticker, target_ledger_str, target_execs)
+                    calibrated_count = await asyncio.to_thread(self.cfg.calibrate_ledger_prices, ticker, target_ledger_str, target_execs)
                     if calibrated_count > 0:
                         logging.info(f"🔧 [{ticker}] LOC/MOC 주문 {calibrated_count}건에 대해 실제 체결 단가 소급 업데이트를 완료했습니다.")
 
-                recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker]
-                ledger_qty, avg_price, _, _ = self.cfg.calculate_holdings(ticker, recs)
+                full_ledger = await asyncio.to_thread(self.cfg.get_ledger)
+                recs = [r for r in full_ledger if r['ticker'] == ticker]
+                ledger_qty, avg_price, _, _ = await asyncio.to_thread(self.cfg.calculate_holdings, ticker, recs)
                 
                 diff = actual_qty - ledger_qty
                 price_diff = abs(actual_avg - avg_price)
@@ -188,11 +205,11 @@ class TelegramSyncEngine:
                 if not needs_reconstruction and price_diff < 0.01:
                     pass 
                 elif not needs_reconstruction and price_diff >= 0.01:
-                    self.cfg.calibrate_avg_price(ticker, actual_avg)
+                    await asyncio.to_thread(self.cfg.calibrate_avg_price, ticker, actual_avg)
                     await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] 장부 평단가 미세 오차({price_diff:.4f}) 교정 완료!</b>", parse_mode='HTML')
                 elif needs_reconstruction:
                     temp_recs = [r for r in recs if r['date'] != target_ledger_str or 'INIT' in str(r.get('exec_id', ''))]
-                    temp_qty, temp_avg, _, _ = self.cfg.calculate_holdings(ticker, temp_recs)
+                    temp_qty, temp_avg, _, _ = await asyncio.to_thread(self.cfg.calculate_holdings, ticker, temp_recs)
                     
                     temp_sim_qty = temp_qty
                     temp_sim_avg = temp_avg
@@ -224,7 +241,6 @@ class TelegramSyncEngine:
                     if gap_qty != 0:
                         calib_side = "BUY" if gap_qty > 0 else "SELL"
                         
-                        # 🚨 NEW: [V44.10 비파괴 보정 0달러 폭탄 방어막 이식]
                         calib_price = actual_avg
                         if calib_side == "SELL" and actual_avg <= 0.0:
                             actual_clear_price_calib = 0.0
@@ -285,7 +301,7 @@ class TelegramSyncEngine:
                         if actual_qty > 0:
                             temp_recs[-1]['avg_price'] = actual_avg
                         
-                    self.cfg.overwrite_incremental_ledger(ticker, temp_recs, new_target_records)
+                    await asyncio.to_thread(self.cfg.overwrite_incremental_ledger, ticker, temp_recs, new_target_records)
                     
                     if gap_qty != 0:
                         await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] 통합 메인 장부(MAIN LEDGER) 비파괴 보정 완료!</b>\n▫️ KIS 실잔고 오차 수량({gap_qty}주)을 역사 보존 상태로 안전하게 교정했습니다.", parse_mode='HTML')
@@ -296,24 +312,23 @@ class TelegramSyncEngine:
                 # V-REV 큐 관리 및 0주 졸업 판별 로직 시작
                 # ==========================================================
                 if is_rev:
-                    q_data_before = self.queue_ledger.get_queue(ticker)
+                    q_data_before = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                     vrev_ledger_qty = sum(int(float(item.get("qty") or 0)) for item in q_data_before)
                     
                     sold_today_vrev = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01") if target_execs else 0
                     
-                    # 🚨 NEW: [V44.08 장부 오염 디커플링] AVWAP 암살자 보유 수량 정밀 차감
                     avwap_qty_global = 0
                     tracking_cache_global = None
                     try:
                         jobs = context.job_queue.jobs() if context.job_queue else []
-                        job_data = jobs[0].data if jobs and jobs[0].data is not None else {}
+                        job_data = jobs[0].data if jobs and len(jobs) > 0 and jobs[0].data is not None else {}
                         tracking_cache_global = job_data.get('sniper_tracking', {})
                         avwap_qty_global = tracking_cache_global.get(f"AVWAP_QTY_{ticker}", 0)
                         
                         if avwap_qty_global == 0:
                             strategy = job_data.get('strategy')
                             if strategy and hasattr(strategy, 'v_avwap_plugin'):
-                                avwap_state = strategy.v_avwap_plugin.load_state(ticker, now_est)
+                                avwap_state = await asyncio.to_thread(strategy.v_avwap_plugin.load_state, ticker, now_est)
                                 avwap_qty_global = int(avwap_state.get('qty', 0))
                     except Exception:
                         pass
@@ -321,7 +336,6 @@ class TelegramSyncEngine:
                     adjusted_actual_qty = max(0, actual_qty - avwap_qty_global)
                     
                     if adjusted_actual_qty == 0 and (vrev_ledger_qty > 0 or sold_today_vrev > 0):
-                        # 🚨 NEW: [V44.09 AVWAP 유령 매수 환각 방어막 이식] 
                         if actual_qty == 0 and avwap_qty_global > 0:
                             logging.warning(f"🚨 [{ticker}] V-REV 0주 졸업 판별 확정! 그러나 AVWAP 유령 물량({avwap_qty_global}주) 감지. 즉각 100% 영구 소각(Format)합니다.")
                             try:
@@ -346,7 +360,7 @@ class TelegramSyncEngine:
 
                         if now_kst.hour < 10:
                             await context.bot.send_message(chat_id, "⏳ <b>증권사 확정 정산(10:00 KST) 대기 중입니다.</b> 가결제 오차 방지를 위해 졸업 카드 발급 및 장부 초기화가 보류됩니다.", parse_mode='HTML')
-                            self._sync_escrow_cash(ticker)
+                            await self._sync_escrow_cash(ticker)
                             return "SUCCESS"
 
                         added_seed = 0.0
@@ -375,7 +389,8 @@ class TelegramSyncEngine:
                                         tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in same_day_sells)
                                         if tot_q > 0:
                                             actual_clear_price = round(tot_amt / tot_q, 4)
-                                            logging.info(f"🔍 [{ticker}] 과거 4일치 광역 스캔 및 최근일({last_sell_dt}) 추출 폴백으로 매도 단가(${actual_clear_price})를 복원했습니다.")
+                        
+                            logging.info(f"🔍 [{ticker}] 과거 4일치 광역 스캔 및 최근일({last_sell_dt}) 추출 폴백으로 매도 단가(${actual_clear_price})를 복원했습니다.")
 
                             if tot_q > vrev_ledger_qty:
                                 missing_qty = tot_q - vrev_ledger_qty
@@ -384,7 +399,7 @@ class TelegramSyncEngine:
                                 temp_invested = sum(float(item.get("qty", 0)) * float(item.get("price", 0)) for item in q_data_before)
                                 temp_avg = temp_invested / vrev_ledger_qty if vrev_ledger_qty > 0 else 0.0
                                 missing_price = temp_avg
-                                
+                            
                                 if buy_execs:
                                     b_tot_amt = sum(int(float(ex.get('ft_ccld_qty') or '0')) * float(ex.get('ft_ccld_unpr3') or '0') for ex in buy_execs)
                                     b_tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in buy_execs)
@@ -406,7 +421,7 @@ class TelegramSyncEngine:
                                             missing_price = round(derived_price, 4)
                                         else:
                                             missing_price = round(b_tot_amt / b_tot_q, 4)
-                                
+                                            
                                 q_data_before.append({
                                     "date": now_est.strftime('%Y-%m-%d %H:%M:%S'),
                                     "qty": missing_qty,
@@ -417,25 +432,33 @@ class TelegramSyncEngine:
                                 
                                 q_file = "data/queue_ledger.json"
                                 try:
-                                    os.makedirs(os.path.dirname(q_file) if os.path.dirname(q_file) else '.', exist_ok=True)
-                                    all_q = {}
-                                    if os.path.exists(q_file):
-                                        with open(q_file, 'r', encoding='utf-8') as f:
-                                            all_q = json.load(f)
+                                    def _read_all_q(f_path):
+                                        if os.path.exists(f_path):
+                                            with open(f_path, 'r', encoding='utf-8') as f:
+                                                return json.load(f)
+                                        return {}
+                                    
+                                    all_q = await asyncio.to_thread(_read_all_q, q_file)
                                     all_q[ticker] = q_data_before
                                     
-                                    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(q_file) if os.path.dirname(q_file) else '.')
-                                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                                        json.dump(all_q, f, indent=4, ensure_ascii=False)
-                                    os.replace(tmp_path, q_file)
+                                    def _write_q_file(q_data_dict, file_path):
+                                        os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else '.', exist_ok=True)
+                                        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(file_path) if os.path.dirname(file_path) else '.')
+                                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                            json.dump(q_data_dict, f_out, indent=4, ensure_ascii=False)
+                                            f_out.flush()
+                                            os.fsync(f_out.fileno())
+                                        os.replace(tmp_path, file_path)
+                                        
+                                    await asyncio.to_thread(_write_q_file, all_q, q_file)
                                     
                                     if hasattr(self.queue_ledger, 'data'):
                                         self.queue_ledger.data = all_q
                                     if hasattr(self.queue_ledger, 'queues'):
                                         self.queue_ledger.queues = all_q
                                     if hasattr(self.queue_ledger, 'load'):
-                                        self.queue_ledger.load()
-                                        
+                                        await asyncio.to_thread(self.queue_ledger.load)
+                                         
                                     logging.info(f"🔧 [{ticker}] 미동기화 수동 매수 물량({missing_qty}주, 진성단가 ${missing_price})을 졸업 큐에 다이렉트 영속화하여 PnL 오차 교정 및 스냅샷 충돌 방어 완료.")
                                 except Exception as e:
                                     logging.error(f"🚨 MANUAL_SYNC LIFO 큐 파일 I/O 영속화 실패: {e}")
@@ -451,23 +474,23 @@ class TelegramSyncEngine:
                             
                             clear_price = actual_clear_price if actual_clear_price > 0.0 else (curr_p if curr_p and curr_p > 0 else q_avg_price * 1.006)
                             
-                            snapshot = self.strategy.capture_vrev_snapshot(ticker, clear_price, q_avg_price, vrev_ledger_qty)
+                            snapshot = await asyncio.to_thread(self.strategy.capture_vrev_snapshot, ticker, clear_price, q_avg_price, vrev_ledger_qty)
                             
                             if snapshot:
                                 realized_pnl = snapshot['realized_pnl']
                                 yield_pct = snapshot['realized_pnl_pct']
                                 
-                                compound_rate = float(self.cfg.get_compound_rate(ticker)) / 100.0
+                                compound_rate = float(await asyncio.to_thread(self.cfg.get_compound_rate, ticker)) / 100.0
                                 if realized_pnl > 0 and compound_rate > 0:
                                     added_seed = realized_pnl * compound_rate
-                                    current_seed = self.cfg.get_seed(ticker)
-                                    self.cfg.set_seed(ticker, current_seed + added_seed)
+                                    current_seed = await asyncio.to_thread(self.cfg.get_seed, ticker)
+                                    await asyncio.to_thread(self.cfg.set_seed, ticker, current_seed + added_seed)
                                 
                                 cap_dt = snapshot['captured_at']
                                 cap_dt_str = cap_dt if isinstance(cap_dt, str) else cap_dt.strftime('%Y-%m-%d')
                                 start_dt_str = q_data_before[0]['date'][:10] if q_data_before else cap_dt_str[:10]
                                 
-                                hist_data = self.cfg._load_json(self.cfg.FILES["HISTORY"], [])
+                                hist_data = await asyncio.to_thread(self.cfg._load_json, self.cfg.FILES["HISTORY"], [])
                                 new_hist = {
                                     "id": int(time.time()),
                                     "ticker": ticker,
@@ -480,14 +503,15 @@ class TelegramSyncEngine:
                                     "trades": q_data_before 
                                 }
                                 hist_data.append(new_hist)
-                                self.cfg._save_json(self.cfg.FILES["HISTORY"], hist_data)
+                                
+                                await asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["HISTORY"], hist_data)
                                 _vrev_snap_ok = True
                                 
                         except Exception as e:
                             logging.error(f"🚨 스냅샷 캡처 및 복리 정산 중 치명적 오류 감지: {e}\n{traceback.format_exc()}")
                             snapshot = None
                             
-                        self.queue_ledger.sync_with_broker(ticker, 0)
+                        await asyncio.to_thread(self.queue_ledger.sync_with_broker, ticker, 0)
                         
                         if _vrev_snap_ok:
                             msg = f"🎉 <b>[{ticker} V-REV 잭팟 스윕(전량 익절) 감지!]</b>\n▫️ 잔고가 0주가 되어 LIFO 큐 지층을 100% 소각(초기화)했습니다."
@@ -497,9 +521,9 @@ class TelegramSyncEngine:
                             
                             if snapshot:
                                 try:
-                                    img_path = self.view.create_profit_image(
-                                        ticker=ticker, 
-                                        profit=snapshot['realized_pnl'], 
+                                    img_path = await asyncio.to_thread(
+                                        self.view.create_profit_image,
+                                        ticker=ticker, profit=snapshot['realized_pnl'], 
                                         yield_pct=snapshot['realized_pnl_pct'],
                                         invested=snapshot['avg_price'] * snapshot['cleared_qty'], 
                                         revenue=snapshot['clear_price'] * snapshot['cleared_qty'], 
@@ -516,7 +540,7 @@ class TelegramSyncEngine:
                         else:
                             await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} V-REV 0주 강제 정산 완료]</b>\n▫️ 0주를 확인하여 큐를 안전하게 비웠으나 통신 지연으로 졸업 카드는 생략되었습니다.", parse_mode='HTML')
                                     
-                        self._sync_escrow_cash(ticker)
+                        await self._sync_escrow_cash(ticker)
                         return "SUCCESS"
                         
                     if adjusted_actual_qty == vrev_ledger_qty:
@@ -528,21 +552,32 @@ class TelegramSyncEngine:
                             vwap_state_file = f"data/vwap_state_REV_{ticker}.json"
                             if os.path.exists(vwap_state_file):
                                 try:
-                                    with open(vwap_state_file, 'r', encoding='utf-8') as vf:
-                                        v_state = json.load(vf)
+                                    def _read_v_state(f_path):
+                                        with open(f_path, 'r', encoding='utf-8') as vf:
+                                            return json.load(vf)
+                                    
+                                    v_state = await asyncio.to_thread(_read_v_state, vwap_state_file)
                                     if "executed" in v_state and "SELL_QTY" in v_state["executed"]:
                                         old_sell_qty = v_state["executed"]["SELL_QTY"]
                                         v_state["executed"]["SELL_QTY"] = max(0, old_sell_qty - gap_qty)
-                                        with open(vwap_state_file, 'w', encoding='utf-8') as vf:
-                                            json.dump(v_state, vf, ensure_ascii=False, indent=4)
+                                        
+                                        def _write_v_state(state_dict, f_path):
+                                            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(f_path) or '.')
+                                            with os.fdopen(fd, 'w', encoding='utf-8') as _vf_out:
+                                                json.dump(state_dict, _vf_out, ensure_ascii=False, indent=4)
+                                                _vf_out.flush()
+                                                os.fsync(_vf_out.fileno())
+                                            os.replace(tmp_path, f_path)
+                                                
+                                        await asyncio.to_thread(_write_v_state, v_state, vwap_state_file)
                                         logging.info(f"🔧 [{ticker}] VWAP 잔차 수학적 보정 완료: {old_sell_qty} -> {v_state['executed']['SELL_QTY']}")
                                 except Exception as e:
                                     logging.error(f"🚨 VWAP 상태 교정 에러: {e}")
 
-                            calibrated = self.queue_ledger.sync_with_broker(ticker, adjusted_actual_qty, actual_avg)
+                            calibrated = await asyncio.to_thread(self.queue_ledger.sync_with_broker, ticker, adjusted_actual_qty, actual_avg)
                             if calibrated:
                                 await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 비파괴 보정 완료!</b>\n▫️ 수동 매도 물량(<b>{gap_qty}주</b>)을 LIFO 큐에서 안전하게 차감했습니다.", parse_mode='HTML')
-                                
+                            
                         elif adjusted_actual_qty > 0 and adjusted_actual_qty > vrev_ledger_qty:
                             gap_qty = adjusted_actual_qty - vrev_ledger_qty
                             
@@ -576,7 +611,7 @@ class TelegramSyncEngine:
                                     derived_price = (new_invested - old_invested) / gap_qty
                                     real_buy_price = round(derived_price, 4) if derived_price > 0 else actual_avg
                             
-                            q_data = self.queue_ledger.get_queue(ticker)
+                            q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                             q_data.append({
                                 "date": now_est.strftime('%Y-%m-%d %H:%M:%S'),
                                 "qty": gap_qty,
@@ -586,28 +621,35 @@ class TelegramSyncEngine:
                             
                             q_file = "data/queue_ledger.json"
                             try:
-                                os.makedirs(os.path.dirname(q_file) if os.path.dirname(q_file) else '.', exist_ok=True)
-                                if os.path.exists(q_file):
-                                    with open(q_file, 'r', encoding='utf-8') as f:
-                                        all_q = json.load(f)
-                                else:
-                                    all_q = {}
+                                def _read_all_q_manual(f_path):
+                                    if os.path.exists(f_path):
+                                        with open(f_path, 'r', encoding='utf-8') as f:
+                                            return json.load(f)
+                                    return {}
+                                
+                                all_q = await asyncio.to_thread(_read_all_q_manual, q_file)
                                 all_q[ticker] = q_data
                                 
-                                fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(q_file) if os.path.dirname(q_file) else '.')
-                                with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                                    json.dump(all_q, f, indent=4, ensure_ascii=False)
-                                os.replace(tmp_path, q_file)
+                                def _write_q_manual(q_dict, file_path):
+                                    os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else '.', exist_ok=True)
+                                    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(file_path) if os.path.dirname(file_path) else '.')
+                                    with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                        json.dump(q_dict, f_out, indent=4, ensure_ascii=False)
+                                        f_out.flush()
+                                        os.fsync(f_out.fileno())
+                                    os.replace(tmp_path, file_path)
+                                    
+                                await asyncio.to_thread(_write_q_manual, all_q, q_file)
                                 
                                 if hasattr(self.queue_ledger, 'data'):
                                     self.queue_ledger.data = all_q
-                                    
+                                     
                                 logging.info(f"🔧 [{ticker}] 수동 매수 감지! KIS 실잔고에 맞춰 LIFO 큐에 신규 지층({gap_qty}주, 진성단가 ${real_buy_price}) 다이렉트 편입 및 파일 영속화 완료.")
                                 await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 수동 매수 편입 완료!</b>\n▫️ KIS 실잔고에 맞춰 신규 지층(<b>{gap_qty}주</b>, 추정단가 ${real_buy_price})을 정밀 추가했습니다.", parse_mode='HTML')
                             except Exception as e:
                                 logging.error(f"🚨 LIFO 큐 다이렉트 파일 I/O 쓰기 에러: {e}")
                     
-                    self._sync_escrow_cash(ticker)
+                    await self._sync_escrow_cash(ticker)
                     return "SUCCESS"
 
                 # ==========================================================
@@ -631,15 +673,17 @@ class TelegramSyncEngine:
                                 logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 전일 종가 조회 타임아웃 (10초). 0.0으로 대체")
                             
                             try:
-                                new_hist, added_seed = self.cfg.archive_graduation(ticker, today_est_str, prev_c)
-                                
+                                new_hist, added_seed = await asyncio.to_thread(self.cfg.archive_graduation, ticker, today_est_str, prev_c)
+
                                 if new_hist:
                                     msg = f"🎉 <b>[{ticker} 졸업 확인!]</b>\n장부를 명예의 전당에 저장하고 새 사이클을 준비합니다."
                                     if added_seed > 0:
                                         msg += f"\n💸 <b>자동 복리 +${added_seed:,.0f}</b> 이 다음 운용 시드에 완벽하게 추가되었습니다!"
                                     await context.bot.send_message(chat_id, msg, parse_mode='HTML')
+                                    
                                     try:
-                                        img_path = self.view.create_profit_image(
+                                        img_path = await asyncio.to_thread(
+                                            self.view.create_profit_image,
                                             ticker=ticker, profit=new_hist['profit'], yield_pct=new_hist['yield'],
                                             invested=new_hist['invested'], revenue=new_hist['revenue'], end_date=new_hist['end_date']
                                         )
@@ -652,59 +696,22 @@ class TelegramSyncEngine:
                                     except Exception as e:
                                         logging.error(f"📸 졸업 이미지 발송 실패: {e}")
                                 else:
-                                    all_recs = [r for r in self.cfg.get_ledger() if r['ticker'] != ticker]
-                                    self.cfg._save_json(self.cfg.FILES["LEDGER"], all_recs)
+                                    full_ledger2 = await asyncio.to_thread(self.cfg.get_ledger)
+                                    all_recs = [r for r in full_ledger2 if r['ticker'] != ticker]
+                                    await asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["LEDGER"], all_recs)
                                     await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} 강제 정산 완료]</b>\n잔고가 0주이나 마이너스 수익 상태이므로 명예의 전당 박제 없이 장부를 비우고 새출발 타점을 장전합니다.", parse_mode='HTML')
                             except Exception as e:
                                 logging.error(f"강제 졸업 처리 중 에러: {e}")
 
-                    self._sync_escrow_cash(ticker) 
+                    await self._sync_escrow_cash(ticker) 
                     return "SUCCESS"
 
-                self._sync_escrow_cash(ticker)
+                await self._sync_escrow_cash(ticker)
                 return "SUCCESS"
 
-    async def _verify_and_update_queue(self, ticker, q_data, context, chat_id):
-        # 🚨 [치명적 경고 2 준수] 텔레그램 조작 시 직접 파일 I/O 접근으로 런타임 붕괴(EC-2) 차단.
-        # 이 메서드는 현재 사용되지 않으나 하위 호환성을 위해 유지하며, 로직을 안전한 파일 직접 쓰기로 변경.
-        q_file = "data/queue_ledger.json"
-        all_q = {}
-        try:
-            if os.path.exists(q_file):
-                with open(q_file, 'r', encoding='utf-8') as f:
-                    all_q = json.load(f)
-        except Exception:
-            pass
-            
-        all_q[ticker] = q_data
-        
-        try:
-            os.makedirs(os.path.dirname(q_file) or '.', exist_ok=True)
-            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(q_file) or '.')
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(all_q, f, ensure_ascii=False, indent=4)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temp_path, q_file)
-            
-            # 인메모리 큐 동기화
-            if hasattr(self.queue_ledger, 'data'):
-                self.queue_ledger.data = all_q
-            if hasattr(self.queue_ledger, 'queues'):
-                self.queue_ledger.queues = all_q
-                
-        except Exception as e:
-            logging.error(f"🚨 수동 지층 장부 저장 실패: {e}")
-            
-        # 다이렉트 조작 후 실잔고 기반 비파괴 보정(CALIB) 강제 트리거.
-        # process_auto_sync 내부에서 실잔고 일치 시 CALIB 바이패스하므로 이중 합산 버그는 발생하지 않음.
-        if ticker not in self.sync_locks:
-            self.sync_locks[ticker] = asyncio.Lock()
-        if not self.sync_locks[ticker].locked():
-            await self.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
-
     async def _display_ledger(self, ticker, chat_id, context, query=None, message_obj=None, pre_fetched_holdings=None):
-        recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker]
+        full_ledger = await asyncio.to_thread(self.cfg.get_ledger)
+        recs = [r for r in full_ledger if r['ticker'] == ticker]
         
         if not recs:
             msg = f"📭 <b>[{ticker}]</b> 현재 진행 중인 사이클이 없습니다 (보유량 0주)."
@@ -750,8 +757,8 @@ class TelegramSyncEngine:
             actual_qty = int(float(pre_fetched_holdings.get(ticker, {'qty': 0})['qty'] or 0)) if pre_fetched_holdings else 0
             actual_avg = float(pre_fetched_holdings.get(ticker, {'avg': 0})['avg'] or 0.0) if pre_fetched_holdings else 0.0
             
-            split = self.cfg.get_split_count(ticker)
-            t_val, _ = self.cfg.get_absolute_t_val(ticker, actual_qty, actual_avg)
+            split = await asyncio.to_thread(self.cfg.get_split_count, ticker)
+            t_val, _ = await asyncio.to_thread(self.cfg.get_absolute_t_val, ticker, actual_qty, actual_avg)
             
             report += "📊 <b>[ 현재 진행 상황 요약 ]</b>\n"
             report += f"▪️ 현재 T값 : {t_val:.4f} T ({int(split)}분할)\n"
@@ -761,13 +768,14 @@ class TelegramSyncEngine:
             
             msg = report
 
-        tickers = self.cfg.get_active_tickers()
+        active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
         keyboard = []
         
-        if self.cfg.get_version(ticker) == "V_REV":
+        v_mode = await asyncio.to_thread(self.cfg.get_version, ticker)
+        if v_mode == "V_REV":
             keyboard.append([InlineKeyboardButton(f"🗄️ {ticker} V-REV 큐(Queue) 정밀 관리", callback_data=f"QUEUE:VIEW:{ticker}")])
             
-        row = [InlineKeyboardButton(f"🔄 {t} 장부 업데이트", callback_data=f"REC:SYNC:{t}") for t in tickers]
+        row = [InlineKeyboardButton(f"🔄 {t} 장부 업데이트", callback_data=f"REC:SYNC:{t}") for t in active_tickers]
         keyboard.append(row)
         markup = InlineKeyboardMarkup(keyboard)
 

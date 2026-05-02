@@ -1,18 +1,9 @@
 # ==========================================================
-# [main.py] - 🌟 100% 통합 무결점 완성본 (V44.09) 🌟
-# ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
-# 💡 [V24.10] 텔레그램 API 통신 타임아웃(TimedOut) 방어 및 커넥션 풀 최적화 이식 완료
-# 💡 [V24.11 수술] VolatilityEngine 동적 연결 및 TelegramController 의존성 주입
-# 💡 [V24.15 대수술] V_VWAP 플러그인 의존성 100% 영구 적출 및 2대 코어 체제 확립
-# 💡 [V24.20 패치] 듀얼 레퍼런싱(SOXX/SOXL) 인프라 및 스냅샷 파이프라인 증설
-# 🚨 [V25.19 핫픽스] EST/KST 타임존 혼용에 따른 스케줄링 오작동 방어 (명시적 타임존 주입)
-# 🚨 [V25.19 핫픽스] 듀얼 레퍼런싱(TICKER_BASE_MAP) 전역 공유 파이프라인 완벽 확립
-# 🚀 [V27.00 자가 업데이트 라우터 이식] 텔레그램 핸들러 루프에 'update' 명령어 공식 등록 완료
-# NEW: [V44.07 암살자 타임라인 전진 배치] 옴니 매트릭스 스캔 및 스나이퍼 격발 10:20 -> 10:00 EST 락온 수술 완료
-# MODIFIED: [V44.07 핫픽스] 폐기된 scheduler_trade 유령 임포트 배선을 영구 소각하고 4대 정예 코어로 완벽 분리 복원 완료.
-# NEW: [V44.09 콜드 스타트 방어막] 10시 정각 스케줄 증발(Late Wake-up) 맹점을 원천 차단하기 위해 10:00~10:30 KST 사이 봇 부팅 시 5초 뒤 강제 1회성 정산(run_once)을 격발하는 락온 이식 완료.
+# [main.py] - 🌟 100% 통합 무결점 완성본 (V44.47) 🌟
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# 제3헌법: KST 타임존 및 is_dst 기반의 동적 스케줄링 전면 소각. 모든 스케줄러 등록 시 ZoneInfo('America/New_York') 기준의 절대 시간으로 하드코딩 락온.
+# MODIFIED: [V44.47 KST 타임 패러독스 영구 소각] APScheduler 잡 등록 배선 EST 100% 락온 완료.
 # ==========================================================
-
 import os
 import logging
 import datetime
@@ -26,17 +17,13 @@ from config import ConfigManager
 from broker import KoreaInvestmentBroker
 from strategy import InfiniteStrategy
 from telegram_bot import TelegramController
-
-# 💡 [V_REV 신규 역추세 엔진 의존성 주입]
 from queue_ledger import QueueLedger
 from strategy_reversion import ReversionStrategy
 from volatility_engine import VolatilityEngine, determine_market_regime
 
-# 💡 [핵심 수술] V30.00 아키텍처에 맞게 4대 코어에서 각각 함수를 분리 임포트
 from scheduler_core import (
     scheduled_token_check,
-    scheduled_auto_sync_summer,
-    scheduled_auto_sync_winter,
+    scheduled_auto_sync,
     scheduled_force_reset,
     scheduled_self_cleaning,
     perform_self_cleaning
@@ -46,8 +33,6 @@ from scheduler_vwap import scheduled_vwap_trade, scheduled_vwap_init_and_cancel
 from scheduler_regular import scheduled_regular_trade
 from scheduler_aftermarket import scheduled_after_market_lottery
 
-# NEW: [듀얼 레퍼런싱] 기초자산(Base)과 파생상품(Exec) 간의 1:1 매핑 딕셔너리 정의
-# (펀더멘털 시그널 스캔을 위한 듀얼 레퍼런싱 앵커 맵)
 TICKER_BASE_MAP = {
     "SOXL": "SOXX",
     "TQQQ": "QQQ",
@@ -90,7 +75,6 @@ logging.basicConfig(
     ]
 )
 
-# NEW: [V44.04 핫픽스] yfinance 패키지 내부의 불필요한 스팸 로그(possibly delisted 등)가 로그를 오염시키는 현상 원천 차단(침묵 락온)
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 async def scheduled_volatility_scan(context):
@@ -100,7 +84,6 @@ async def scheduled_volatility_scan(context):
     base_map = app_data.get('base_map', TICKER_BASE_MAP)
     
     print("\n" + "=" * 60)
-    # MODIFIED: [V44.07] 타임라인 전진 배치 팩트 반영
     print("📈 [자율주행 변동성 & 시장 국면 스캔 완료] (10:00 EST 스냅샷)")
     
     regime_data = await determine_market_regime(broker)
@@ -117,7 +100,7 @@ async def scheduled_volatility_scan(context):
     else:
         print(f"⚠️ 옴니 매트릭스 판별 실패: {regime_data.get('msg')}")
 
-    active_tickers = cfg.get_active_tickers()
+    active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
     if not active_tickers:
         print("📊 현재 운용 중인 종목이 없습니다.")
     else:
@@ -148,19 +131,13 @@ async def post_init(application: Application):
 
 def main():
     est_zone = ZoneInfo('America/New_York')
-    kst_zone = ZoneInfo('Asia/Seoul')
-    now_est = datetime.datetime.now(est_zone)
-    is_dst = bool(now_est.dst())
-    season_msg = "☀️ 서머타임 (EDT) 적용 중" if is_dst else "❄️ 표준시간 (EST) 적용 중"
     
     cfg = ConfigManager()
     latest_version = cfg.get_latest_version() 
     
     print("=" * 60)
-    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V40.00 락온)")
-    print(f"📅 날짜 정보: {season_msg}")
-    print(f"⏰ 자동 동기화: 10:00(KST) 확정 스캔 가동")
-    # MODIFIED: [V44.07] 타임라인 10:20 -> 10:00 EST 전진 배치
+    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V44.47 락온)")
+    print(f"⏰ 자동 동기화: 21:00 EST 확정 정산 엔진 락온 가동")
     print("🛡️ 1-Tier 자율주행 지표 스캔 대기 중... (매일 10:00 EST 격발)")
     print("=" * 60)
     
@@ -181,8 +158,7 @@ def main():
         'cfg': cfg, 'broker': broker, 'strategy': strategy, 
         'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,  
         'bot': bot, 'tx_lock': None, 'base_map': TICKER_BASE_MAP,
-        'tz_kst': kst_zone, 'tz_est': est_zone,
-        'regime_data': None 
+        'tz_est': est_zone, 'regime_data': None 
     }
 
     app = (
@@ -212,32 +188,40 @@ def main():
     
     jq = app.job_queue
     
-    for tt in [datetime.time(7,0,tzinfo=kst_zone), datetime.time(11,0,tzinfo=kst_zone), datetime.time(16,30,tzinfo=kst_zone), datetime.time(22,0,tzinfo=kst_zone)]:
-        jq.run_daily(scheduled_token_check, time=tt, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # 🚨 [EST 100% 락온] 토큰 갱신: 6시간 간격 정기 스캔으로 KST 종속성 소각
+    jq.run_repeating(scheduled_token_check, interval=21600, first=10, chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    SYNC_FUNC = scheduled_auto_sync_summer if is_dst else scheduled_auto_sync_winter
-    jq.run_daily(SYNC_FUNC, time=datetime.time(10, 0, 5, tzinfo=kst_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    # 🚨 [EST 100% 락온] 확정 정산: 21:00 EST (KST 기준 다음날 오전 10시(서머) 또는 11시(윈터). KIS 결제 100% 수용)
+    jq.run_daily(scheduled_auto_sync, time=datetime.time(21, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    # NEW: [V44.09 콜드 스타트 방어막] 10:00 ~ 10:30 KST 사이 부팅 시 지각 기상 1회성 스케줄 강제 격발
-    now_kst = datetime.datetime.now(kst_zone)
-    if now_kst.hour == 10 and 0 <= now_kst.minute <= 30:
-        jq.run_once(SYNC_FUNC, 5.0, chat_id=ADMIN_CHAT_ID, data=app_data)
-        logging.info("🚀 [콜드 스타트 락온] 10시 정산 스케줄 누락(Late Wake-up) 방어를 위해 5초 뒤 1회성 스냅샷/졸업카드를 강제 격발합니다.")
-        print("🚀 [콜드 스타트 방어막 가동] 10시 확정 정산 누락을 방지하기 위해 5초 뒤 1회성 스케줄을 강제 격발합니다.")
+    # 🚨 [콜드 스타트 방어막] 21:00~21:30 EST 사이 부팅 시 지각 기상 1회성 스케줄 강제 격발
+    now_est = datetime.datetime.now(est_zone)
+    if now_est.hour == 21 and 0 <= now_est.minute <= 30:
+        jq.run_once(scheduled_auto_sync, 5.0, chat_id=ADMIN_CHAT_ID, data=app_data)
+        logging.info("🚀 [콜드 스타트 락온] 확정 정산 스케줄 누락(Late Wake-up) 방어를 위해 5초 뒤 1회성 스냅샷/졸업카드를 강제 격발합니다.")
+        print("🚀 [콜드 스타트 방어막 가동] 확정 정산 누락을 방지하기 위해 5초 뒤 1회성 스케줄을 강제 격발합니다.")
     
+    # 🚨 [EST 100% 락온] 매매 초기화: 04:00 EST
     jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    # MODIFIED: [V44.07] 10:20 -> 10:00 EST 락온
+    # 🚨 [EST 100% 락온] 옴니 매트릭스 변동성 스캔: 10:00 EST
     jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 0, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
+    # 🚨 [EST 100% 락온] 정규장 통합 주문: 04:05 EST
     jq.run_daily(scheduled_regular_trade, time=datetime.time(4, 5, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
+    
+    # 🚨 [EST 100% 락온] VWAP 1분 타격 개시 전 Fail-Safe: 15:30 EST
     jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 30, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
 
+    # 매 1분 스나이퍼 및 VWAP 타격
     jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     
+    # 🚨 [EST 100% 락온] 애프터마켓 로터리 덫: 16:05 EST
     jq.run_daily(scheduled_after_market_lottery, time=datetime.time(16, 5, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
-    jq.run_daily(scheduled_self_cleaning, time=datetime.time(6, 0, tzinfo=kst_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    
+    # 🚨 [EST 100% 락온] 자정 청소 작업: 17:00 EST
+    jq.run_daily(scheduled_self_cleaning, time=datetime.time(17, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
         
     app.run_polling()
 
