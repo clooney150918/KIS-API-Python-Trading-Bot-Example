@@ -44,6 +44,10 @@ class V14Strategy:
         today_str = self._get_logical_date_str()
         snap_file = f"data/daily_snapshot_V14_{ticker}.json"
         
+        # NEW: [V44.56 스냅샷 멱등성 락온] 당일 1회 생성 원칙 준수 및 무한 덮어쓰기 방어막 주입
+        if os.path.exists(snap_file):
+            return
+        
         # 🚨 [치명적 경고 1 준수] 세션 간 오염 방지: 당일 날짜로 단 1회만 멱등성 박제
         data = {
             "date": today_str,
@@ -220,7 +224,7 @@ class V14Strategy:
             if one_portion_amt <= 0:
                 return {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": 0.0, "process_status": "⛔리버스예산오류(0원)", "is_reverse": True, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
         else:
-            star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
+             star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
             
         is_last_lap = (split - 1) < t_val < split
         
@@ -234,7 +238,7 @@ class V14Strategy:
         if market_type == "PRE_CHECK":
             process_status = "🌅프리마켓"
             if qty > 0 and target_price > 0 and current_price >= target_price and not is_reverse:
-                core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
+                 core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
             orders = core_orders + bonus_orders
             return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
 
@@ -250,7 +254,7 @@ class V14Strategy:
 
             if is_reverse:
                 sell_divisor = 10 if split <= 20 else 20
-                
+                 
                 if qty < 4:
                     sell_qty = int(qty)
                 else:
@@ -262,7 +266,7 @@ class V14Strategy:
                     process_status = "🩸리버스(긴급수혈)" if is_emergency_cash_needed else "🚨리버스(1일차)"
                     
                     if sell_qty > 0:
-                        desc_str = "🩸수혈매도" if is_emergency_cash_needed else "🛡️의무매도"
+                         desc_str = "🩸수혈매도" if is_emergency_cash_needed else "🛡️의무매도"
                         if qty < 4: desc_str = "💥잔량청산(수량부족)"
                         core_orders.append({"side": "SELL", "price": 0, "qty": sell_qty, "type": "MOC", "desc": desc_str})
                 else:
@@ -359,7 +363,7 @@ class V14Strategy:
                 else:
                     q_qty = int(math.ceil(qty / 4))
                     rem_qty = int(qty - q_qty)
-                
+                 
                     if star_price > 0 and q_qty > 0:
                         core_orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LOC", "desc": "🌟별값매도"})
                     if target_price > 0 and rem_qty > 0:
