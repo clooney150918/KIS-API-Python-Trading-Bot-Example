@@ -12,6 +12,7 @@
 # 미국 동부시간(US/Eastern)으로 락온하여 자정 경계 환각 및 더블샷 버그 원천 차단.
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
 # NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
+# MODIFIED: [V44.57 인덴테이션 붕괴 수술] PEP8 규격 강제 및 IndentationError 영구 소각
 # ==========================================================
 import math
 import os
@@ -72,7 +73,7 @@ class V14Strategy:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, snap_file)
-        except Exception as e:
+        except Exception:
             pass
 
     # NEW: [V28.17 스냅샷 엔진 이식] V14 오리지널 모드 스냅샷 로드(Decoupling) 로직
@@ -224,7 +225,7 @@ class V14Strategy:
             if one_portion_amt <= 0:
                 return {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": 0.0, "process_status": "⛔리버스예산오류(0원)", "is_reverse": True, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
         else:
-             star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
+            star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
             
         is_last_lap = (split - 1) < t_val < split
         
@@ -238,7 +239,7 @@ class V14Strategy:
         if market_type == "PRE_CHECK":
             process_status = "🌅프리마켓"
             if qty > 0 and target_price > 0 and current_price >= target_price and not is_reverse:
-                 core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
+                core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
             orders = core_orders + bonus_orders
             return {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
 
@@ -254,7 +255,7 @@ class V14Strategy:
 
             if is_reverse:
                 sell_divisor = 10 if split <= 20 else 20
-                 
+                
                 if qty < 4:
                     sell_qty = int(qty)
                 else:
@@ -266,7 +267,7 @@ class V14Strategy:
                     process_status = "🩸리버스(긴급수혈)" if is_emergency_cash_needed else "🚨리버스(1일차)"
                     
                     if sell_qty > 0:
-                         desc_str = "🩸수혈매도" if is_emergency_cash_needed else "🛡️의무매도"
+                        desc_str = "🩸수혈매도" if is_emergency_cash_needed else "🛡️의무매도"
                         if qty < 4: desc_str = "💥잔량청산(수량부족)"
                         core_orders.append({"side": "SELL", "price": 0, "qty": sell_qty, "type": "MOC", "desc": desc_str})
                 else:
@@ -363,7 +364,7 @@ class V14Strategy:
                 else:
                     q_qty = int(math.ceil(qty / 4))
                     rem_qty = int(qty - q_qty)
-                 
+                
                     if star_price > 0 and q_qty > 0:
                         core_orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LOC", "desc": "🌟별값매도"})
                     if target_price > 0 and rem_qty > 0:
