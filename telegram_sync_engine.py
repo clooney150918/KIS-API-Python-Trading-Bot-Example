@@ -80,10 +80,10 @@ class TelegramSyncEngine:
                     logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 액면분할 조회 타임아웃 (10초 초과), 이번 싱크에서 스킵")
                 
                 if split_ratio > 0.0 and split_date != "":
-                    await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
-                    await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
-                    split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
-                    await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
+                     await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
+                     await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
+                     split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
+                     await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
                 
                 kst = ZoneInfo('Asia/Seoul')
                 now_kst = datetime.datetime.now(kst)
@@ -124,12 +124,12 @@ class TelegramSyncEngine:
                 is_rev = (await asyncio.to_thread(self.cfg.get_version, ticker) == "V_REV")
                 
                 if is_rev:
-                    if not getattr(self, 'queue_ledger', None):
+                   if not getattr(self, 'queue_ledger', None):
                         from queue_ledger import QueueLedger
                         self.queue_ledger = QueueLedger()
                     
-                    q_data_check = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
-                    vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in q_data_check)
+                   q_data_check = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
+                   vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in q_data_check)
                 
                 max_check_qty = max(ledger_qty_for_check, vrev_ledger_qty_for_check)
 
@@ -144,7 +144,7 @@ class TelegramSyncEngine:
                         if not ord_dt: continue
                         ord_tmd = ex.get('ord_tmd')
                         if not ord_tmd or len(str(ord_tmd)) != 6: 
-                            ord_tmd = '000000'
+                             ord_tmd = '000000'
                         try:
                             k_dt = datetime.datetime.strptime(f"{ord_dt}{ord_tmd}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
                             e_dt = k_dt.astimezone(est)
@@ -173,7 +173,7 @@ class TelegramSyncEngine:
                                     break
                             else:
                                 stable_cnt = 0
-                        prev_sold_today = sold_today
+                            prev_sold_today = sold_today
                         
                         if attempt < max_retries - 1:
                             logging.info(f"⏳ [{ticker}] 체결 원장 지연(Lag) 감지. 데이터 안정화 및 EST 매핑 검증 중... ({attempt+1}/{max_retries})")
