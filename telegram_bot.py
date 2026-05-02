@@ -2,6 +2,7 @@
 # FILE: telegram_bot.py
 # ==========================================================
 # MODIFIED: [V44.41 UI 팩트 교정] 지시서 렌더링 시 스냅샷 락온 상태를 뷰포트로 직결 전달(has_snapshot 팩트 이식)
+# MODIFIED: [V44.45 헌법 수술] _get_market_status 달력 API(mcal) 동기 블로킹 비동기 래핑 및 타임아웃 Fail-Open 족쇄 체결 완료. Callers 전면 await 동기화.
 # ==========================================================
 import logging
 import datetime
@@ -60,11 +61,24 @@ class TelegramController:
         else:
             return (18, "❄️ <b>서머타임 해제 (Winter)</b>")
 
-    def _get_market_status(self):
+    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+    # mcal 달력 API 호출은 동기 I/O이므로 반드시 비동기 래핑(to_thread) 및 타임아웃 족쇄(wait_for)를 채워 데드락을 원천 차단해야 합니다.
+    async def _get_market_status(self):
         est = ZoneInfo('America/New_York')
         now = datetime.datetime.now(est)
-        nyse = mcal.get_calendar('NYSE')
-        schedule = nyse.schedule(start_date=now.date(), end_date=now.date())
+        
+        def _fetch_schedule():
+            nyse = mcal.get_calendar('NYSE')
+            return nyse.schedule(start_date=now.date(), end_date=now.date())
+
+        try:
+            schedule = await asyncio.wait_for(asyncio.to_thread(_fetch_schedule), timeout=10.0)
+        except Exception as e:
+            logging.error(f"⚠️ [달력 API 에러/타임아웃] 평일 강제 개장(Fail-Open) 폴백 가동: {e}")
+            if now.weekday() < 5:
+                return "REG", "🔥 정규장 (Fail-Open)"
+            else:
+                return "CLOSE", "⛔ 장마감 (Fail-Closed)"
         
         if schedule.empty:
             return "CLOSE", "⛔ 장휴일"
@@ -85,7 +99,6 @@ class TelegramController:
 
     def _calculate_budget_allocation(self, cash, tickers):
         sorted_tickers = sorted(tickers, key=lambda x: 0 if x == "SOXL" else (1 if x == "TQQQ" else 2))
-        
         allocated = {}
         rem_cash = cash
         
@@ -146,9 +159,9 @@ class TelegramController:
             try:
                 val = float(text)
                 if hasattr(self.cfg, 'set_avwap_target_profit'):
-                    self.cfg.set_avwap_target_profit(ticker, val)
+                    await asyncio.to_thread(self.cfg.set_avwap_target_profit, ticker, val)
                     if ticker == "SOXL":
-                        self.cfg.set_avwap_target_profit("SOXS", val)
+                        await asyncio.to_thread(self.cfg.set_avwap_target_profit, "SOXS", val)
                         
                 self.user_states.pop(chat_id, None)
                 
@@ -364,7 +377,7 @@ class TelegramController:
 
         target_hour, _ = self._get_dst_info() 
         dst_txt = "🌞 서머타임 (17:30)" if target_hour == 17 else "❄️ 겨울 (18:30)"
-        status_code, status_text = self._get_market_status()
+        status_code, status_text = await self._get_market_status()
         
         tickers = self.cfg.get_active_tickers()
         
@@ -390,8 +403,10 @@ class TelegramController:
         
         is_sniper_active_time = False
         try:
-            nyse = mcal.get_calendar('NYSE')
-            schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
+            def _check_schedule():
+                nyse = mcal.get_calendar('NYSE')
+                return nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
+            schedule = await asyncio.wait_for(asyncio.to_thread(_check_schedule), timeout=10.0)
             if not schedule.empty:
                 market_open = schedule.iloc[0]['market_open'].astimezone(est)
                 
@@ -477,7 +492,6 @@ class TelegramController:
             is_zero_start_fact = (actual_qty == 0)
             if cached_snap:
                 if actual_qty == 0:
-                    # MODIFIED: [V44.35 0주 팩트 디커플링 수술]
                     logic_qty = 0
                     is_zero_start_fact = True
                 else:
@@ -660,6 +674,7 @@ class TelegramController:
                                 now_est=now_est, avwap_state=avwap_state_dict,
                                 context_data=avwap_ctx
                             )
+                            
                             avwap_base_price = decision.get('base_curr_p', base_curr_p)
                             avwap_base_vwap = decision.get('vwap', 0.0)
                             avwap_prev_vwap = decision.get('prev_vwap', 0.0)
@@ -723,7 +738,6 @@ class TelegramController:
                 'vrev_gap_thresh': getattr(self.cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(t),
                 'is_manual_vwap': is_manual_vwap,
                 'is_zero_start': is_zero_start_fact,
-                # MODIFIED: [V44.41 UI 팩트 교정] 스냅샷 락온 상태 전달
                 'has_snapshot': bool(cached_snap)
             })
             
@@ -895,6 +909,7 @@ class TelegramController:
         
         active_tickers = self.cfg.get_active_tickers()
         atr_data = {}
+        dynamic_target_data = {} 
         
         if update.callback_query:
             status_msg = await update.callback_query.message.reply_text("⏳ <b>실시간 시장 지표 연산 중...</b>", parse_mode='HTML')
@@ -911,6 +926,7 @@ class TelegramController:
 
         for t in active_tickers:
             atr_data[t] = (0.0, 0.0)
+            dynamic_target_data[t] = None
                 
         msg, markup = self.view.get_settlement_message(active_tickers, self.cfg, atr_data, tracking_cache)
         

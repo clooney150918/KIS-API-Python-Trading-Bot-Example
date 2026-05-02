@@ -5,7 +5,7 @@
 # MODIFIED: [V44.09 AVWAP 유령 매수 환각 원천 차단] V-REV 모드에서 0주 졸업 판별이 확정되었음에도 인메모리(tracking_cache)에 AVWAP 물량이 남아있을 경우, 이를 즉각 포맷하고 영속성 상태 파일(save_state)까지 100% 소각하여 허공에 익절 주문을 난사하는 런타임 환각 및 통신 과부하(Reject) 맹점 완벽 수술.
 # NEW: [V44.10 비파괴 보정(CALIB_SELL) 0달러 폭탄 방어막 이식] 실잔고가 0주가 되어 오차를 교정(CALIB_SELL)할 때, KIS 서버가 반환하는 평단가($0.00)를 그대로 매도가에 꽂아 수익률이 -100%로 붕괴하던 치명적 맹점 전면 수술. 체결 원장에서 실제 매도 평단가를 역산하여 주입하고, 실패 시 기존 장부 평단가(temp_sim_avg)를 강제 덮어씌워 PnL 훼손을 원천 차단 완료.
 # MODIFIED: [V44.44 이벤트 루프 교착 방어] KIS 잔고 조회 API, 큐 장부 스레드 락(Lock) 연산 및 파일 I/O(json.dump) 구간을 비동기 래핑(to_thread)하여 데드락 원천 차단 완료.
-# MODIFIED: [V44.44 핫픽스] SyntaxError(들여쓰기 붕괴)로 인한 런타임 크래시 엣지 케이스 완벽 교정 완료.
+# MODIFIED: [V44.45 헌법 수술] mcal 달력 API 호출 동기 블로킹 비동기 래핑 및 10초 타임아웃(Fail-Open) 족쇄 체결 완료.
 # ==========================================================
 import logging
 import datetime
@@ -88,13 +88,22 @@ class TelegramSyncEngine:
                 
                 est = ZoneInfo('America/New_York')
                 now_est = datetime.datetime.now(est)
-                nyse = mcal.get_calendar('NYSE')
-                schedule = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
                 
-                if not schedule.empty:
-                    last_trade_date = schedule.index[-1]
-                    target_ledger_str = last_trade_date.strftime('%Y-%m-%d')
-                else:
+                # 🚨 MODIFIED: [V44.45 헌법 수술] mcal 달력 API 비동기 래핑 및 타임아웃 족쇄 체결
+                def _get_last_trade_date():
+                    nyse = mcal.get_calendar('NYSE')
+                    schedule = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
+                    return schedule
+
+                try:
+                    schedule = await asyncio.wait_for(asyncio.to_thread(_get_last_trade_date), timeout=10.0)
+                    if not schedule.empty:
+                        last_trade_date = schedule.index[-1]
+                        target_ledger_str = last_trade_date.strftime('%Y-%m-%d')
+                    else:
+                        target_ledger_str = now_est.strftime('%Y-%m-%d')
+                except Exception as e:
+                    logging.error(f"⚠️ [{ticker}] 달력 API 에러/타임아웃. Fallback으로 현재 날짜 세팅: {e}")
                     target_ledger_str = now_est.strftime('%Y-%m-%d')
 
                 # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] KIS 잔고 조회 API 동기 블로킹 원천 차단
@@ -258,7 +267,6 @@ class TelegramSyncEngine:
                                 calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
                                 logging.info(f"🛡️ [{ticker}] CALIB_SELL 0달러 폴백 방어: 원장 결측으로 기존 장부 평단가(${calib_price:.4f})를 강제 주입했습니다.")
                                 
-                            # 🚨 MODIFIED: [V44.44 핫픽스] SyntaxError(들여쓰기 붕괴) 교정
                             calib_avg = temp_sim_avg
                         elif calib_side == "BUY" and actual_avg <= 0.0:
                             calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
@@ -311,7 +319,7 @@ class TelegramSyncEngine:
                     tracking_cache_global = None
                     try:
                         jobs = context.job_queue.jobs() if context.job_queue else []
-                        job_data = jobs[0].data if jobs and jobs[0].data is not None else {}
+                        job_data = jobs[0].data if jobs and len(jobs) > 0 and jobs[0].data is not None else {}
                         tracking_cache_global = job_data.get('sniper_tracking', {})
                         avwap_qty_global = tracking_cache_global.get(f"AVWAP_QTY_{ticker}", 0)
                         
@@ -411,7 +419,7 @@ class TelegramSyncEngine:
                                             missing_price = round(derived_price, 4)
                                         else:
                                             missing_price = round(b_tot_amt / b_tot_q, 4)
-                                 
+                                
                                 q_data_before.append({
                                     "date": now_est.strftime('%Y-%m-%d %H:%M:%S'),
                                     "qty": missing_qty,
@@ -511,7 +519,9 @@ class TelegramSyncEngine:
                             
                             if snapshot:
                                 try:
-                                    img_path = self.view.create_profit_image(
+                                    # 🚨 MODIFIED: [V44.44 스레드 교착 방어] 이미지 렌더링 I/O 비동기 래핑
+                                    img_path = await asyncio.to_thread(
+                                        self.view.create_profit_image,
                                         ticker=ticker, 
                                         profit=snapshot['realized_pnl'], 
                                         yield_pct=snapshot['realized_pnl_pct'],
@@ -562,7 +572,7 @@ class TelegramSyncEngine:
                             calibrated = await asyncio.to_thread(self.queue_ledger.sync_with_broker, ticker, adjusted_actual_qty, actual_avg)
                             if calibrated:
                                 await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 비파괴 보정 완료!</b>\n▫️ 수동 매도 물량(<b>{gap_qty}주</b>)을 LIFO 큐에서 안전하게 차감했습니다.", parse_mode='HTML')
-                                
+                            
                         elif adjusted_actual_qty > 0 and adjusted_actual_qty > vrev_ledger_qty:
                             gap_qty = adjusted_actual_qty - vrev_ledger_qty
                             
@@ -695,7 +705,6 @@ class TelegramSyncEngine:
 
     async def _verify_and_update_queue(self, ticker, q_data, context, chat_id):
         # 🚨 [치명적 경고 2 준수] 텔레그램 조작 시 직접 파일 I/O 접근으로 런타임 붕괴(EC-2) 차단.
-        # 이 메서드는 현재 사용되지 않으나 하위 호환성을 위해 유지하며, 로직을 안전한 파일 직접 쓰기로 변경.
         q_file = "data/queue_ledger.json"
         all_q = {}
         try:
@@ -730,7 +739,6 @@ class TelegramSyncEngine:
             logging.error(f"🚨 수동 지층 장부 저장 실패: {e}")
             
         # 다이렉트 조작 후 실잔고 기반 비파괴 보정(CALIB) 강제 트리거.
-        # process_auto_sync 내부에서 실잔고 일치 시 CALIB 바이패스하므로 이중 합산 버그는 발생하지 않음.
         if ticker not in self.sync_locks:
             self.sync_locks[ticker] = asyncio.Lock()
         if not self.sync_locks[ticker].locked():

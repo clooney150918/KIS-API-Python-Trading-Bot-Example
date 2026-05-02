@@ -3,6 +3,7 @@
 # ==========================================================
 # MODIFIED: [V44.30 수동 입력 렌더링 수술] 텔레그램 창에 수동 목표 수익률(%) 입력 후, /avwap 콘솔 갱신이 아닌 /settlement(환경설정) 화면으로 직결되도록 제자리 렌더링(edit_message_text) 파이프라인 개조 완료.
 # MODIFIED: [V44.44 이벤트 루프 교착 방어] 큐 장부 지층 수동 수정(EDIT_Q) 시 발생하는 직접적인 파일 I/O 작업을 비동기(asyncio.to_thread) 래핑하여 텔레그램 데드락 방어막 이식.
+# MODIFIED: [V44.45 헌법 수술] 파일 I/O 원자적 쓰기(Atomic Write) 엔진 전면 이식 및 런타임 붕괴 방어막(fsync) 하드코딩 완료.
 # ==========================================================
 import logging
 import datetime
@@ -10,6 +11,7 @@ from zoneinfo import ZoneInfo
 import os
 import json
 import asyncio
+import tempfile
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -72,6 +74,7 @@ class TelegramStates:
                     return await update.message.reply_text("❌ 수량/평단가는 숫자로 입력하세요. (수정 취소됨)")
                 
                 try:
+                    # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] API 호출 비동기 래핑
                     curr_p = await asyncio.wait_for(
                         asyncio.to_thread(self.broker.get_current_price, ticker), 
                         timeout=3.0
@@ -82,7 +85,7 @@ class TelegramStates:
                 except Exception:
                     pass
 
-                # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] 파일 I/O 비동기 래핑
+                # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] 파일 I/O 비동기 래핑 및 원자적 쓰기 강제
                 def _update_q_ledger():
                     q_file = "data/queue_ledger.json"
                     all_q = {}
@@ -92,7 +95,7 @@ class TelegramStates:
                                 all_q = json.load(f)
                         except Exception:
                             pass
-                            
+                    
                     ticker_q = all_q.get(ticker, [])
                     for item in ticker_q:
                         if item.get('date') == target_date:
@@ -102,9 +105,20 @@ class TelegramStates:
                     
                     all_q[ticker] = ticker_q
                     
-                    os.makedirs(os.path.dirname(q_file), exist_ok=True)
-                    with open(q_file, 'w', encoding='utf-8') as f:
-                        json.dump(all_q, f, ensure_ascii=False, indent=4)
+                    dir_name = os.path.dirname(q_file) or '.'
+                    os.makedirs(dir_name, exist_ok=True)
+                    fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
+                    
+                    try:
+                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                            json.dump(all_q, f_out, ensure_ascii=False, indent=4)
+                            f_out.flush()
+                            os.fsync(f_out.fileno())
+                        os.replace(tmp_path, q_file)
+                    except Exception as e:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                        raise e
                     
                     if getattr(self, 'queue_ledger', None) and hasattr(self.queue_ledger, '_load'):
                         try:

@@ -4,6 +4,7 @@
 # MODIFIED: [V44.30 AVWAP 설정 콜백 라우터 디커플링] 사용자가 AVWAP 타겟 모드(수동/자동) 및 출장 모드(조기/다중)를 변경할 때, AVWAP 콘솔이 아닌 /settlement 뷰포트를 갱신하도록 라우팅 배선 전면 교체 완료.
 # MODIFIED: [V44.30 순수 모니터 호출 개통] /avwap 레이더(모니터) 호출 시 더 이상 모드 활성화 유무에 막히지 않고 즉시 독립 관제탑을 띄우도록 필터링 가드 전면 해체.
 # MODIFIED: [V44.44 이벤트 루프 교착 방어] RESET, DEL_Q 등 텔레그램 버튼 클릭 시 발생하는 파일 I/O(json.dump/load) 작업을 비동기(asyncio.to_thread)로 래핑하여 텔레그램 응답 마비 현상 원천 차단 완료.
+# MODIFIED: [V44.45 헌법 수술] 파일 I/O 원자적 쓰기(Atomic Write) 엔진 전면 이식 및 런타임 붕괴 방어막(fsync) 하드코딩 완료.
 # NEW: [V44.45 물리적 킬 스위치 (Physical Kill-Switch) 이식] AVWAP 암살자 OFF 시 논리적 스위치만 꺼지고 호가창에 미체결 주문이 고아(Orphan)로 살아남아 훗날 강제 격발되던 치명적 엣지 케이스 원천 차단. OFF 격발 즉시 거래소를 팩트 스캔하여 순수 지정가(00) 매수 덫을 100% 강제 소각(Nuke)하는 방어막 및 SOXS 그림자 티커 듀얼 소각 로직 완비.
 # ==========================================================
 import logging
@@ -14,6 +15,7 @@ import json
 import time
 import math
 import asyncio
+import tempfile
 import yfinance as yf
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -218,14 +220,25 @@ class TelegramCallbacks:
                     new_q = [item for item in ticker_q if item.get('date') != target_date]
                     all_q[ticker] = new_q
                     
-                    # 🚨 MODIFIED: 파일 I/O 비동기 래핑
+                    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                    # 파일 I/O 동기 블로킹 방지 및 원자적 쓰기(Atomic Write) 강제
                     def _write_q(file_path, q_dict):
-                        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                        with open(file_path, 'w', encoding='utf-8') as f:
-                            json.dump(q_dict, f, ensure_ascii=False, indent=4)
+                        dir_name = os.path.dirname(file_path) or '.'
+                        os.makedirs(dir_name, exist_ok=True)
+                        fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
+                        try:
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                json.dump(q_dict, f_out, ensure_ascii=False, indent=4)
+                                f_out.flush()
+                                os.fsync(f_out.fileno())
+                            os.replace(tmp_path, file_path)
+                        except Exception as e:
+                            if os.path.exists(tmp_path):
+                                os.remove(tmp_path)
+                            raise e
                     
                     await asyncio.to_thread(_write_q, q_file, all_q)
-                        
+                    
                     if getattr(self, 'queue_ledger', None) and hasattr(self.queue_ledger, '_load'):
                         try:
                             await asyncio.to_thread(self.queue_ledger._load)
@@ -291,7 +304,8 @@ class TelegramCallbacks:
                 ledger_data = [r for r in self.cfg.get_ledger() if r.get('ticker') != ticker]
                 await asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["LEDGER"], ledger_data)
                 
-                # 🚨 MODIFIED: 파일 I/O 비동기 래핑
+                # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+                # 백업 장부 및 큐 장부 초기화 시 파일 I/O 원자적 쓰기(Atomic Write) 강제 및 비동기 래핑
                 def _process_reset_files():
                     backup_file = self.cfg.FILES["LEDGER"].replace(".json", "_backup.json")
                     if os.path.exists(backup_file):
@@ -299,8 +313,13 @@ class TelegramCallbacks:
                             with open(backup_file, 'r', encoding='utf-8') as f:
                                 b_data = json.load(f)
                             b_data = [r for r in b_data if r.get('ticker') != ticker]
-                            with open(backup_file, 'w', encoding='utf-8') as f:
-                                json.dump(b_data, f, ensure_ascii=False, indent=4)
+                            
+                            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(backup_file) or '.')
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                json.dump(b_data, f_out, ensure_ascii=False, indent=4)
+                                f_out.flush()
+                                os.fsync(f_out.fileno())
+                            os.replace(tmp_path, backup_file)
                         except Exception:
                             pass
                     
@@ -311,8 +330,13 @@ class TelegramCallbacks:
                                 q_data = json.load(f)
                             if ticker in q_data:
                                 del q_data[ticker]
-                            with open(q_file, 'w', encoding='utf-8') as f:
-                                json.dump(q_data, f, ensure_ascii=False, indent=4)
+                            
+                            fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(q_file) or '.')
+                            with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                                json.dump(q_data, f_out, ensure_ascii=False, indent=4)
+                                f_out.flush()
+                                os.fsync(f_out.fileno())
+                            os.replace(tmp_path, q_file)
                         except Exception:
                             pass
                 
@@ -323,7 +347,7 @@ class TelegramCallbacks:
                         await asyncio.to_thread(self.queue_ledger._load)
                     except Exception:
                         pass
-                    
+            
                 await query.edit_message_text(f"✅ <b>[{ticker}] 삼위일체 소각(Nuke) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 큐(Queue), 에스크로의 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 다음 매수 진입 시 0주 새출발 디커플링 타점 모드로 완벽히 재시작합니다.", parse_mode='HTML')
             
             elif sub == "CANCEL":
