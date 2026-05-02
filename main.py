@@ -149,7 +149,9 @@ def main():
     broker = KoreaInvestmentBroker(APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD)
     strategy = InfiniteStrategy(cfg)
     queue_ledger = QueueLedger()
-    strategy_rev = ReversionStrategy()
+    
+    # MODIFIED: [V44.48 런타임 붕괴 수술] ReversionStrategy 객체 생성 시 cfg 인자 주입 배선 복구
+    strategy_rev = ReversionStrategy(cfg)
     
     bot = TelegramController(
         cfg, broker, strategy, tx_lock=None, 
