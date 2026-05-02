@@ -137,7 +137,7 @@ async def scheduled_after_market_lottery(context):
                 v14_vwap_plugin = V14VwapStrategy(cfg)
                 # 🚨 [비동기 래핑] 파일 I/O 동기 블로킹 방어
                 cached_snap = await asyncio.to_thread(v14_vwap_plugin.load_daily_snapshot, t)
-                
+            
             if cached_snap:
                 is_zero_start_fact = cached_snap.get("is_zero_start", False)
         except Exception as e:

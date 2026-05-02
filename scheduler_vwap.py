@@ -476,7 +476,7 @@ async def scheduled_vwap_trade(context):
                                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                                             vwap_cache[f"REV_{t}_sweep_skip_msg"] = True
                             
-                            # MODIFIED: [V44.45 잭팟 데드존 방어] 과잉 방어막 도려내기.
+                        # MODIFIED: [V44.45 잭팟 데드존 방어] 과잉 방어막 도려내기.
                             if target_sweep_qty > 0:
                                 continue 
                         

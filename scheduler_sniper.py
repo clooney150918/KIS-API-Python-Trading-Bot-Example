@@ -4,6 +4,7 @@
 # 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출 전면 비동기 래핑 완료.
 # MODIFIED: [V44.48 런타임 즉사 방어] SHUTDOWN 분기문 들여쓰기(Indentation) 붕괴 교정 및 SyntaxError 영구 소각.
+# NEW: [V44.51 파일 I/O 스레드 블로킹 철거] tracking_cache 날짜 변경 시 격발되는 파일 삭제 로직 비동기 래핑 및 백신 주석 하드코딩.
 # ==========================================================
 import logging
 import datetime
@@ -83,9 +84,23 @@ async def scheduled_sniper_monitor(context):
     if tracking_cache.get('date') != today_est_str:
         tracking_cache.clear()
         tracking_cache['date'] = today_est_str
-        try:
-            for _f in glob.glob("data/sniper_cache_*.json"): os.remove(_f)
-        except: pass
+        
+        # MODIFIED: [V44.51 이벤트 루프 교착 방어] 파일 삭제 동기 블로킹 비동기 래핑
+        # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
+        # glob 및 os.remove를 통한 파일 삭제 등 동기식 디스크 I/O 작업이 메인 이벤트 루프를 블로킹하여
+        # 스나이퍼 및 전체 스케줄러가 교착(Deadlock) 상태에 빠지는 것을 원천 차단하기 위해
+        # 내부 동기 함수로 캡슐화 후 비동기(asyncio.to_thread) 래핑을 강제합니다.
+        def _clean_sniper_caches():
+            try:
+                for _f in glob.glob("data/sniper_cache_*.json"):
+                    try:
+                        os.remove(_f)
+                    except OSError:
+                        pass
+            except Exception as e:
+                logging.debug(f"스나이퍼 캐시 청소 중 에러: {e}")
+                
+        await asyncio.to_thread(_clean_sniper_caches)
             
     async def _do_sniper():
         async with tx_lock:
@@ -119,7 +134,7 @@ async def scheduled_sniper_monitor(context):
                                         return float(_st.get("executed", {}).get("BUY_BUDGET", 0.0))
                                 except Exception: pass
                             return 0.0
-                            
+                        
                         spent = await asyncio.to_thread(_read_v_state)
                         if _now_est.time() < datetime.time(15, 27):
                             virtual_locked_budget += max(0.0, rev_daily_budget - spent)
@@ -142,7 +157,7 @@ async def scheduled_sniper_monitor(context):
                         # 🚨 [비동기 래핑] 파일 I/O 데드락 방어
                         q_data = await asyncio.to_thread(q_ledger.get_queue, t)
                         total_q = sum(item.get("qty", 0) for item in q_data)
-                        
+
                         if actual_qty == 0 and total_q > 0:
                             _vwap_cache_ref = app_data.get('vwap_cache', {})
                             if _vwap_cache_ref.get(f"REV_{t}_sweep_msg_sent"):
