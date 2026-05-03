@@ -5,6 +5,7 @@
 # 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출(장부 I/O, JSON 파싱) 전면 비동기 래핑 및 Atomic Write 적용 완료.
 # MODIFIED: [V44.48 데드코드 소각] 클래스 내부에 잔존하는 _verify_and_update_queue 메서드 전체 100% 영구 소각.
+# NEW: [2단계 수술] process_auto_sync 내부의 MANUAL_SYNC 및 MANUAL_BUY 직후 hasattr 데드코드 전면 소각.
 # ==========================================================
 import logging
 import datetime
@@ -79,10 +80,10 @@ class TelegramSyncEngine:
                     logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 액면분할 조회 타임아웃 (10초 초과), 이번 싱크에서 스킵")
                 
                 if split_ratio > 0.0 and split_date != "":
-                    await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
-                    await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
-                    split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
-                    await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
+                     await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
+                     await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
+                     split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
+                     await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
                 
                 kst = ZoneInfo('Asia/Seoul')
                 now_kst = datetime.datetime.now(kst)
@@ -123,12 +124,12 @@ class TelegramSyncEngine:
                 is_rev = (await asyncio.to_thread(self.cfg.get_version, ticker) == "V_REV")
                 
                 if is_rev:
-                    if not getattr(self, 'queue_ledger', None):
+                   if not getattr(self, 'queue_ledger', None):
                         from queue_ledger import QueueLedger
                         self.queue_ledger = QueueLedger()
                     
-                    q_data_check = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
-                    vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in q_data_check)
+                   q_data_check = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
+                   vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in q_data_check)
                 
                 max_check_qty = max(ledger_qty_for_check, vrev_ledger_qty_for_check)
 
@@ -143,7 +144,7 @@ class TelegramSyncEngine:
                         if not ord_dt: continue
                         ord_tmd = ex.get('ord_tmd')
                         if not ord_tmd or len(str(ord_tmd)) != 6: 
-                            ord_tmd = '000000'
+                             ord_tmd = '000000'
                         try:
                             k_dt = datetime.datetime.strptime(f"{ord_dt}{ord_tmd}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
                             e_dt = k_dt.astimezone(est)
@@ -172,7 +173,7 @@ class TelegramSyncEngine:
                                     break
                             else:
                                 stable_cnt = 0
-                        prev_sold_today = sold_today
+                            prev_sold_today = sold_today
                         
                         if attempt < max_retries - 1:
                             logging.info(f"⏳ [{ticker}] 체결 원장 지연(Lag) 감지. 데이터 안정화 및 EST 매핑 검증 중... ({attempt+1}/{max_retries})")
@@ -452,13 +453,8 @@ class TelegramSyncEngine:
                                         
                                     await asyncio.to_thread(_write_q_file, all_q, q_file)
                                     
-                                    if hasattr(self.queue_ledger, 'data'):
-                                        self.queue_ledger.data = all_q
-                                    if hasattr(self.queue_ledger, 'queues'):
-                                        self.queue_ledger.queues = all_q
-                                    if hasattr(self.queue_ledger, 'load'):
-                                        await asyncio.to_thread(self.queue_ledger.load)
-                                         
+                                    # 🚨 [2단계 수술] 여기서 남아있던 hasattr(self.queue_ledger...) 호출부 전면 소각
+                                    
                                     logging.info(f"🔧 [{ticker}] 미동기화 수동 매수 물량({missing_qty}주, 진성단가 ${missing_price})을 졸업 큐에 다이렉트 영속화하여 PnL 오차 교정 및 스냅샷 충돌 방어 완료.")
                                 except Exception as e:
                                     logging.error(f"🚨 MANUAL_SYNC LIFO 큐 파일 I/O 영속화 실패: {e}")
@@ -555,7 +551,7 @@ class TelegramSyncEngine:
                                     def _read_v_state(f_path):
                                         with open(f_path, 'r', encoding='utf-8') as vf:
                                             return json.load(vf)
-                                    
+                                            
                                     v_state = await asyncio.to_thread(_read_v_state, vwap_state_file)
                                     if "executed" in v_state and "SELL_QTY" in v_state["executed"]:
                                         old_sell_qty = v_state["executed"]["SELL_QTY"]
@@ -641,9 +637,8 @@ class TelegramSyncEngine:
                                     
                                 await asyncio.to_thread(_write_q_manual, all_q, q_file)
                                 
-                                if hasattr(self.queue_ledger, 'data'):
-                                    self.queue_ledger.data = all_q
-                                     
+                                # 🚨 [2단계 수술] 여기서 남아있던 hasattr(self.queue_ledger, 'data') 찌꺼기 전면 소각
+                                
                                 logging.info(f"🔧 [{ticker}] 수동 매수 감지! KIS 실잔고에 맞춰 LIFO 큐에 신규 지층({gap_qty}주, 진성단가 ${real_buy_price}) 다이렉트 편입 및 파일 영속화 완료.")
                                 await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 수동 매수 편입 완료!</b>\n▫️ KIS 실잔고에 맞춰 신규 지층(<b>{gap_qty}주</b>, 추정단가 ${real_buy_price})을 정밀 추가했습니다.", parse_mode='HTML')
                             except Exception as e:

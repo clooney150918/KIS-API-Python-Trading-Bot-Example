@@ -77,7 +77,8 @@ class TelegramCallbacks:
                     safe_msg = html.escape(msg)
                     if success:
                         await query.edit_message_text(f"✅ <b>[업데이트 완료]</b> {safe_msg}\n\n🔄 데몬을 재가동합니다. 잠시 후 봇이 응답할 것입니다.", parse_mode='HTML')
-                        updater.restart_daemon()
+                        # MODIFIED: [V44.56 데몬 재가동 코루틴 대기] 코루틴 체인 파괴로 인한 좀비 프로세스 맹점 원천 차단
+                        await updater.restart_daemon()
                     else:
                         await query.edit_message_text(f"❌ <b>[업데이트 실패]</b>\n▫️ 사유: {safe_msg}", parse_mode='HTML')
                 except Exception as e:
@@ -107,7 +108,7 @@ class TelegramCallbacks:
                         q_data = await asyncio.to_thread(_read_q)
                     except Exception:
                         pass
-                        
+            
                 msg, markup = self.view.get_queue_management_menu(ticker, q_data)
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
@@ -346,7 +347,7 @@ class TelegramCallbacks:
                             os.replace(tmp_path, q_file)
                         except Exception:
                             pass
-                 
+                  
                 await asyncio.to_thread(_process_reset_files)
                     
                 # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보]
@@ -420,7 +421,7 @@ class TelegramCallbacks:
                 target_hist = None
                 if target_id:
                     target_hist = next((h for h in hist_list if h.get('id') == target_id), None)
-                    
+                 
                 if not target_hist:
                     target_hist = sorted(hist_list, key=lambda x: x.get('end_date', ''), reverse=True)[0]
                 

@@ -5,6 +5,7 @@
 # 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
 # 제9헌법: U_CURVE_WEIGHTS 하드코딩 배열 영구 소각. vwap_data.py에서 동적 로드하여 팩트 기반 재정규화 필수.
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각 및 동적 U-Curve 팩트 락온] 동기식 블로킹 호출 전면 비동기 래핑 및 하드코딩 배열 철거 완료.
+# MODIFIED: [맹점 3 수술] 루프 내부 cfg 접근(파일 I/O) 메서드 전면 비동기(asyncio.to_thread) 래핑 완료.
 # ==========================================================
 import logging
 import datetime
@@ -69,9 +70,11 @@ async def scheduled_vwap_init_and_cancel(context):
         
     async def _do_init():
         async with tx_lock:
-            for t in cfg.get_active_tickers():
-                version = cfg.get_version(t)
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+            # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+            active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
+            for t in active_tickers:
+                version = await asyncio.to_thread(cfg.get_version, t)
+                is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
                 
                 if version == "V_REV" and is_manual_vwap:
                     continue
@@ -94,7 +97,8 @@ async def scheduled_vwap_init_and_cancel(context):
                                 avwap_qty = int(avwap_state.get('qty', 0))
                             
                             if version == "V_REV" and strategy_rev and queue_ledger:
-                                rev_daily_budget = float(cfg.get_seed(t) or 0.0) * 0.15
+                                # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+                                rev_daily_budget = float(await asyncio.to_thread(cfg.get_seed, t) or 0.0) * 0.15
                                 # 🚨 [비동기 래핑] 파일 I/O 데드락 원천 차단
                                 q_data = await asyncio.to_thread(queue_ledger.get_queue, t)
                                 await asyncio.to_thread(
@@ -196,9 +200,11 @@ async def scheduled_vwap_trade(context):
             if min_idx < 0: min_idx = 0
             if min_idx > 29: min_idx = 29
             
-            for t in cfg.get_active_tickers():
-                version = cfg.get_version(t)
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+            # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+            active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
+            for t in active_tickers:
+                version = await asyncio.to_thread(cfg.get_version, t)
+                is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
                 is_zero_start_session = False 
 
                 if version == "V_REV" and is_manual_vwap:
@@ -235,12 +241,13 @@ async def scheduled_vwap_trade(context):
                             if hasattr(strategy, 'load_avwap_state'):
                                 avwap_state = await asyncio.to_thread(strategy.load_avwap_state, t, now_est)
                                 avwap_qty = int(avwap_state.get('qty', 0))
-                            
+                                
                             if version == "V_REV":
                                 strategy_rev = app_data.get('strategy_rev')
                                 queue_ledger = app_data.get('queue_ledger')
                                 if strategy_rev and queue_ledger:
-                                    rev_daily_budget = float(cfg.get_seed(t) or 0.0) * 0.15
+                                    # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+                                    rev_daily_budget = float(await asyncio.to_thread(cfg.get_seed, t) or 0.0) * 0.15
                                     # 🚨 [비동기 래핑] 파일 I/O 데드락 원천 차단
                                     q_data = await asyncio.to_thread(queue_ledger.get_queue, t)
                                     await asyncio.to_thread(
@@ -328,7 +335,8 @@ async def scheduled_vwap_trade(context):
                             else:
                                 is_zero_start = (total_q == 0)
                             
-                            rev_alloc_cash = float(cfg.get_seed(t) or 0.0) * 0.15
+                            # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+                            rev_alloc_cash = float(await asyncio.to_thread(cfg.get_seed, t) or 0.0) * 0.15
                             await asyncio.to_thread(
                                 strategy_rev.ensure_failsafe_snapshot,
                                 t, curr_p, prev_c, rev_alloc_cash, q_data, actual_qty, avwap_qty_for_shutdown
@@ -457,6 +465,9 @@ async def scheduled_vwap_trade(context):
                                                             fd, tmp_path = tempfile.mkstemp(dir="data", text=True)
                                                             with os.fdopen(fd, 'w', encoding='utf-8') as _pf:
                                                                 json.dump(p_data, _pf)
+                                                                # MODIFIED: [제4헌법 원자적 쓰기 무결성 락온] flush 및 fsync 이식
+                                                                _pf.flush()
+                                                                os.fsync(_pf.fileno())
                                                             os.replace(tmp_path, f_path)
                                                             
                                                         await asyncio.to_thread(_save_pending_grad, pending_file, pending_data)
@@ -468,7 +479,7 @@ async def scheduled_vwap_trade(context):
                                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                                             vwap_cache[f"REV_{t}_sweep_skip_msg"] = True
                             
-                            # MODIFIED: [V44.45 잭팟 데드존 방어] 과잉 방어막 도려내기.
+                        # MODIFIED: [V44.45 잭팟 데드존 방어] 과잉 방어막 도려내기.
                             if target_sweep_qty > 0:
                                 continue 
                         
@@ -496,17 +507,19 @@ async def scheduled_vwap_trade(context):
                                 err_msg = f"🛑 <b>[FATAL ERROR] {t} 공수 교대 중 기존 덫 취소 실패!</b>\n▫️ 2중 예산 소진 방어를 위해 당일 남은 V-REV 교전을 강제 중단(Hard-Lock)합니다.\n▫️ 상세 오류: {e}"
                                 await context.bot.send_message(chat_id=chat_id, text=err_msg, parse_mode='HTML')
                                 continue
-                                
+                    
                         vwap_cache[f"REV_{t}_regime"] = current_regime
                         
                         if vwap_cache.get(f"REV_{t}_loc_fired"):
                             continue
 
-                        rev_daily_budget = float(cfg.get_seed(t) or 0.0) * 0.15
+                        # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+                        rev_daily_budget = float(await asyncio.to_thread(cfg.get_seed, t) or 0.0) * 0.15
                         
                         target_orders = []
                         
-                        gap_thresh = getattr(cfg, 'get_vrev_gap_threshold', lambda x: -0.67)(t)
+                        # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+                        gap_thresh = await asyncio.to_thread(getattr(cfg, 'get_vrev_gap_threshold', lambda x: -0.67), t)
                         
                         omni_filter = {"allow_buy": True}  
                         
@@ -597,7 +610,9 @@ async def scheduled_vwap_trade(context):
                             ledger_qty = 0
                             try:
                                 today_str_est = now_est.strftime("%Y-%m-%d")
-                                recs = [r for r in cfg.get_ledger() if r['ticker'] == t and not str(r.get("date", "")).startswith(today_str_est)]
+                                # MODIFIED: [맹점 3 수술] cfg 루프 블로킹 방어
+                                full_ledger = await asyncio.to_thread(cfg.get_ledger)
+                                recs = [r for r in full_ledger if r['ticker'] == t and not str(r.get("date", "")).startswith(today_str_est)]
                                 ledger_qty, _, _, _ = await asyncio.to_thread(cfg.calculate_holdings, t, recs)
                             except Exception: pass
                             

@@ -12,6 +12,8 @@
 # 미국 동부시간(US/Eastern)으로 락온하여 자정 경계 환각 및 더블샷 버그 원천 차단.
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
 # NEW: [자정 경계 스냅샷/캐시 증발(Cinderella) 타임 패러독스 완벽 방어] 런타임 붕괴(AttributeError) 차단 정수 기반 락온
+# MODIFIED: [V44.57 인덴테이션 붕괴 수술] PEP8 규격 강제 및 IndentationError 영구 소각
+# MODIFIED: [V44.58 스냅샷 멱등성 파괴 엣지 케이스 수술] 파일명에 논리적 날짜(today_str) 결속 락온 완료
 # ==========================================================
 import math
 import os
@@ -42,7 +44,13 @@ class V14Strategy:
     def save_daily_snapshot(self, ticker, plan_data):
         # MODIFIED: KST/UTC 의존성 제거 및 EST/EDT 논리적 날짜 락온
         today_str = self._get_logical_date_str()
-        snap_file = f"data/daily_snapshot_V14_{ticker}.json"
+        
+        # MODIFIED: [V44.58 스냅샷 멱등성 파괴 엣지 케이스 수술] 파일명에 논리적 날짜(today_str) 결속 락온 완료
+        snap_file = f"data/daily_snapshot_V14_{today_str}_{ticker}.json"
+        
+        # NEW: [V44.56 스냅샷 멱등성 락온] 당일 1회 생성 원칙 준수 및 무한 덮어쓰기 방어막 주입
+        if os.path.exists(snap_file):
+            return
         
         # 🚨 [치명적 경고 1 준수] 세션 간 오염 방지: 당일 날짜로 단 1회만 멱등성 박제
         data = {
@@ -68,14 +76,17 @@ class V14Strategy:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, snap_file)
-        except Exception as e:
+        except Exception:
             pass
 
     # NEW: [V28.17 스냅샷 엔진 이식] V14 오리지널 모드 스냅샷 로드(Decoupling) 로직
     def load_daily_snapshot(self, ticker):
         # MODIFIED: KST/UTC 의존성 제거 및 EST/EDT 논리적 날짜 락온
         today_str = self._get_logical_date_str()
-        snap_file = f"data/daily_snapshot_V14_{ticker}.json"
+        
+        # MODIFIED: [V44.58 스냅샷 멱등성 파괴 엣지 케이스 수술] 파일명에 논리적 날짜(today_str) 결속 락온 완료
+        snap_file = f"data/daily_snapshot_V14_{today_str}_{ticker}.json"
+        
         if os.path.exists(snap_file):
             try:
                 with open(snap_file, 'r', encoding='utf-8') as f:

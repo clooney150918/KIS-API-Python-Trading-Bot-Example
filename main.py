@@ -84,6 +84,7 @@ async def scheduled_volatility_scan(context):
     base_map = app_data.get('base_map', TICKER_BASE_MAP)
     
     print("\n" + "=" * 60)
+    # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     print("📈 [자율주행 변동성 & 시장 국면 스캔 완료] (10:00 EST 스냅샷)")
     
     regime_data = await determine_market_regime(broker)
@@ -138,6 +139,7 @@ def main():
     print("=" * 60)
     print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V44.47 락온)")
     print(f"⏰ 자동 동기화: 21:00 EST 확정 정산 엔진 락온 가동")
+    # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     print("🛡️ 1-Tier 자율주행 지표 스캔 대기 중... (매일 10:00 EST 격발)")
     print("=" * 60)
     
@@ -147,7 +149,9 @@ def main():
     broker = KoreaInvestmentBroker(APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD)
     strategy = InfiniteStrategy(cfg)
     queue_ledger = QueueLedger()
-    strategy_rev = ReversionStrategy()
+    
+    # MODIFIED: [V44.48 런타임 붕괴 수술] ReversionStrategy 객체 생성 시 cfg 인자 주입 배선 복구
+    strategy_rev = ReversionStrategy(cfg)
     
     bot = TelegramController(
         cfg, broker, strategy, tx_lock=None, 
@@ -204,7 +208,7 @@ def main():
     # 🚨 [EST 100% 락온] 매매 초기화: 04:00 EST
     jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    # 🚨 [EST 100% 락온] 옴니 매트릭스 변동성 스캔: 10:00 EST
+    # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 0, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [EST 100% 락온] 정규장 통합 주문: 04:05 EST

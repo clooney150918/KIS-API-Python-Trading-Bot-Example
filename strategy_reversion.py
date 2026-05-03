@@ -1,10 +1,11 @@
+# ==========================================================
+# FILE: strategy_reversion.py
+# ==========================================================
 # MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, VWAP이 장중 매수한 로트를 기보유 물량으로 오판하여 매도를 재개(하극상)하던 맹점 원천 차단. 큐 장부에서 당일 날짜(EST)의 로트를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
 # MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
 # MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # MODIFIED: [V44.36 큐 장부 vs 브로커 실잔고 불일치 팩트 스캔] 페일세이프 스냅샷 복원 시 KIS 순수 본대 수량과 큐 장부 이월 수량 간의 팩트 불일치가 발생할 경우 명시적으로 경고를 타전하여 CALIB 보정을 유도하도록 감시망(EC-3) 이식 완료.
-# ==========================================================
-# FILE: strategy_reversion.py
-# ==========================================================
+# MODIFIED: [V44.48 런타임 붕괴 방어] 들여쓰기 붕괴(IndentationError) 완벽 교정.
 import math
 import os
 import json
@@ -13,15 +14,11 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-# NEW: [V40.XX 옴니 매트릭스] U-Curve 플러그인 로드 방어막
-try:
-    from vwap_data import VWAP_PROFILES
-except ImportError:
-    VWAP_PROFILES = {}
-    logging.warning("⚠️ [V-REV] vwap_data.py 플러그인을 찾을 수 없습니다.")
-
 class ReversionStrategy:
-    def __init__(self):
+    # MODIFIED: [V42 U-Curve 락온 무결성 복구] config 주입 배선 100% 복구
+    # 🚨 [AI 에이전트 절대 주의 환각 방어막] V42 U-Curve 락온 무결성 유지를 위해 config 주입을 훼손하지 말 것
+    def __init__(self, config):
+        self.cfg = config
         self.residual = {
             "BUY1": {}, "BUY2": {}, 
             "SELL_L1": {}, "SELL_UPPER": {}, "SELL_JACKPOT": {}
@@ -154,7 +151,6 @@ class ReversionStrategy:
         legacy_lots = [item for item in q_data if not str(item.get("date", "")).startswith(today_str_est)]
         legacy_q = sum(int(item.get("qty", 0)) for item in legacy_lots if float(item.get('price', 0.0)) > 0)
         
-        # NEW: [V44.36 큐 장부 vs 브로커 실잔고 불일치 팩트 스캔]
         if pure_qty != legacy_q:
             logging.warning(f"⚠️ [{ticker}] V-REV 페일세이프 경고: KIS 순수 본대 수량({pure_qty}주)과 이월 큐 장부 수량({legacy_q}주) 불일치 감지. CALIB 비파괴 보정 또는 수동 동기화 요망.")
             
@@ -231,7 +227,12 @@ class ReversionStrategy:
                 legacy_q = sum(int(item.get("qty", 0)) for item in legacy_lots)
                 is_zero_start_session = (legacy_q == 0)
 
-        profile = VWAP_PROFILES.get(ticker, {})
+        try:
+            profile = getattr(self, 'cfg').get_vwap_profile(ticker) if hasattr(self, 'cfg') and hasattr(self.cfg, 'get_vwap_profile') else {}
+        except Exception as e:
+            logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
+            profile = {}
+            
         target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
@@ -385,14 +386,25 @@ class ReversionStrategy:
             if rem_budget <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
-            raw_b1_slice = (float(alloc_cash) * 0.5) * current_weight
-            raw_b2_slice = (float(alloc_cash) * 0.5) * current_weight
+            # MODIFIED: [예산 탈취 디커플링 수술]
+            # 🚨 [AI 에이전트 절대 주의 - 환각 방어막]
+            # Buy1과 Buy2가 순차적 차감으로 서로의 예산을 훔치는 맹점을 소각.
+            # 각각의 최대 할당량(alloc_cash * 0.5)을 한계치로 독립 캡핑한 후 초과 시 균등 축소 적용.
+            half_alloc = float(alloc_cash) * 0.5
+            raw_b1_slice = half_alloc * current_weight
+            raw_b2_slice = half_alloc * current_weight
             
             b1_bucket = float(self.residual["BUY1"].get(ticker, 0.0)) + raw_b1_slice
             b2_bucket = float(self.residual["BUY2"].get(ticker, 0.0)) + raw_b2_slice
 
-            b1_budget_slice = min(b1_bucket, rem_budget)
-            b2_budget_slice = min(b2_bucket, max(0.0, rem_budget - b1_budget_slice))
+            b1_budget_slice = min(b1_bucket, half_alloc)
+            b2_budget_slice = min(b2_bucket, half_alloc)
+            
+            total_slice = b1_budget_slice + b2_budget_slice
+            if total_slice > rem_budget and total_slice > 0:
+                ratio = rem_budget / total_slice
+                b1_budget_slice *= ratio
+                b2_budget_slice *= ratio
 
             if curr_p > 0:
                 if buy_star_price > 0 and (is_zero_start_session or curr_p <= p1_trigger):
@@ -437,7 +449,7 @@ class ReversionStrategy:
                             self.residual["SELL_L1"][ticker] = float(exact_l1 - alloc_l1)
                             if alloc_l1 > 0:
                                 orders.append({"side": "SELL", "qty": alloc_l1, "price": trigger_l1})
-                                rem_qty_total -= alloc_l1
+                            rem_qty_total -= alloc_l1
 
                     if upper_qty > 0 and trigger_upper > 0 and curr_p >= trigger_upper and rem_qty_total > 0:
                         exact_upper = float(rem_qty_total * slice_ratio_sell) + float(self.residual["SELL_UPPER"].get(ticker, 0.0))

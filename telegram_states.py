@@ -5,6 +5,7 @@
 # MODIFIED: [V44.44 이벤트 루프 교착 방어] 큐 장부 지층 수동 수정(EDIT_Q) 시 발생하는 직접적인 파일 I/O 작업을 비동기(asyncio.to_thread) 래핑하여 텔레그램 데드락 방어막 이식.
 # MODIFIED: [V44.45 헌법 수술] 파일 I/O 원자적 쓰기(Atomic Write) 엔진 전면 이식 및 런타임 붕괴 방어막(fsync) 하드코딩 완료.
 # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보] 큐 장부에 존재하지 않는 _load 메서드 호출 찌꺼기 100% 소각.
+# MODIFIED: [맹점 4 수술] 텔레그램 상태 제어 시 발생하는 cfg.get_seed 동기 I/O 블로킹 뇌관 전면 비동기 래핑 완료.
 # ==========================================================
 import logging
 import datetime
@@ -134,7 +135,7 @@ class TelegramStates:
                     self.sync_engine.sync_locks[ticker] = asyncio.Lock()
                 if not self.sync_engine.sync_locks[ticker].locked():
                     await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
-                    
+                
                 return
 
             val = float(text)
@@ -174,7 +175,10 @@ class TelegramStates:
                     return await update.message.reply_text("❌ 오류: 시드머니는 0 이상이어야 합니다.")
                     
                 action, ticker = parts[1], parts[2]
-                curr = self.cfg.get_seed(ticker)
+                
+                # MODIFIED: [맹점 4 수술] 파일 I/O 동기 블로킹 비동기 래핑
+                curr = await asyncio.to_thread(self.cfg.get_seed, ticker)
+                
                 new_v = curr + val if action == "ADD" else (max(0, curr - val) if action == "SUB" else val)
                 await asyncio.to_thread(self.cfg.set_seed, ticker, new_v)
                 await update.message.reply_text(f"✅ [{ticker}] 시드 변경: ${new_v:,.0f}")

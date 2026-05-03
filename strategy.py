@@ -17,11 +17,14 @@ from strategy_reversion import ReversionStrategy
 from strategy_v14_vwap import V14VwapStrategy
 
 class InfiniteStrategy:
+    
     def __init__(self, config):
         self.cfg = config
         self.v14_plugin = V14Strategy(config)
         self.v_avwap_plugin = VAvwapHybridPlugin()
-        self.v_rev_plugin = ReversionStrategy()
+        # MODIFIED: [V42 U-Curve 락온 무결성 복구] ReversionStrategy 객체 생성 시 config 인자 주입 배선 100% 복구
+        # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막] V42 U-Curve 락온 무결성 유지를 위해 config 주입을 훼손하지 말 것
+        self.v_rev_plugin = ReversionStrategy(config)
         self.v14_vwap_plugin = V14VwapStrategy(config)
 
     def analyze_vwap_dominance(self, df):
@@ -136,10 +139,12 @@ class InfiniteStrategy:
                 't_val': 0.0, 'is_reverse': False, 'star_price': 0.0, 'one_portion': 0.0
             }
         else:
+            # MODIFIED: [V44.58 라우팅 누수 디커플링 붕괴 엣지 케이스 수술] v14_plugin.get_plan 호출 시 is_snapshot_mode 파라미터 배선 팩트 복구 완료
             plan = self.v14_plugin.get_plan(
                 ticker=ticker, current_price=current_price, avg_price=avg_price, qty=qty,
                 prev_close=prev_close, ma_5day=ma_5day, market_type=market_type,
-                available_cash=available_cash, is_simulation=is_simulation, vwap_status=vwap_status
+                available_cash=available_cash, is_simulation=is_simulation, vwap_status=vwap_status,
+                is_snapshot_mode=is_snapshot_mode
             )
             
         # [V40.XX] 옴니 매트릭스 필터 적용 (매수 락온 및 청산 패스)

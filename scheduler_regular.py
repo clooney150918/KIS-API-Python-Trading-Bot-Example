@@ -55,13 +55,18 @@ async def scheduled_regular_trade(context):
         
         async with tx_lock:
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
+            
             if holdings is None:
                 return False, "❌ 계좌 정보를 불러오지 못했습니다."
             
             safe_holdings = holdings if isinstance(holdings, dict) else {}
 
+            # MODIFIED: [맹점 2 수술] 파이썬 인자 평가 순서 함정으로 인한 동기 블로킹 방어
+            # cfg.get_active_tickers()를 메인 루프에서 분리하여 선제적으로 비동기 스캔
+            active_tickers_list = await asyncio.to_thread(cfg.get_active_tickers)
+            
             # 🚨 [비동기 래핑] get_budget_allocation 내부 파일 I/O 데드락 방어
-            sorted_tickers, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, cfg.get_active_tickers(), cfg)
+            sorted_tickers, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, active_tickers_list, cfg)
             
             plans = {}
             msgs = {t: "" for t in sorted_tickers}

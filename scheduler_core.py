@@ -275,6 +275,9 @@ async def scheduled_auto_sync(context):
             fd, tmp_path = tempfile.mkstemp(dir="data", text=True)
             with os.fdopen(fd, 'w') as f:
                 json.dump({"last_sync": today_est}, f)
+                # MODIFIED: [제4헌법 원자적 쓰기 무결성 락온] flush 및 fsync 추가
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp_path, lock_file)
         except Exception as e:
             logging.error(f"🚨 동기화 락온 파일 저장 실패: {e}")
@@ -294,13 +297,15 @@ async def scheduled_auto_sync(context):
     success_tickers = []
     active_tickers = await asyncio.to_thread(context.job.data['cfg'].get_active_tickers)
     for t in active_tickers:
-        res = await bot.process_auto_sync(t, chat_id, context, silent_ledger=True)
+        # MODIFIED: [제2헌법 라우팅 누수 런타임 붕괴 방어] sync_engine 호출로 팩트 교정
+        res = await bot.sync_engine.process_auto_sync(t, chat_id, context, silent_ledger=True)
         if res == "SUCCESS":
             success_tickers.append(t)
             
     if success_tickers:
         async with context.job.data['tx_lock']:
             _, holdings = await asyncio.to_thread(context.job.data['broker'].get_account_balance)
-        await bot._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
+        # MODIFIED: [제2헌법 라우팅 누수 런타임 붕괴 방어] sync_engine 호출로 팩트 교정
+        await bot.sync_engine._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
     else:
         await status_msg.edit_text(f"📝 <b>[21:00 EST] 장부 동기화 완료</b> (표시할 진행 중인 장부가 없습니다)", parse_mode='HTML')

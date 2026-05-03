@@ -9,6 +9,9 @@
 # VWAP 타임 슬라이싱 및 장마감 정산의 무결성을 위해 
 # EST 14:55 ~ 16:10 사이의 업데이트 및 재가동을 100% 차단함.
 # 🚨 MODIFIED: [V42.16 핫픽스] pytz 영구 적출 및 ZoneInfo 락온 (ModuleNotFoundError 런타임 붕괴 방어)
+# 🚨 MODIFIED: [V44.52 휴일 락다운 해제 수술] 주말(토, 일) 및 휴장일에는 시계(14:55~16:10)를 무시하고 무조건 업데이트를 허용하는 달력 팩트 스캔 엔진(Bypass) 이식 완료.
+# 🚨 MODIFIED: [V44.53 제1헌법 및 16계명 절대 락온] 달력 API(mcal) 스캔을 비동기(to_thread) 래핑하고 5초 타임아웃(Fail-Open)을 강제하여 이벤트 루프 교착(Deadlock) 원천 차단.
+# 🚨 MODIFIED: [V44.55 데몬 셧다운 교착(Zombie) 영구 소각] OS systemctl 의존성 철거 및 하드 킬(Self-Kill) 엔진 이식 완료.
 # ==========================================================
 import logging
 import asyncio
@@ -27,7 +30,8 @@ class SystemUpdater:
         # MODIFIED: [환경변수 스캔 범위 확장] systemd에서 주입한 소문자 daemon_name 우선 조회 및 대문자 폴백 팩트 교정
         self.daemon_name = os.getenv("daemon_name") or os.getenv("DAEMON_NAME", "mybot")
 
-    def is_update_allowed(self):
+    # 🚨 [제1헌법 준수] 동기 I/O 차단을 위해 async 격상
+    async def is_update_allowed(self):
         """
         현재 시간이 업데이트 금지 시간대(레드존)인지 검사합니다.
         기준: 14:55 EST ~ 16:10 EST (VWAP 가동 및 장마감 정산 보호)
@@ -35,8 +39,28 @@ class SystemUpdater:
         # 🚨 MODIFIED: [V42.16] pytz 적출 및 ZoneInfo 이식 완료
         est = ZoneInfo('America/New_York')
         now_est = datetime.datetime.now(est)
-        curr_time = now_est.time()
         
+        # 🚨 [V44.52 휴일 락다운 해제] 주말(토, 일)이면 무조건 업데이트 허용 (Bypass)
+        if now_est.weekday() >= 5:
+            return True, ""
+
+        # 🚨 [V44.53 제1헌법/16계명 적용] 비동기 래핑 및 타임아웃 족쇄 체결
+        def _check_holiday():
+            import pandas_market_calendars as mcal
+            nyse = mcal.get_calendar('NYSE')
+            schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
+            return schedule.empty
+
+        try:
+            is_holiday = await asyncio.wait_for(asyncio.to_thread(_check_holiday), timeout=5.0)
+            if is_holiday:
+                return True, ""
+        except asyncio.TimeoutError:
+            logging.error("⚠️ [Updater] 달력 API 타임아웃. 휴장일 판별을 건너뛰고 시간 검사 강제 진행 (Fail-Open).")
+        except Exception as e:
+            logging.debug(f"업데이트 락다운 달력 스캔 에러 (무시하고 시간 검사 진행): {e}")
+
+        curr_time = now_est.time()
         start_lock = datetime.time(14, 55)
         end_lock = datetime.time(16, 10)
         
@@ -70,8 +94,8 @@ class SystemUpdater:
         깃허브 서버와 통신하여 로컬의 변경 사항을 완벽히 무시하고
         원격 저장소의 최신 코드로 강제 덮어쓰기(Hard Reset)를 수행합니다.
         """
-        # 🚨 [V30.06] 업데이트 레드존(Red-Zone) 선제 검사
-        allowed, msg = self.is_update_allowed()
+        # 🚨 [비동기 래핑 대응] await 추가
+        allowed, msg = await self.is_update_allowed()
         if not allowed:
             logging.warning(f"🛑 [Updater] 깃허브 강제 동기화 차단 (레드존): {msg}")
             return False, msg
@@ -111,27 +135,26 @@ class SystemUpdater:
             logging.error(f"🚨 [Updater] 동기화 중 치명적 예외 발생: {e}")
             return False, f"업데이트 프로세스 예외 발생: {e}"
 
-    def restart_daemon(self):
+    # 🚨 [제1헌법 준수] 동기 함수 의존성 해결을 위해 async 격상
+    async def restart_daemon(self):
         """
-        GCP 리눅스 OS에 데몬 재가동 명령을 하달합니다.
-        격발 즉시 봇 프로세스가 SIGTERM 신호를 받고 종료되므로,
-        반드시 텔레그램 보고 메시지를 선행 발송한 후 호출해야 합니다.
+        GCP 리눅스 OS에 데몬 재가동 명령을 하달하는 대신,
+        파이썬 프로세스를 즉각 폭파(Hard Kill)시킵니다.
+        systemd의 Restart=always 속성이 즉시 봇을 부활시킵니다.
         """
-        # 🚨 [V30.06] 재가동 레드존(Red-Zone) Fail-Safe 방어막
-        allowed, _ = self.is_update_allowed()
+        # 🚨 [비동기 래핑 대응] await 추가
+        allowed, _ = await self.is_update_allowed()
         if not allowed:
             logging.error("❌ 레드존 시간대 데몬 재가동 시도가 감지되어 OS 강제 차단했습니다.")
             return False
 
         try:
-            logging.info(f"🔄 [Updater] OS 쉘에 {self.daemon_name} 데몬 재가동 명령을 하달합니다.")
+            logging.info(f"🔄 [Updater] 좀비 셧다운 방어를 위해 파이썬 프로세스를 즉시 자폭(Hard Kill)시킵니다. (systemd가 부활시킴)")
             
-            subprocess.Popen(
-                ["sudo", "systemctl", "restart", self.daemon_name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            # MODIFIED: [V44.55] sudo systemctl 의존성 영구 철거 및 즉각 셧다운(os._exit) 타격
+            os._exit(0)
+            
             return True
         except Exception as e:
-            logging.error(f"🚨 [Updater] 데몬 재가동 명령 하달 실패: {e}")
+            logging.error(f"🚨 [Updater] 데몬 자폭 명령 하달 실패: {e}")
             return False
