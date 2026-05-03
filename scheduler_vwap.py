@@ -241,7 +241,7 @@ async def scheduled_vwap_trade(context):
                             if hasattr(strategy, 'load_avwap_state'):
                                 avwap_state = await asyncio.to_thread(strategy.load_avwap_state, t, now_est)
                                 avwap_qty = int(avwap_state.get('qty', 0))
-                            
+                                
                             if version == "V_REV":
                                 strategy_rev = app_data.get('strategy_rev')
                                 queue_ledger = app_data.get('queue_ledger')
@@ -465,6 +465,9 @@ async def scheduled_vwap_trade(context):
                                                             fd, tmp_path = tempfile.mkstemp(dir="data", text=True)
                                                             with os.fdopen(fd, 'w', encoding='utf-8') as _pf:
                                                                 json.dump(p_data, _pf)
+                                                                # MODIFIED: [제4헌법 원자적 쓰기 무결성 락온] flush 및 fsync 이식
+                                                                _pf.flush()
+                                                                os.fsync(_pf.fileno())
                                                             os.replace(tmp_path, f_path)
                                                             
                                                         await asyncio.to_thread(_save_pending_grad, pending_file, pending_data)
@@ -504,7 +507,7 @@ async def scheduled_vwap_trade(context):
                                 err_msg = f"🛑 <b>[FATAL ERROR] {t} 공수 교대 중 기존 덫 취소 실패!</b>\n▫️ 2중 예산 소진 방어를 위해 당일 남은 V-REV 교전을 강제 중단(Hard-Lock)합니다.\n▫️ 상세 오류: {e}"
                                 await context.bot.send_message(chat_id=chat_id, text=err_msg, parse_mode='HTML')
                                 continue
-                                
+                    
                         vwap_cache[f"REV_{t}_regime"] = current_regime
                         
                         if vwap_cache.get(f"REV_{t}_loc_fired"):

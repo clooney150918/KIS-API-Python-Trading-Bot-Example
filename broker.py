@@ -1,4 +1,8 @@
 # ==========================================================
+# FILE: broker.py
+# ==========================================================
+
+# ==========================================================
 # [broker.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
 # MODIFIED: [V28.15 장부 2배 뻥튀기(Double Counting) 원천 차단]
 # KIS API(TTTS3012R)가 동일 종목을 다중 거래소(NASD, AMEX 등) 응답으로 
@@ -42,7 +46,21 @@ import numpy as np
 import volatility_engine as ve
 import logging  
 
+# MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
+def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """ 🚨 [수술 완료] 야후 파이낸스 API 업데이트로 인한 MultiIndex 순서 붕괴 방어 """
+    if isinstance(df.columns, pd.MultiIndex):
+        if 'Ticker' in df.columns.names:
+            df.columns = df.columns.droplevel('Ticker')
+        elif df.columns.nlevels == 2:
+            price_fields = {'Close', 'High', 'Low', 'Open', 'Volume', 'Adj Close'}
+            level0_vals = set(df.columns.get_level_values(0))
+            drop_level = 0 if not level0_vals.intersection(price_fields) else 1
+            df.columns = df.columns.droplevel(drop_level)
+    return df
+
 class KoreaInvestmentBroker:
+  
     def __init__(self, app_key, app_secret, cano, acnt_prdt_cd="01"):
         self.app_key = app_key
         self.app_secret = app_secret
@@ -306,8 +324,8 @@ class KoreaInvestmentBroker:
             df = stock.history(period="5d", interval="1m", prepost=False, timeout=10)
             if df.empty: return 0.0, 0.0
 
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
+            # MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
+            df = _flatten_columns(df)
 
             est = ZoneInfo('America/New_York')
             if df.index.tz is None:
@@ -356,9 +374,9 @@ class KoreaInvestmentBroker:
             
             if df.empty: return None
                 
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.droplevel(1)
-                
+            # MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
+            df = _flatten_columns(df)
+                 
             est = ZoneInfo('America/New_York')
             
             if df.index.tz is None:
@@ -388,7 +406,7 @@ class KoreaInvestmentBroker:
             
             if pd.isna(current_vwap):
                 current_vwap = 0.0
-            
+             
             resampled = regular_market.resample('5min', label='left', closed='left').agg({
                 'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
             }).dropna()
@@ -490,7 +508,6 @@ class KoreaInvestmentBroker:
         except Exception as e:
             pass
         return 0.0
-
     def get_5day_ma(self, ticker):
         try:
             stock = yf.Ticker(ticker)
@@ -518,8 +535,9 @@ class KoreaInvestmentBroker:
             df = stock.history(period="1d", interval="1m", prepost=True, timeout=5)
             
             if df.empty: return None
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
-                
+            # MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
+            df = _flatten_columns(df)
+                 
             est = ZoneInfo('America/New_York')
             if df.index.tz is None: df.index = df.index.tz_localize('UTC').tz_convert(est)
             else: df.index = df.index.tz_convert(est)
@@ -573,6 +591,7 @@ class KoreaInvestmentBroker:
             orders = self.get_unfilled_orders_detail(ticker)
             if orders is False:
                 return False
+        
             if not orders: return True
             
             target_orders = orders
@@ -595,7 +614,7 @@ class KoreaInvestmentBroker:
             
         if failed_orders:
             return False
-            
+             
         return True
         
     def cancel_targeted_orders(self, ticker, side, target_ord_dvsn):
@@ -643,7 +662,7 @@ class KoreaInvestmentBroker:
         for o in target_orders:
             self.cancel_order(ticker, o.get('odno'))
             time.sleep(0.3)
-            
+             
         return len(target_orders)
 
     def send_order(self, ticker, side, qty, price, order_type="LIMIT"):
