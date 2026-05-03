@@ -1,4 +1,6 @@
 # ==========================================================
+# FILE: strategy_v_avwap.py
+# ==========================================================
 # [strategy_v_avwap.py] - 🌟 V44.23 앱솔루트 팩트 교정 🌟
 # 💡 V-REV 하이브리드 전용 차세대 AVWAP 스나이퍼 플러그인 (Dual-Referencing)
 # ⚠️ 초공격형 당일 청산 암살자 (V-REV 잉여 현금 100% 몰빵 & -8% 하드스탑)
@@ -59,7 +61,7 @@ class VAvwapHybridPlugin:
         try:
             dir_name = os.path.dirname(file_path)
             if dir_name and not os.path.exists(dir_name):
-                os.makedirs(dir_name, exist_ok=True)
+                 os.makedirs(dir_name, exist_ok=True)
             
             fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -160,6 +162,8 @@ class VAvwapHybridPlugin:
         target_mode = kwargs.get('target_mode', 'AUTO')
         
         atr5 = kwargs.get('atr5', 0.0)
+        # 🚨 [AI 에이전트 절대 주의 - 환각 방어막] day_high kwargs 수신 방어막
+        day_high = kwargs.get('day_high', 0.0)
         day_low = kwargs.get('day_low', 0.0)
         prev_c = kwargs.get('prev_close', 0.0)
 
@@ -246,9 +250,10 @@ class VAvwapHybridPlugin:
             
             final_target_pct = user_target_pct
             
-            if target_mode == "AUTO" and atr5 > 0 and day_low > 0 and prev_c > 0:
+            if target_mode == "AUTO" and atr5 > 0 and day_low > 0 and prev_c > 0 and day_high > 0:
                 atr5_price = prev_c * (atr5 / 100.0)
-                exh_5 = ((safe_avg - day_low) / atr5_price * 100) if atr5_price > 0 else 0
+                # 🚨 [AI 에이전트 절대 주의 - 환각 방어막] safe_avg 소각, day_high 기준으로 체력 소진율 연산 교정
+                exh_5 = ((day_high - day_low) / atr5_price * 100) if atr5_price > 0 else 0
                 
                 if exh_5 >= 90: final_target_pct = 2.0
                 elif exh_5 >= 80: final_target_pct = 3.0
@@ -297,8 +302,9 @@ class VAvwapHybridPlugin:
             trigger_condition = (base_vwap < prev_vwap) and (avg_vwap_5m < base_vwap)
 
         if trigger_condition:
-            if atr5 > 0 and prev_c > 0 and day_low > 0 and exec_curr_p > 0:
-                actual_gap_dollar = exec_curr_p - day_low
+            if atr5 > 0 and prev_c > 0 and day_low > 0 and day_high > 0 and exec_curr_p > 0:
+                # 🚨 [AI 에이전트 절대 주의 - 환각 방어막] exec_curr_p 소각, day_high 기준으로 잔여 체력 연산 디커플링 해체
+                actual_gap_dollar = day_high - day_low
                 actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0
                 rem_5_pct = atr5 - actual_gap_pct
                 

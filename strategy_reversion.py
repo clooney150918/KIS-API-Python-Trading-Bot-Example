@@ -386,14 +386,25 @@ class ReversionStrategy:
             if rem_budget <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
-            raw_b1_slice = (float(alloc_cash) * 0.5) * current_weight
-            raw_b2_slice = (float(alloc_cash) * 0.5) * current_weight
+            # MODIFIED: [예산 탈취 디커플링 수술]
+            # 🚨 [AI 에이전트 절대 주의 - 환각 방어막]
+            # Buy1과 Buy2가 순차적 차감으로 서로의 예산을 훔치는 맹점을 소각.
+            # 각각의 최대 할당량(alloc_cash * 0.5)을 한계치로 독립 캡핑한 후 초과 시 균등 축소 적용.
+            half_alloc = float(alloc_cash) * 0.5
+            raw_b1_slice = half_alloc * current_weight
+            raw_b2_slice = half_alloc * current_weight
             
             b1_bucket = float(self.residual["BUY1"].get(ticker, 0.0)) + raw_b1_slice
             b2_bucket = float(self.residual["BUY2"].get(ticker, 0.0)) + raw_b2_slice
 
-            b1_budget_slice = min(b1_bucket, rem_budget)
-            b2_budget_slice = min(b2_bucket, max(0.0, rem_budget - b1_budget_slice))
+            b1_budget_slice = min(b1_bucket, half_alloc)
+            b2_budget_slice = min(b2_bucket, half_alloc)
+            
+            total_slice = b1_budget_slice + b2_budget_slice
+            if total_slice > rem_budget and total_slice > 0:
+                ratio = rem_budget / total_slice
+                b1_budget_slice *= ratio
+                b2_budget_slice *= ratio
 
             if curr_p > 0:
                 if buy_star_price > 0 and (is_zero_start_session or curr_p <= p1_trigger):
