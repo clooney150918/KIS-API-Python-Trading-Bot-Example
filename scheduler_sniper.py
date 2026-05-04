@@ -7,6 +7,7 @@
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출 전면 비동기 래핑 완료.
 # MODIFIED: [V44.48 런타임 즉사 방어] SHUTDOWN 분기문 들여쓰기(Indentation) 붕괴 교정 및 SyntaxError 영구 소각.
 # NEW: [V44.51 파일 I/O 스레드 블로킹 철거] tracking_cache 날짜 변경 시 격발되는 파일 삭제 로직 비동기 래핑 및 백신 주석 하드코딩.
+# MODIFIED: [V44.69 타임 드리프트 및 콜드스타트 엣지 케이스 방어막 이식]
 # ==========================================================
 import logging
 import datetime
@@ -194,7 +195,7 @@ async def scheduled_sniper_monitor(context):
                             except Exception as e:
                                 logging.error(f"AVWAP 상태 복구 실패: {e}")
                             tracking_cache[f"AVWAP_INIT_{current_target}"] = True
-                             
+                            
                         if tracking_cache.get(f"AVWAP_SHUTDOWN_{current_target}"): continue
                         
                         target_base = base_map.get(t, t) 
@@ -218,7 +219,7 @@ async def scheduled_sniper_monitor(context):
                         
                         base_curr_p = float(await asyncio.to_thread(broker.get_current_price, target_base) or 0.0)
                         if base_curr_p <= 0: continue
-                         
+                        
                         def _fetch_open(tkr):
                             try:
                                 st = yf.Ticker(tkr)
@@ -254,11 +255,11 @@ async def scheduled_sniper_monitor(context):
                             atr5 = float(res_atr[0]) if not isinstance(res_atr, Exception) and res_atr else 0.0
                         except Exception as e:
                             logging.debug(f"AVWAP 파라미터 병렬 스캔 실패: {e}")
-                             
+                            
                         avwap_state_dict = {
                             "strikes": tracking_cache.get(f"AVWAP_STRIKES_{current_target}", 0)
                         }
-                         
+                        
                         # 🚨 [비동기 래핑] 파일 I/O 의존성 방어 및 [AI 에이전트 절대 주의 - 환각 방어막] day_high 주입
                         decision = await asyncio.to_thread(
                             strategy.get_avwap_decision,
@@ -302,7 +303,7 @@ async def scheduled_sniper_monitor(context):
                                         await asyncio.sleep(2.0)
                                         unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, current_target)
                                         safe_unfilled = unfilled_check if isinstance(unfilled_check, list) else []
-                             
+                                         
                                         my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
                                         if my_order:
                                             ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
@@ -396,7 +397,7 @@ async def scheduled_sniper_monitor(context):
                                             await asyncio.sleep(0.5)
                                         except Exception as e_cancel:
                                             logging.warning(f"⚠️ [{current_target}] AVWAP 매도 잔여 취소 실패: {e_cancel}")
-                                           
+                                            
                                     if ccld_qty > 0:
                                         msg = f"⚔️ <b>[AVWAP] 암살자 덤핑 타격!</b>\n▫️ 타겟: {current_target}\n▫️ 타점: ${exec_price}\n▫️ 팩트 체결수량: {ccld_qty}주 (목표 {qty}주)\n▫️ 사유: {reason}"
                                      
@@ -404,7 +405,7 @@ async def scheduled_sniper_monitor(context):
                                         new_qty = max(0, old_qty - ccld_qty)
                                         
                                         shutdown_flag = tracking_cache.get(f"AVWAP_SHUTDOWN_{current_target}", False)
-                                         
+                                        
                                         if new_qty == 0:
                                             strikes = tracking_cache.get(f"AVWAP_STRIKES_{current_target}", 0) + 1
                                             tracking_cache[f"AVWAP_STRIKES_{current_target}"] = strikes
@@ -433,12 +434,12 @@ async def scheduled_sniper_monitor(context):
                                             new_avg = tracking_cache.get(f"AVWAP_AVG_{current_target}", 0.0)
 
                                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                                         
+                                        
                                         tracking_cache[f"AVWAP_BOUGHT_{current_target}"] = (new_qty > 0)
                                         tracking_cache[f"AVWAP_SHUTDOWN_{current_target}"] = shutdown_flag
                                         tracking_cache[f"AVWAP_QTY_{current_target}"] = new_qty
                                         tracking_cache[f"AVWAP_AVG_{current_target}"] = new_avg
-                                         
+                                        
                                         state_data = {
                                             'bought': tracking_cache[f"AVWAP_BOUGHT_{current_target}"],
                                             'shutdown': shutdown_flag,
@@ -482,6 +483,7 @@ async def scheduled_sniper_monitor(context):
                 is_rev = (await asyncio.to_thread(cfg.get_version, t) == "V_REV")
 
                 if action == "BUY" and not is_rev and regime_data is not None:
+                    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각 방어막] 10:00 EST 이전 regime_data pending 상태 유지는 오프닝 휩소 무지성 타격을 막기 위한 V44.65 절대 헌법이다. 이를 버그로 오인하여 진입을 개방하는 훼손 행위를 영구 차단한다.
                     # 🚨 [비동기 래핑] 파일 I/O 및 객체 호출 방어
                     omni_filter = await asyncio.to_thread(strategy.apply_omni_matrix_filter, t, 0, regime_data)
                     if not omni_filter["allow_buy"]:
@@ -493,7 +495,7 @@ async def scheduled_sniper_monitor(context):
                     if qty > 0:
                         cancelled = await asyncio.to_thread(broker.cancel_targeted_orders, t, "02", "03")
                         await asyncio.sleep(1.0)
-                        
+                
                         has_unfilled = False
                         for _ in range(4):
                             unfilled = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
@@ -524,7 +526,7 @@ async def scheduled_sniper_monitor(context):
                                 else:
                                     ccld_qty = qty
                                     break
-                                    
+                
                             if ccld_qty < qty:
                                 try:
                                     await asyncio.to_thread(broker.cancel_order, t, odno)
@@ -594,7 +596,7 @@ async def scheduled_sniper_monitor(context):
                                 has_unfilled = True
                                 break
                             await asyncio.sleep(2.0)
-                         
+                        
                         if has_unfilled:
                             continue
                             
@@ -614,7 +616,7 @@ async def scheduled_sniper_monitor(context):
                                 else:
                                     ccld_qty = qty
                                     break
-                             
+                            
                             if ccld_qty < qty:
                                 try:
                                     await asyncio.to_thread(broker.cancel_order, t, odno)
@@ -650,4 +652,3 @@ async def scheduled_sniper_monitor(context):
         await asyncio.wait_for(_do_sniper(), timeout=45.0)
     except Exception as e:
         logging.error(f"🚨 스나이퍼 타임아웃 에러: {e}", exc_info=True)
-

@@ -29,7 +29,8 @@ class ReversionStrategy:
 
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
-        if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 5):
+        # MODIFIED: [04:05 EST 논리적 날짜 경계선 붕괴 방어] 04:04:59 조기 격발 오염 방지를 위해 4분으로 축소 교정
+        if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 4):
             target_date = now_est - timedelta(days=1)
         else:
             target_date = now_est
@@ -407,14 +408,15 @@ class ReversionStrategy:
                 b2_budget_slice *= ratio
 
             if curr_p > 0:
-                if buy_star_price > 0 and (is_zero_start_session or curr_p <= p1_trigger):
+                # MODIFIED: [NameError 런타임 붕괴 수술] 선언되지 않은 환각 변수(buy_star_price) 참조 전면 소각 및 0.5회분 무조건 매수 팩트 락온
+                if is_zero_start_session or curr_p <= p1_trigger:
                     alloc_q1 = int(math.floor(b1_budget_slice / curr_p))
                     self.residual["BUY1"][ticker] = b1_bucket - (alloc_q1 * curr_p)
                     if alloc_q1 > 0:
                         orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger})
                 else:
                     self.residual["BUY1"][ticker] = b1_bucket
-                    
+
                 if curr_p <= p2_trigger:
                     alloc_q2 = int(math.floor(b2_budget_slice / curr_p))
                     self.residual["BUY2"][ticker] = b2_bucket - (alloc_q2 * curr_p)

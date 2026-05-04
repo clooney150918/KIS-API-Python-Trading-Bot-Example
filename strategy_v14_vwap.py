@@ -1,9 +1,10 @@
-# MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, 메인 장부에서 당일 날짜(EST)의 거래를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
-# MODIFIED: [V44.27 AVWAP 잔고 오염 방어] V14_VWAP 런타임 엔진에 KIS 총잔고 대신 암살자 물량이 배제된 pure_qty를 주입하여 동적 플랜 훼손 원천 차단
-# MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # ==========================================================
 # FILE: strategy_v14_vwap.py
 # ==========================================================
+# MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, 메인 장부에서 당일 날짜(EST)의 거래를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
+# MODIFIED: [V44.27 AVWAP 잔고 오염 방어] V14_VWAP 런타임 엔진에 KIS 총잔고 대신 암살자 물량이 배제된 pure_qty를 주입하여 동적 플랜 훼손 원천 차단
+# MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
+
 import math
 import logging
 import os
@@ -21,7 +22,8 @@ class V14VwapStrategy:
 
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
-        if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 5):
+        # MODIFIED: [04:05 EST 논리적 날짜 경계선 붕괴 방어] 04:04:59 조기 격발 오염 방지를 위해 4분으로 축소 교정
+        if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 4):
             target_date = now_est - timedelta(days=1)
         else:
             target_date = now_est
@@ -53,7 +55,7 @@ class V14VwapStrategy:
                     self.state_loaded[ticker] = today_str
                     return
             except Exception:
-                pass
+                 pass
                 
         for k in self.residual.keys():
             self.residual[k][ticker] = 0.0
@@ -71,7 +73,7 @@ class V14VwapStrategy:
                 "BUY_BUDGET": float(self.executed.get("BUY_BUDGET", {}).get(ticker, 0.0)),
                 "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
             }
-        }
+         }
         temp_path = None
         try:
             dir_name = os.path.dirname(state_file)
@@ -86,8 +88,8 @@ class V14VwapStrategy:
         except Exception as e:
             logging.critical(f"🚨 [STATE SAVE FAILED] {ticker} 상태 저장 실패. 봇 기억상실 위험! 원인: {e}")
             if temp_path and os.path.exists(temp_path):
-                try: os.unlink(temp_path)
-                except OSError: pass
+                 try: os.unlink(temp_path)
+                 except OSError: pass
 
     def save_daily_snapshot(self, ticker, plan_data):
         today_str = self._get_logical_date_str()
@@ -98,7 +100,7 @@ class V14VwapStrategy:
 
         data = {
             "date": today_str,
-            "plan": plan_data
+             "plan": plan_data
         }
         temp_path = None
         try:
@@ -131,7 +133,7 @@ class V14VwapStrategy:
     def ensure_failsafe_snapshot(self, ticker, current_price, total_qty, avwap_qty, avg_price, prev_close, alloc_cash):
         snap = self.load_daily_snapshot(ticker)
         if snap is not None:
-            return snap
+             return snap
             
         pure_qty = max(0, total_qty - avwap_qty)
         
@@ -140,10 +142,10 @@ class V14VwapStrategy:
         legacy_qty = pure_qty
         legacy_avg = avg_price
         try:
-            recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker and not str(r.get("date", "")).startswith(today_str_est)]
-            ledger_qty, ledger_avg, _, _ = self.cfg.calculate_holdings(ticker, recs)
-            legacy_qty = ledger_qty
-            legacy_avg = ledger_avg if ledger_qty > 0 else avg_price
+             recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker and not str(r.get("date", "")).startswith(today_str_est)]
+             ledger_qty, ledger_avg, _, _ = self.cfg.calculate_holdings(ticker, recs)
+             legacy_qty = ledger_qty
+             legacy_avg = ledger_avg if ledger_qty > 0 else avg_price
         except Exception:
             pass
             
@@ -230,7 +232,7 @@ class V14VwapStrategy:
                     core_orders.append({"side": "SELL", "price": target_price, "qty": qty - q_sell, "type": "LIMIT", "desc": "🎯목표매도(V)"})
 
         if is_zero_start_fact and market_type != "AFTER":
-            core_orders = [o for o in core_orders if o.get("side") != "SELL"]
+             core_orders = [o for o in core_orders if o.get("side") != "SELL"]
 
         plan_result = {
             'core_orders': core_orders, 'bonus_orders': [], 'orders': core_orders,
@@ -322,24 +324,24 @@ class V14VwapStrategy:
                 if buy_star_price > 0 and (is_zero_start_session or current_price <= buy_star_price):
                     alloc_qty = int(math.floor(b_budget_slice / current_price))
                     if alloc_qty > 0:
-                        spent_b = alloc_qty * current_price
-                        self.residual["BUY_STAR"][ticker] = max(0.0, b_bucket - spent_b)
-                        orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if not is_zero_start_session else current_price, "desc": "VWAP분할매수"})
+                         spent_b = alloc_qty * current_price
+                         self.residual["BUY_STAR"][ticker] = max(0.0, b_bucket - spent_b)
+                         orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if not is_zero_start_session else current_price, "desc": "VWAP분할매수"})
                     else:
-                        self.residual["BUY_STAR"][ticker] = b_bucket
+                         self.residual["BUY_STAR"][ticker] = b_bucket
                 else:
                     self.residual["BUY_STAR"][ticker] = b_bucket
 
         rem_sell_qty = int(math.ceil(initial_qty / 4)) - int(self.executed["SELL_QTY"].get(ticker, 0))
         if rem_sell_qty > 0 and star_price > 0 and slice_ratio > 0:
             if current_price >= star_price:
-                exact_s_qty = float(rem_sell_qty * slice_ratio) + float(self.residual["SELL_STAR"].get(ticker, 0.0))
-                alloc_s_qty = int(min(math.floor(exact_s_qty), rem_sell_qty))
-                self.residual["SELL_STAR"][ticker] = float(exact_s_qty - alloc_s_qty)
-                if alloc_s_qty > 0:
-                    orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절"})
+                 exact_s_qty = float(rem_sell_qty * slice_ratio) + float(self.residual["SELL_STAR"].get(ticker, 0.0))
+                 alloc_s_qty = int(min(math.floor(exact_s_qty), rem_sell_qty))
+                 self.residual["SELL_STAR"][ticker] = float(exact_s_qty - alloc_s_qty)
+                 if alloc_s_qty > 0:
+                     orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절"})
             else:
-                self.residual["SELL_STAR"][ticker] = float(self.residual["SELL_STAR"].get(ticker, 0.0)) + float(rem_sell_qty * slice_ratio)
+                 self.residual["SELL_STAR"][ticker] = float(self.residual["SELL_STAR"].get(ticker, 0.0)) + float(rem_sell_qty * slice_ratio)
 
         if is_zero_start_session and market_type != "AFTER":
             orders = [o for o in orders if o.get("side") != "SELL"]

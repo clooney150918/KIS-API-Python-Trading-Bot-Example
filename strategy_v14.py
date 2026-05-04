@@ -34,7 +34,8 @@ class V14Strategy:
     # AttributeError 방지를 위해 정수(hour/minute) 단위 비교
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
-        if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 5):
+        # MODIFIED: [04:05 EST 논리적 날짜 경계선 붕괴 방어] 04:04:59 조기 격발 오염 방지를 위해 4분으로 축소 교정
+        if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 4):
             target_date = now_est - timedelta(days=1)
         else:
             target_date = now_est
@@ -286,7 +287,7 @@ class V14Strategy:
                             buy_qty = int(math.floor(one_portion_amt / buy_price))
                             if buy_qty > 0:
                                 core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty, "type": "LOC", "desc": "⚓잔금매수"})
-                    
+                     
                     if not lock_s_sell and sell_qty > 0 and star_price > 0:
                         core_orders.append({"side": "SELL", "price": star_price, "qty": sell_qty, "type": "LOC", "desc": "🌟별값매도"})
 

@@ -4,6 +4,9 @@
 # MODIFIED: [V44.31] 체력 분석 기준 팩트 교정 - 현재가가 아닌 '당일 고가(High)' 기준으로 방전율 및 잔여 체력 계산 락온 완료
 # NEW: [1단계 타임라인 수술] 10:00 EST 타임쉴드 버그를 10:20 EST로 절대 락온 및 UI 텍스트 팩트 교정.
 # 🚨 MODIFIED: [V44.50 이벤트 루프 교착 방어] 관제탑 렌더링 시 발생하는 모든 JSON 설정 파일 스캔 및 속성 조회를 비동기 래핑 완료.
+# 🚨 MODIFIED: [V44.61 팩트 교정] 관제탑 실시간 VWAP 연산 시 프리마켓 노이즈 전면 소각 및 정규장 100% 락온
+# 🚨 MODIFIED: [V44.62 인덴테이션 붕괴 수술] PEP8 규격 강제 및 IndentationError(런타임 즉사) 맹점 영구 소각 완료.
+# MODIFIED: [V44.63 자율주행 수익률 하향 스위칭] AUTO 모드 수익률 스펙트럼 1.0%~4.0% 절대 락온 완료
 # ==========================================================
 import logging
 import datetime
@@ -68,24 +71,35 @@ class AvwapConsolePlugin:
             df_1m = await asyncio.wait_for(
                 asyncio.to_thread(self.broker.get_1min_candles_df, base_tkr), timeout=4.0
             )
+            
             if df_1m is not None and not df_1m.empty:
                 df = df_1m.copy()
-                df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
-                df['vol'] = df['volume'].astype(float)
-                df['vol_tp'] = df['tp'] * df['vol']
                 
-                cum_vol = df['vol'].sum()
-                if cum_vol > 0:
-                    base_curr_vwap = df['vol_tp'].sum() / cum_vol
-                else:
-                    base_curr_vwap = float(df['close'].iloc[-1])
+                # 🚨 MODIFIED: [V44.61 팩트 수술] 관제탑 실시간 VWAP 연산 시 프리마켓 노이즈 원천 차단
+                if 'time_est' in df.columns:
+                    df = df[(df['time_est'] >= '093000') & (df['time_est'] <= '155900')]
+                
+                if not df.empty:
+                    df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
+                    df['vol'] = df['volume'].astype(float)
+                    df['vol_tp'] = df['tp'] * df['vol']
                     
-                recent_5 = df.tail(5)
-                sum_vol_5 = recent_5['vol'].sum()
-                if sum_vol_5 > 0:
-                    avg_vwap_5m = recent_5['vol_tp'].sum() / sum_vol_5
+                    cum_vol = df['vol'].sum()
+                    if cum_vol > 0:
+                        base_curr_vwap = df['vol_tp'].sum() / cum_vol
+                    else:
+                        base_curr_vwap = float(df['close'].iloc[-1])
+                        
+                    recent_5 = df.tail(5)
+                    sum_vol_5 = recent_5['vol'].sum()
+                    if sum_vol_5 > 0:
+                        avg_vwap_5m = recent_5['vol_tp'].sum() / sum_vol_5
+                    else:
+                        avg_vwap_5m = base_curr_vwap
                 else:
+                    base_curr_vwap = float(df_1m['close'].iloc[-1])
                     avg_vwap_5m = base_curr_vwap
+
         except asyncio.TimeoutError:
             logging.error(f"🚨 AVWAP 관제탑 기초자산({base_tkr}) 스캔 타임아웃 발생")
         except Exception as e:
@@ -228,17 +242,19 @@ class AvwapConsolePlugin:
                 msg += f"               <b>({exh_5:.0f}% 소진 / 고가 기준)</b>\n"
 
             if target_mode == "AUTO":
-                if exh_5 >= 90: base_target = 2.0
-                elif exh_5 >= 80: base_target = 3.0
-                elif exh_5 >= 70: base_target = 4.0
-                else: base_target = 5.0
+                # MODIFIED: [V44.63 자율주행 수익률 하향 스위칭] UI 표출용 스펙트럼 1.0%~4.0% 절대 락온 완료
+                if exh_5 >= 90: base_target = 1.0
+                elif exh_5 >= 80: base_target = 2.0
+                elif exh_5 >= 70: base_target = 3.0
+                else: base_target = 4.0
                 
                 if rem_5_pct > 0:
                     rem_cap = math.floor(rem_5_pct * 10) / 10.0
                     dynamic_target = min(base_target, rem_cap)
-                    dynamic_target = max(2.0, dynamic_target)
+                    # MODIFIED: [V44.63 자율주행 수익률 하향 스위칭] 최소 1.0% 보장 하드 클램핑 락온
+                    dynamic_target = max(1.0, dynamic_target)
                 else:
-                    dynamic_target = 2.0
+                    dynamic_target = 1.0
                 
                 applied_pct = dynamic_target
                 target_display = f"🤖자율주행 (+{applied_pct:.1f}%)"
@@ -304,3 +320,4 @@ class AvwapConsolePlugin:
         msg += f"💡 <i>설정 제어는 /settlement (전술설정) 메뉴에서 가능합니다.</i>"
 
         return msg, InlineKeyboardMarkup(keyboard)
+
