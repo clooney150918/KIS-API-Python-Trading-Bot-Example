@@ -1,7 +1,7 @@
 # ==========================================================
 # FILE: strategy_v_avwap.py
 # ==========================================================
-# [strategy_v_avwap.py] - 🌟 V44.61 앱솔루트 팩트 교정 🌟
+# [strategy_v_avwap.py] - 🌟 V45.00 앱솔루트 팩트 교정 🌟
 # 💡 V-REV 하이브리드 전용 차세대 AVWAP 스나이퍼 플러그인 (Dual-Referencing)
 # ⚠️ 초공격형 당일 청산 암살자 (V-REV 잉여 현금 100% 몰빵 & -8% 하드스탑)
 # 🚨 [V29.03 팩트 수술] 기억상실(Amnesia) 엣지 케이스 방어막 (Persistence 엔진 탑재)
@@ -20,6 +20,8 @@
 # 🚨 MODIFIED: [V44.61 팩트 교정] 당일 실시간 VWAP 연산 시 프리마켓 노이즈 전면 소각 및 정규장 100% 락온
 # MODIFIED: [V44.62 자율주행 수익률 하향 스위칭] AUTO 모드 수익률 스펙트럼 1.0%~4.0% 절대 락온 완료
 # MODIFIED: [V44.64 진입 마지노선 하향 락온] 최소 잔여 체력 진입 금지선을 2.0%에서 1.0%로 팩트 교정 완료
+# NEW: [V45.00 동적 킬 스위치(Kill Switch) 락온] 정규장 동안 전일 종가(Zero-Line)를 위아래로 모두 관통하여 횡보장(Sideways)으로 판별 시, 빈손 대기 중인 암살자의 신규 진입을 100% 차단하고 당일 셧다운을 격발하는 절대 방어막 이식 완료.
+# NEW: [V46 단판 승부 락온] 다중출장 모드를 무시하고 10:00 EST 단 1회 스캔 및 1회 익절 후 조기퇴근(영구동결) 엔진 이식 완료.
 # ==========================================================
 import logging
 import datetime
@@ -37,7 +39,7 @@ class VAvwapHybridPlugin:
         self.leverage = 3.0             
         # 🚨 [팩트 락온] 백테스트 챔피언 파라미터 하드코딩 유지
         self.base_stop_loss_pct = 0.08 / 3.0  # 레버리지 3배 환산 시 -8.0% 하드스탑 고정
-        
+         
     def _get_logical_date_str(self, now_est):
         # MODIFIED: [04:05 EST 논리적 날짜 경계선 붕괴 방어] 04:04:59 조기 격발 오염 방지를 위해 4분으로 축소 교정
         if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 4):
@@ -66,7 +68,7 @@ class VAvwapHybridPlugin:
             dir_name = os.path.dirname(file_path)
             if dir_name and not os.path.exists(dir_name):
                  os.makedirs(dir_name, exist_ok=True)
-            
+             
             fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(state_data, f, ensure_ascii=False, indent=4)
@@ -83,7 +85,7 @@ class VAvwapHybridPlugin:
             
             prev_vwap = 0.0
             prev_close = 0.0
-            
+             
             est = ZoneInfo('America/New_York')
             now_est = datetime.datetime.now(est)
             
@@ -97,22 +99,22 @@ class VAvwapHybridPlugin:
                     df_1m.index = df_1m.index.tz_localize('UTC').tz_convert(est)
                 else:
                     df_1m.index = df_1m.index.tz_convert(est)
-                    
+                     
                 df_past_1m = df_1m[df_1m.index.date < today_est].copy()
                 
                 if not df_past_1m.empty:
                     last_date = df_past_1m.index.date[-1]
                     df_prev_day = df_past_1m[df_past_1m.index.date == last_date].copy()
-                    
+                     
                     df_prev_day = df_prev_day.between_time('09:30', '15:59')
                      
                     if not df_prev_day.empty:
                         prev_close = float(df_prev_day['Close'].iloc[-1])
-                        
+                         
                         df_prev_day['tp'] = (df_prev_day['High'].astype(float) + df_prev_day['Low'].astype(float) + df_prev_day['Close'].astype(float)) / 3.0
                         df_prev_day['vol'] = df_prev_day['Volume'].astype(float)
                         df_prev_day['vol_tp'] = df_prev_day['tp'] * df_prev_day['vol']
-                        
+                       
                         cum_vol = df_prev_day['vol'].sum()
                         if cum_vol > 0:
                             prev_vwap = df_prev_day['vol_tp'].sum() / cum_vol
@@ -190,33 +192,42 @@ class VAvwapHybridPlugin:
         vwap_success = False 
         avg_vwap_5m = base_curr_p
         
+        # NEW: [V45.00 동적 킬 스위치] 정규장 실시간 고가/저가 초기화
+        base_reg_high = base_curr_p
+        base_reg_low = base_curr_p
+        
         is_inverse = exec_ticker.upper() in ["SOXS", "SQQQ", "SPXU"]
         
         if df_1min_base is not None and not df_1min_base.empty:
             try:
                 df = df_1min_base.copy()
                 
-                # MODIFIED: [V44.61 팩트 수술] 당일 실시간 VWAP 연산 시 프리마켓 노이즈 원천 차단
+                # 🚨 MODIFIED: [V44.61 팩트 수술] 당일 실시간 VWAP 연산 시 프리마켓 노이즈 원천 차단
                 if 'time_est' in df.columns:
                     df = df[(df['time_est'] >= '093000') & (df['time_est'] <= '155900')]
+                
+                if not df.empty:
+                    # NEW: [V45.00 동적 킬 스위치] 정규장 전용 순수 고가/저가 스캔 락온
+                    base_reg_high = float(df['high'].astype(float).max())
+                    base_reg_low = float(df['low'].astype(float).min())
                     
-                df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
-                df['vol'] = df['volume'].astype(float)
-                df['vol_tp'] = df['tp'] * df['vol']
-                
-                cum_vol = df['vol'].sum()
-                if cum_vol > 0:
-                    base_vwap = df['vol_tp'].sum() / cum_vol
-                    vwap_success = True
-                
-                if len(df) >= 5:
-                    recent_5 = df.tail(5)
-                    sum_vol_5 = recent_5['vol'].sum()
-                    if sum_vol_5 > 0:
-                        avg_vwap_5m = recent_5['vol_tp'].sum() / sum_vol_5
-                else:
+                    df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
+                    df['vol'] = df['volume'].astype(float)
+                    df['vol_tp'] = df['tp'] * df['vol']
+                    
+                    cum_vol = df['vol'].sum()
                     if cum_vol > 0:
-                        avg_vwap_5m = base_vwap
+                        base_vwap = df['vol_tp'].sum() / cum_vol
+                        vwap_success = True
+                
+                    if len(df) >= 5:
+                        recent_5 = df.tail(5)
+                        sum_vol_5 = recent_5['vol'].sum()
+                        if sum_vol_5 > 0:
+                            avg_vwap_5m = recent_5['vol_tp'].sum() / sum_vol_5
+                    else:
+                        if cum_vol > 0:
+                            avg_vwap_5m = base_vwap
 
             except Exception as e:
                 logging.error(f"🚨 [V_AVWAP] 기초자산 1분봉 VWAP/5MA 연산 실패: {e}")
@@ -239,7 +250,7 @@ class VAvwapHybridPlugin:
         safe_qty = int(math.floor(float(avwap_qty)))
 
         # ---------------------------------------------------------
-        # 1. 매도 (보유 중일 때) 로직
+        # 1. 매도 (보유 중일 때) 로직 - 옵션 A (횡보장 셧다운 무시)
         # ---------------------------------------------------------
         if safe_qty > 0:
             safe_avg = avwap_avg_price if avwap_avg_price > 0 else exec_curr_p
@@ -273,12 +284,10 @@ class VAvwapHybridPlugin:
             final_target_ratio = final_target_pct / 100.0
             
             if exec_return >= final_target_ratio:
-                if not is_multi_strike:
-                    avwap_state["shutdown"] = True
-                    self.save_state(exec_ticker, now_est, avwap_state)
-                    reason = f'조기퇴근_익절(+{final_target_pct:.1f}%)_당일영구동결'
-                else:
-                    reason = f'MULTI_STRIKE_TAKE(+{final_target_pct:.1f}%)_즉각재진입가능'
+                # NEW: [V46 단판 승부 락온] 다중출장 모드를 무시하고 무조건 1회 익절 후 조기퇴근(영구동결)
+                avwap_state["shutdown"] = True
+                self.save_state(exec_ticker, now_est, avwap_state)
+                reason = f'단판승부_익절(+{final_target_pct:.1f}%)_당일영구동결'
                 return _build_res('SELL', reason, qty=safe_qty, target_price=0.0)
 
             if curr_time >= time_1555:
@@ -289,13 +298,21 @@ class VAvwapHybridPlugin:
             return _build_res('HOLD', '보유중_관망')
 
         # ---------------------------------------------------------
-        # 2. 매수 (포지션 0주 일 때) 로직
+        # 2. 매수 (포지션 0주 일 때) 로직 - 동적 킬 스위치 감시
         # ---------------------------------------------------------
         if not context_data:
             return _build_res('WAIT', '매크로_데이터_수집대기')
 
         if avwap_state.get('shutdown', False):
             return _build_res('WAIT', '작전완수_또는_강제청산으로_인한_당일영구동결')
+
+        # NEW: [V45.00 동적 킬 스위치 (옵션 A 락온)] 빈손 대기 중 횡보장(Zero-Line 관통) 감지 시 즉각 셧다운
+        base_prev_c_for_kill = float(context_data.get('prev_close', 0.0)) if context_data else 0.0
+        if base_prev_c_for_kill > 0 and base_reg_high > 0 and base_reg_low > 0:
+            if base_reg_high > base_prev_c_for_kill and base_reg_low < base_prev_c_for_kill:
+                avwap_state["shutdown"] = True
+                self.save_state(exec_ticker, now_est, avwap_state)
+                return _build_res('SHUTDOWN', '실시간_횡보장_감지(Zero-Line_관통)_신규진입_영구동결(조기퇴근)')
 
         # MODIFIED: [10:00 EST 롤백] 타임쉴드 판별 및 반환 텍스트 100% 팩트 교정
         if curr_time < time_1000:
@@ -306,30 +323,80 @@ class VAvwapHybridPlugin:
 
         prev_vwap = context_data.get('prev_vwap', 0.0)
 
-        # 🚨 순수 돌파 모멘텀 로직
-        if not is_inverse:
-            trigger_condition = (base_vwap > prev_vwap) and (avg_vwap_5m > base_vwap)
-        else:
-            trigger_condition = (base_vwap < prev_vwap) and (avg_vwap_5m < base_vwap)
+        # NEW: [V46 단판 승부 락온] 10:00 EST 정규장 30분 후 단 1회 스캔하여 3대 조건 충족 시 격발, 1개라도 미달 시 영구동결(조기퇴근)
+        if not avwap_state.get('first_scan_done', False):
+            # 필수 데이터 결측 검증 (결측 시 셧다운 오발탄 방어를 위해 대기 유지)
+            if prev_c <= 0 or atr5 <= 0 or day_high <= 0 or day_low <= 0 or exec_curr_p <= 0 or base_vwap <= 0 or avg_vwap_5m <= 0 or prev_vwap <= 0:
+                return _build_res('WAIT', '10:00_단판성_격발_평가용_필수데이터_결측_대기')
 
-        if trigger_condition:
-            if atr5 > 0 and prev_c > 0 and day_low > 0 and day_high > 0 and exec_curr_p > 0:
-                # 🚨 [AI 에이전트 절대 주의 - 환각 방어막] exec_curr_p 소각, day_high 기준으로 잔여 체력 연산 디커플링 해체
-                actual_gap_dollar = day_high - day_low
-                actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0
-                rem_5_pct = atr5 - actual_gap_pct
+            avwap_state['first_scan_done'] = True
+
+            # 1. 고저가 부호 일치 (원웨이 방향 판별)
+            cond1_met = False
+            if not is_inverse:
+                cond1_met = (day_high > prev_c) and (day_low > prev_c)
+            else:
+                cond1_met = (day_high < prev_c) and (day_low < prev_c)
+
+            # 2. VWAP 갭 차이 방향 일치 (모멘텀 판별)
+            cond2_met = False
+            gap1 = base_vwap - prev_vwap
+            gap2 = avg_vwap_5m - base_vwap
+            if not is_inverse:
+                cond2_met = (gap1 > 0) and (gap2 > 0)
+            else:
+                cond2_met = (gap1 < 0) and (gap2 < 0)
+
+            # 3. 잔여 체력 1% 이상
+            actual_gap_dollar = day_high - day_low
+            actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0
+            rem_5_pct = atr5 - actual_gap_pct
+            cond3_met = (rem_5_pct >= 1.0)
+
+            # 3가지 조건 모두 충족 시 매수, 1가지라도 미충족 시 즉시 퇴근하여 영구동결
+            if cond1_met and cond2_met and cond3_met:
+                avwap_state['first_scan_passed'] = True
+                self.save_state(exec_ticker, now_est, avwap_state)
                 
-                # 🚨 MODIFIED: [V44.64 진입 마지노선 하향 락온] 최소 잔여 체력 진입 금지선을 2.0%에서 1.0%로 팩트 교정 완료
-                if rem_5_pct < 1.0:
-                    return _build_res('WAIT', f'ATR5_잔여체력_고갈(최소1.0%보장_현재{rem_5_pct:.1f}%)_관망')
+                if avwap_alloc_cash > 0:
+                    # 🚨 [V44.22 증거금 방어막 탑재] 현금 100% 무지성 매수 시 한투 API 잔고 부족 거절 사태를 막는 5% 안전 버퍼
+                    safe_budget = avwap_alloc_cash * 0.95
+                    buy_qty = int(math.floor(safe_budget / exec_curr_p))
                     
-            if exec_curr_p > 0 and avwap_alloc_cash > 0:
-                # 🚨 [V44.22 증거금 방어막 탑재] 현금 100% 무지성 매수 시 한투 API 잔고 부족 거절 사태를 막는 5% 안전 버퍼
-                safe_budget = avwap_alloc_cash * 0.95
-                buy_qty = int(math.floor(safe_budget / exec_curr_p))
+                    if buy_qty > 0:
+                        return _build_res('BUY', '10:00_단판성_격발_3대조건_100%_충족', qty=buy_qty, target_price=exec_curr_p)
+                    else:
+                        avwap_state["shutdown"] = True
+                        self.save_state(exec_ticker, now_est, avwap_state)
+                        return _build_res('SHUTDOWN', '가용예산부족_신규진입불가_영구동결')
+                else:
+                    avwap_state["shutdown"] = True
+                    self.save_state(exec_ticker, now_est, avwap_state)
+                    return _build_res('SHUTDOWN', '가용예산0원_영구동결')
+            else:
+                fail_reasons = []
+                if not cond1_met: fail_reasons.append("원웨이방향미달")
+                if not cond2_met: fail_reasons.append("VWAP모멘텀미달")
+                if not cond3_met: fail_reasons.append(f"체력고갈({rem_5_pct:.1f}%)")
                 
-                if buy_qty > 0:
-                    return _build_res('BUY', f'VWAP_MOMENTUM_BREAKOUT', qty=buy_qty, target_price=exec_curr_p)
-            return _build_res('WAIT', '순수현금예산_부족_관망')
-            
-        return _build_res('WAIT', '타점_대기중')
+                avwap_state["shutdown"] = True
+                self.save_state(exec_ticker, now_est, avwap_state)
+                return _build_res('SHUTDOWN', f'10:00_단판성_격발_조건미충족({",".join(fail_reasons)})_조기퇴근(영구동결)')
+        else:
+            if avwap_state.get('first_scan_passed', False):
+                if avwap_state.get('strikes', 0) > 0:
+                    avwap_state['shutdown'] = True
+                    self.save_state(exec_ticker, now_est, avwap_state)
+                    return _build_res('SHUTDOWN', '단판승부_완수후_재진입차단_조기퇴근(영구동결)')
+                else:
+                    if exec_curr_p > 0 and avwap_alloc_cash > 0:
+                        safe_budget = avwap_alloc_cash * 0.95
+                        buy_qty = int(math.floor(safe_budget / exec_curr_p))
+                        if buy_qty > 0:
+                            return _build_res('BUY', '10:00_조건패스유지_매수재시도', qty=buy_qty, target_price=exec_curr_p)
+                    return _build_res('WAIT', '예산부족_또는_미체결대기')
+            else:
+                avwap_state['shutdown'] = True
+                self.save_state(exec_ticker, now_est, avwap_state)
+                return _build_res('SHUTDOWN', '조건미충족_상태이상_영구동결')
+

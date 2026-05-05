@@ -1,3 +1,7 @@
+# ==================================================
+# FILE: broker.py
+# ==================================================
+
 # ==========================================================
 # [broker.py] - 🌟 100% 통합 무결점 완성본 (Full Version) 🌟
 # MODIFIED: [V28.15 장부 2배 뻥튀기(Double Counting) 원천 차단]
@@ -25,6 +29,7 @@
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo 도입으로 LMT 버그 차단 및 타임존 무결성 100% 확보
 # MODIFIED: [V40.XX 옴니 매트릭스] 거래소 동적 탐색 실패 시 SOXS 티커 AMEX Fallback 이식 및 타겟 인덱스 방어막 락온
 # NEW: [V40.XX 옴니 매트릭스] 전일 팩트 VWAP 및 당일 실시간 VWAP 듀얼 파싱 엔진(get_daily_vwap_info) 탑재
+# 🚨 MODIFIED: [V44.76 팩트 교정] 당일 고가/저가 스캔 시 프리마켓 진폭 100% 합산 롤백 (보수적 체력 방어막 복원)
 # ==========================================================
 
 import requests
@@ -51,6 +56,7 @@ def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
         elif df.columns.nlevels == 2:
             price_fields = {'Close', 'High', 'Low', 'Open', 'Volume', 'Adj Close'}
             level0_vals = set(df.columns.get_level_values(0))
+        
             drop_level = 0 if not level0_vals.intersection(price_fields) else 1
             df.columns = df.columns.droplevel(drop_level)
     return df
@@ -64,6 +70,7 @@ class KoreaInvestmentBroker:
         self.acnt_prdt_cd = acnt_prdt_cd
         self.base_url = "https://openapi.koreainvestment.com:9443"
         self.token_file = f"data/token_{cano}.dat" 
+       
         self.token = None
         self._excg_cd_cache = {} 
         
@@ -104,18 +111,17 @@ class KoreaInvestmentBroker:
                 fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
                 
                 try:
-                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                     with os.fdopen(fd, 'w', encoding='utf-8') as f:
                         json.dump({'token': self.token, 'expire': expire_str}, f)
                         f.flush()
                         os.fsync(f.fileno())
-                    
-                    shutil.move(temp_path, self.token_file)
+                     shutil.move(temp_path, self.token_file)
                 finally:
                     if os.path.exists(temp_path):
                         try: os.remove(temp_path)
                         except Exception: pass
             else:
-                print(f"❌ [Broker] 토큰 발급 실패: {data.get('error_description', '알 수 없는 오류')}")
+                print(f"❌ [Broker] 토큰 발급 실패: {data.get('error_description', '알 수 정 없는 오류')}")
         except Exception as e:
             print(f"❌ [Broker] 토큰 통신 에러: {e}")
 
@@ -261,7 +267,7 @@ class KoreaInvestmentBroker:
                     if cash <= 0:
                         o2 = resp_json.get('output2', {})
                         if isinstance(o2, list):
-                            o2 = o2[0] if len(o2) > 0 else {}
+                             o2 = o2[0] if len(o2) > 0 else {}
                         new_cash = self._safe_float(o2.get('ovrs_ord_psbl_amt', 0))
                         if new_cash > cash: cash = new_cash
                     
@@ -308,19 +314,16 @@ class KoreaInvestmentBroker:
         if api_success: return cash, holdings
         else: return cash, None
 
-    # NEW: [V40.XX 옴니 매트릭스] 전일 최종 VWAP 및 당일 실시간 VWAP 듀얼 파싱 엔진
     def get_daily_vwap_info(self, ticker):
         """
         최근 5일간의 1분봉 데이터를 로드하여 정규장(09:30~15:59) 거래 내역만 추출,
         일자별 순수 VWAP을 계산하여 반환합니다.
-        return: (prev_vwap, curr_vwap)
         """
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(period="5d", interval="1m", prepost=False, timeout=10)
             if df.empty: return 0.0, 0.0
 
-            # MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
             df = _flatten_columns(df)
 
             est = ZoneInfo('America/New_York')
@@ -329,7 +332,6 @@ class KoreaInvestmentBroker:
             else:
                 df.index = df.index.tz_convert(est)
 
-            # 정규장 데이터만 100% 필터링하여 프리/애프터마켓 노이즈 원천 차단
             regular_market = df.between_time('09:30', '15:59').copy()
             if regular_market.empty: return 0.0, 0.0
 
@@ -370,7 +372,6 @@ class KoreaInvestmentBroker:
             
             if df.empty: return None
                 
-            # MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
             df = _flatten_columns(df)
                  
             est = ZoneInfo('America/New_York')
@@ -388,7 +389,7 @@ class KoreaInvestmentBroker:
             regular_market = regular_market[regular_market.index >= today_date]
             
             if regular_market.empty: return None
-                
+                 
             regular_market = regular_market.dropna(subset=['Volume', 'High', 'Low', 'Close'])
             
             typical_price = (regular_market['High'] + regular_market['Low'] + regular_market['Close']) / 3.0
@@ -504,6 +505,7 @@ class KoreaInvestmentBroker:
         except Exception as e:
             pass
         return 0.0
+        
     def get_5day_ma(self, ticker):
         try:
             stock = yf.Ticker(ticker)
@@ -511,7 +513,7 @@ class KoreaInvestmentBroker:
             if len(hist) >= 5: return float(hist['Close'][-5:].mean())
         except Exception as e:
             pass
-            
+             
         try:
             excg_cd = self._get_exchange_code(ticker, target_api="PRICE")
             params = {"AUTH": "", "EXCD": excg_cd, "SYMB": ticker, "GUBN": "0", "BYMD": "", "MODP": "1"}
@@ -531,7 +533,6 @@ class KoreaInvestmentBroker:
             df = stock.history(period="1d", interval="1m", prepost=True, timeout=5)
             
             if df.empty: return None
-            # MODIFIED: [제6계명 야후 파이낸스 MultiIndex 변이 방어] 런타임 붕괴(KeyError) 영구 소각
             df = _flatten_columns(df)
                  
             est = ZoneInfo('America/New_York')
@@ -713,7 +714,7 @@ class KoreaInvestmentBroker:
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         body = {
             "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd,
-            "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02",
+             "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02",
             "ORD_QTY": "0", "OVRS_ORD_UNPR": "0", "ORD_SVR_DVSN_CD": "0"
         }
         self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
@@ -759,7 +760,7 @@ class KoreaInvestmentBroker:
                                     "item": dict(item),
                                     "total_qty": item_qty,
                                     "total_amt": item_qty * item_price
-                                }
+                                 }
                             else:
                                 odno_map[odno]["total_qty"] += item_qty
                                 odno_map[odno]["total_amt"] += (item_qty * item_price)
@@ -807,7 +808,7 @@ class KoreaInvestmentBroker:
         while curr_qty > 0 and not genesis_reached and loop_counter < 365:
             if target_date.weekday() < 5:
                 loop_counter += 1
-                
+                 
             date_str = target_date.strftime('%Y%m%d')
             
             if limit_date_str and date_str < limit_date_str: break 
@@ -907,9 +908,12 @@ class KoreaInvestmentBroker:
     def get_day_high_low(self, ticker):
         try:
             stock = yf.Ticker(ticker)
+            # 🚨 MODIFIED: [V44.76] 프리장 진폭 롤백 (보수적 체력 방어막 복구)
             hist = stock.history(period="1d", interval="1m", prepost=True, timeout=5)
-            if not hist.empty: return float(hist['High'].max()), float(hist['Low'].min())
-            else: raise ValueError("YF 고가/저가 데이터 응답 지연 (timeout)")
+            if not hist.empty:
+                hist = _flatten_columns(hist)
+                return float(hist['High'].max()), float(hist['Low'].min())
+            else: raise ValueError("YF 고가/저가 데이터 응답 지연")
         except Exception as e: pass
 
         try:

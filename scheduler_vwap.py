@@ -7,6 +7,8 @@
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각 및 동적 U-Curve 팩트 락온] 동기식 블로킹 호출 전면 비동기 래핑 및 하드코딩 배열 철거 완료.
 # MODIFIED: [맹점 3 수술] 루프 내부 cfg 접근(파일 I/O) 메서 전면 비동기(asyncio.to_thread) 래핑 완료.
 # NEW: [콜드 스타트 런타임 붕괴 방어] scheduled_vwap_init_and_cancel 진입부 tx_lock None 가드 이식 완료.
+# NEW: [VWAP 잔차 증발 방어 롤백 엔진 이식] 타격 스킵(호가 이탈) 및 주문 거절/미체결 발생 시 삭감된 예산을 코어 엔진(버킷)으로 100% 환불(Refund)하는 파이프라인 개통 완료.
+# MODIFIED: [V44.79 팩트 교정] 잔차 환불 인플레이션 맹점 및 미체결 늪 원천 차단
 # ==========================================================
 import logging
 import datetime
@@ -137,7 +139,7 @@ async def scheduled_vwap_init_and_cancel(context):
                         except Exception as e:
                             logging.error(f"🚨 자가 치유 Nuke 실패: {e}", exc_info=True)
                             vwap_cache[f"REV_{t}_nuked"] = False 
-                    
+             
     try:
         await asyncio.wait_for(_do_init(), timeout=45.0)
     except Exception as e:
@@ -321,7 +323,7 @@ async def scheduled_vwap_trade(context):
                         if pure_actual_qty == 0 and total_q > 0:
                             if vwap_cache.get(f"REV_{t}_sweep_msg_sent"):
                                 continue
-                                
+                            
                             if not vwap_cache.get(f"REV_{t}_panic_sell_warn"):
                                 vwap_cache[f"REV_{t}_panic_sell_warn"] = True
                                 await context.bot.send_message(
@@ -431,7 +433,7 @@ async def scheduled_vwap_trade(context):
                                                     msg += f"▫️ 장 마감 3분 전 데드존 철거. 1층 앵커({layer_1_trigger:.2f}) 방어를 확인했습니다.\n"
                                                 msg += f"▫️ 매도 가능 잔량이 0이 될 때까지 매 1분마다 지속 덤핑합니다! (현재 <b>{actual_sweep_qty}주</b> 매수호가 폭격) 🏆"
                                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                                                vwap_cache[f"REV_{t}_sweep_msg_sent"] = True
+                                            vwap_cache[f"REV_{t}_sweep_msg_sent"] = True
                                             
                                             ccld_qty = 0
                                             for _ in range(4):
@@ -487,7 +489,7 @@ async def scheduled_vwap_trade(context):
                                             msg = f"⚠️ <b>[{t}] 스윕 피니셔 덤핑 생략 (MOC 락다운 감지)</b>\n▫️ 조건이 달성되었으나, 대상 물량이 수동 긴급 수혈(MOC) 등 취소 불가 상태로 미국 거래소에 묶여 있어 스윕 덤핑을 자동 스킵합니다."
                                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                                             vwap_cache[f"REV_{t}_sweep_skip_msg"] = True
-                            
+                                            
                         # MODIFIED: [V44.45 잭팟 데드존 방어] 과잉 방어막 도려내기.
                             if target_sweep_qty > 0:
                                 continue 
@@ -516,7 +518,7 @@ async def scheduled_vwap_trade(context):
                                 err_msg = f"🛑 <b>[FATAL ERROR] {t} 공수 교대 중 기존 덫 취소 실패!</b>\n▫️ 2중 예산 소진 방어를 위해 당일 남은 V-REV 교전을 강제 중단(Hard-Lock)합니다.\n▫️ 상세 오류: {e}"
                                 await context.bot.send_message(chat_id=chat_id, text=err_msg, parse_mode='HTML')
                                 continue
-                    
+                                
                         vwap_cache[f"REV_{t}_regime"] = current_regime
                         
                         if vwap_cache.get(f"REV_{t}_loc_fired"):
@@ -558,7 +560,7 @@ async def scheduled_vwap_trade(context):
                                         buy_qty = int(math.floor(rem_budget / exec_price))
                                         
                                         if buy_qty > 0:
-                                            target_orders = [{'side': 'BUY', 'qty': buy_qty, 'price': exec_price, 'type': 'LIMIT', 'desc': '갭 스위치 스윕'}]
+                                            target_orders = [{'side': 'BUY', 'qty': buy_qty, 'price': exec_price, 'type': 'LIMIT', 'desc': '갭 스위치 스윕', 'bucket': 'BUY_GAP_HIJACK'}]
                                             vwap_cache[f"REV_{t}_gap_hijack_fired"] = True
                                             
                                             msg = f"⚡ <b>[{t}] 🤖 옴니 매트릭스 자율주행 (Gap Hijack) 발동!</b>\n"
@@ -588,13 +590,13 @@ async def scheduled_vwap_trade(context):
                                 msg += f"▫️ 기관급 자금 쏠림으로 인해 위험한 1분 단위 타임 슬라이싱(VWAP)을 전면 중단합니다.\n"
                                 msg += f"▫️ <b>잔여 할당량 전량을 양방향 LOC 방어선으로 전환 배치 완료!</b>\n"
                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
-                                
+                        
                                 for o in rev_plan.get('orders', []):
                                     if o['qty'] > 0:
                                         await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], "LOC")
                                         await asyncio.sleep(0.2)
                                 continue
-                                 
+                                
                             target_orders = rev_plan.get('orders', [])
 
                     elif version == "V14":
@@ -651,24 +653,42 @@ async def scheduled_vwap_trade(context):
                         
                         target_price = o['price']
                         side = o['side']
+                        bucket = o.get('bucket') # NEW: [VWAP 잔차 증발 방어] 버킷 식별자 스캔
 
                         ask_price = float(await asyncio.to_thread(broker.get_ask_price, t) or 0.0)
                         bid_price = float(await asyncio.to_thread(broker.get_bid_price, t) or 0.0)
                         exec_price = ask_price if side == "BUY" else bid_price
-                        if exec_price <= 0: exec_price = curr_p
+                        # MODIFIED: [V44.79 팩트 교정] 잔차 환불 인플레이션 맹점 및 미체결 늪 원천 차단
+                        if exec_price <= 0: exec_price = round(curr_p * 1.002, 2) if side == "BUY" else max(0.01, round(curr_p * 0.998, 2))
                         
+                        # NEW: [VWAP 잔차 증발 방어를 위한 비동기 환불(Refund) 래퍼 이식]
+                        # MODIFIED: [V44.79 팩트 교정] 잔차 환불 인플레이션 맹점 및 미체결 늪 원천 차단
+                        async def _process_refund(unfilled_q):
+                            if not bucket: return
+                            r_val = unfilled_q * curr_p if side == "BUY" else unfilled_q
+                            if version == "V_REV" and strategy_rev:
+                                await asyncio.to_thread(strategy_rev.refund_residual, t, bucket, r_val)
+                                logging.info(f"🔄 [{t}] VWAP {side} 잔차 환불 완료: 버킷({bucket}) +{r_val:.2f}")
+                            elif version == "V14" and is_manual_vwap and hasattr(strategy, 'v14_vwap_plugin'):
+                                await asyncio.to_thread(strategy.v14_vwap_plugin.refund_residual, t, bucket, r_val)
+                                logging.info(f"🔄 [{t}] VWAP {side} 잔차 환불 완료: 버킷({bucket}) +{r_val:.2f}")
+
                         if side == "BUY":
                             if not is_zero_start_session and exec_price > target_price:
+                                # MODIFIED: [VWAP 잔차 증발 방어] 호가 이탈 스킵 시 예산 롤백 격발
+                                await _process_refund(slice_qty)
                                 continue
                         elif side == "SELL":
                             if exec_price < target_price:
+                                # MODIFIED: [VWAP 잔차 증발 방어] 호가 이탈 스킵 시 수량 롤백 격발
+                                await _process_refund(slice_qty)
                                 continue
                         
                         res = await asyncio.to_thread(broker.send_order, t, side, slice_qty, exec_price, "LIMIT")
                         odno = res.get('odno', '') if isinstance(res, dict) else ''
                         
+                        ccld_qty = 0
                         if res and res.get('rt_cd') == '0' and odno:
-                            ccld_qty = 0
                             for _ in range(4):
                                 await asyncio.sleep(2.0)
                                 unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
@@ -686,16 +706,21 @@ async def scheduled_vwap_trade(context):
                                     await asyncio.to_thread(broker.cancel_order, t, odno)
                                     await asyncio.sleep(1.0)
                                 except: pass
+                        
+                        # NEW: [VWAP 잔차 증발 방어] 주문 거절(Reject) 또는 부분 체결 시 미체결 물량만큼 예산/수량 롤백 격발
+                        unfilled_qty = slice_qty - ccld_qty
+                        if unfilled_qty > 0:
+                            await _process_refund(unfilled_qty)
+                                 
+                        if ccld_qty > 0:
+                            if version == "V_REV":
+                                await asyncio.to_thread(strategy_rev.record_execution, t, side, ccld_qty, exec_price)
+                                if side == "BUY": await asyncio.to_thread(queue_ledger.add_lot, t, ccld_qty, exec_price, "VWAP_BUY")
+                                elif side == "SELL": await asyncio.to_thread(queue_ledger.pop_lots, t, ccld_qty)
+                            elif version == "V14":
+                                await asyncio.to_thread(v14_vwap_plugin.record_execution, t, side, ccld_qty, exec_price)
                                 
-                            if ccld_qty > 0:
-                                if version == "V_REV":
-                                    await asyncio.to_thread(strategy_rev.record_execution, t, side, ccld_qty, exec_price)
-                                    if side == "BUY": await asyncio.to_thread(queue_ledger.add_lot, t, ccld_qty, exec_price, "VWAP_BUY")
-                                    elif side == "SELL": await asyncio.to_thread(queue_ledger.pop_lots, t, ccld_qty)
-                                elif version == "V14":
-                                    await asyncio.to_thread(v14_vwap_plugin.record_execution, t, side, ccld_qty, exec_price)
-                                    
-                            await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.2)
 
         try:
             await asyncio.wait_for(_do_vwap(), timeout=45.0)

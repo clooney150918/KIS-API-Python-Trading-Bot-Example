@@ -4,6 +4,7 @@
 # MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, 메인 장부에서 당일 날짜(EST)의 거래를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
 # MODIFIED: [V44.27 AVWAP 잔고 오염 방어] V14_VWAP 런타임 엔진에 KIS 총잔고 대신 암살자 물량이 배제된 pure_qty를 주입하여 동적 플랜 훼손 원천 차단
 # MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
+# NEW: [VWAP 잔차 증발 방어 롤백 엔진] 주문 거절/미체결 시 삭감된 예산을 버킷 식별자 기반으로 원상 복구(Refund)하는 환불 파이프라인 개통 완료.
 
 import math
 import logging
@@ -90,6 +91,14 @@ class V14VwapStrategy:
             if temp_path and os.path.exists(temp_path):
                  try: os.unlink(temp_path)
                  except OSError: pass
+
+    # NEW: [VWAP 잔차 증발 방어를 위한 롤백(환불) 엔진 이식]
+    def refund_residual(self, ticker, bucket, refund_value):
+        """ 스케줄러에서 미체결/거절로 인해 스킵된 예산 또는 수량을 해당 버킷에 원상 복구합니다. """
+        self._load_state_if_needed(ticker)
+        if bucket in self.residual:
+            self.residual[bucket][ticker] = float(self.residual[bucket].get(ticker, 0.0)) + float(refund_value)
+            self._save_state(ticker)
 
     def save_daily_snapshot(self, ticker, plan_data):
         today_str = self._get_logical_date_str()
@@ -326,7 +335,8 @@ class V14VwapStrategy:
                     if alloc_qty > 0:
                          spent_b = alloc_qty * current_price
                          self.residual["BUY_STAR"][ticker] = max(0.0, b_bucket - spent_b)
-                         orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if not is_zero_start_session else current_price, "desc": "VWAP분할매수"})
+                         # MODIFIED: [잔차 증발 방어] 버킷 식별자 주입
+                         orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if not is_zero_start_session else current_price, "desc": "VWAP분할매수", "bucket": "BUY_STAR"})
                     else:
                          self.residual["BUY_STAR"][ticker] = b_bucket
                 else:
@@ -339,7 +349,8 @@ class V14VwapStrategy:
                  alloc_s_qty = int(min(math.floor(exact_s_qty), rem_sell_qty))
                  self.residual["SELL_STAR"][ticker] = float(exact_s_qty - alloc_s_qty)
                  if alloc_s_qty > 0:
-                     orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절"})
+                     # MODIFIED: [잔차 증발 방어] 버킷 식별자 주입
+                     orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절", "bucket": "SELL_STAR"})
             else:
                  self.residual["SELL_STAR"][ticker] = float(self.residual["SELL_STAR"].get(ticker, 0.0)) + float(rem_sell_qty * slice_ratio)
 
