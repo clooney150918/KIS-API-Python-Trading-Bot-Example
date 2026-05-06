@@ -6,6 +6,9 @@
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출(장부 I/O, JSON 파싱) 전면 비동기 래핑 및 Atomic Write 적용 완료.
 # MODIFIED: [V44.48 데드코드 소각] 클래스 내부에 잔존하는 _verify_and_update_queue 메서드 전체 100% 영구 소각.
 # NEW: [2단계 수술] process_auto_sync 내부의 MANUAL_SYNC 및 MANUAL_BUY 직후 hasattr 데드코드 전면 소각.
+# 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: AVWAP 물량 납치 패러독스 완벽 해체] job_data 의존성 전면 소각 및 bot_data 다이렉트 락온.
+# 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] KIS 체결 원장 스캔 시 AVWAP 당일 체결량 수학적 디커플링 이식 완료
+# 🚨 MODIFIED: [V47.01 런타임 즉사 방어] _sync_escrow_cash 내부 IndentationError 팩트 100% 교정
 # ==========================================================
 import logging
 import datetime
@@ -43,6 +46,7 @@ class TelegramSyncEngine:
         target_recs = []
         for r in reversed(ledger):
             if r.get('ticker') == ticker:
+                # 🚨 MODIFIED: [V47.01 런타임 즉사 방어] 들여쓰기 팩트 100% 교정 완료
                 if r.get('is_reverse', False):
                     target_recs.append(r)
                 else:
@@ -67,7 +71,6 @@ class TelegramSyncEngine:
             
         async with self.sync_locks[ticker]:
             async with self.tx_lock:
-                
                 last_split_date = await asyncio.to_thread(self.cfg.get_last_split_date, ticker)
                 
                 try:
@@ -144,7 +147,7 @@ class TelegramSyncEngine:
                         if not ord_dt: continue
                         ord_tmd = ex.get('ord_tmd')
                         if not ord_tmd or len(str(ord_tmd)) != 6: 
-                             ord_tmd = '000000'
+                            ord_tmd = '000000'
                         try:
                             k_dt = datetime.datetime.strptime(f"{ord_dt}{ord_tmd}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
                             e_dt = k_dt.astimezone(est)
@@ -200,6 +203,20 @@ class TelegramSyncEngine:
                 
                 exec_today_buy = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "02")
                 exec_today_sell = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01")
+                
+                # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] 체결 원장 디커플링 (AVWAP 당일 체결량 차감)
+                avwap_daily_buy = 0
+                avwap_daily_sell = 0
+                try:
+                    if hasattr(self.strategy, 'v_avwap_plugin'):
+                        avwap_state_sync = await asyncio.to_thread(self.strategy.v_avwap_plugin.load_state, ticker, now_est)
+                        avwap_daily_buy = int(avwap_state_sync.get('daily_bought_qty', 0))
+                        avwap_daily_sell = int(avwap_state_sync.get('daily_sold_qty', 0))
+                except Exception as e:
+                    logging.error(f"🚨 AVWAP 당일 체결량 로드 에러: {e}")
+                    
+                exec_today_buy = max(0, exec_today_buy - avwap_daily_buy)
+                exec_today_sell = max(0, exec_today_sell - avwap_daily_sell)
                 
                 needs_reconstruction = (diff != 0) or (ledger_today_buy != exec_today_buy) or (ledger_today_sell != exec_today_sell)
 
@@ -289,17 +306,17 @@ class TelegramSyncEngine:
                             'exec_id': f"CALIB_{int(time.time())}",
                             'desc': "비파괴 보정"
                         }
-                        
+                
                         if is_rev:
                             calib_item['is_reverse'] = True
                         new_target_records.append(calib_item)
                         
                     if new_target_records:
-                        if actual_qty > 0:
+                         if actual_qty > 0:
                             for r in new_target_records:
                                 r['avg_price'] = actual_avg
                     elif temp_recs: 
-                        if actual_qty > 0:
+                         if actual_qty > 0:
                             temp_recs[-1]['avg_price'] = actual_avg
                         
                     await asyncio.to_thread(self.cfg.overwrite_incremental_ledger, ticker, temp_recs, new_target_records)
@@ -318,21 +335,25 @@ class TelegramSyncEngine:
                     
                     sold_today_vrev = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01") if target_execs else 0
                     
+                    # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] 체결 원장 디커플링 (AVWAP 당일 체결량 차감)
+                    sold_today_vrev = max(0, sold_today_vrev - avwap_daily_sell)
+                    
                     avwap_qty_global = 0
                     tracking_cache_global = None
                     try:
-                        jobs = context.job_queue.jobs() if context.job_queue else []
-                        job_data = jobs[0].data if jobs and len(jobs) > 0 and jobs[0].data is not None else {}
-                        tracking_cache_global = job_data.get('sniper_tracking', {})
+                        # 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: AVWAP 물량 납치 패러독스 완벽 해체]
+                        # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
+                        # job_data 의존성을 100% 소각하고 bot_data 다이렉트 락온 및 self.strategy를 강제 참조합니다.
+                        app_data = context.bot_data.get('app_data', {})
+                        tracking_cache_global = app_data.get('sniper_tracking', {})
                         avwap_qty_global = tracking_cache_global.get(f"AVWAP_QTY_{ticker}", 0)
-                        
+
                         if avwap_qty_global == 0:
-                            strategy = job_data.get('strategy')
-                            if strategy and hasattr(strategy, 'v_avwap_plugin'):
-                                avwap_state = await asyncio.to_thread(strategy.v_avwap_plugin.load_state, ticker, now_est)
+                            if hasattr(self.strategy, 'v_avwap_plugin'):
+                                avwap_state = await asyncio.to_thread(self.strategy.v_avwap_plugin.load_state, ticker, now_est)
                                 avwap_qty_global = int(avwap_state.get('qty', 0))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logging.error(f"🚨 AVWAP 글로벌 캐시 팩트 스캔 에러: {e}")
                     
                     adjusted_actual_qty = max(0, actual_qty - avwap_qty_global)
                     
@@ -345,17 +366,21 @@ class TelegramSyncEngine:
                                     tracking_cache_global[f"AVWAP_AVG_{ticker}"] = 0.0
                                     tracking_cache_global[f"AVWAP_BOUGHT_{ticker}"] = False
                                     tracking_cache_global[f"AVWAP_SHUTDOWN_{ticker}"] = True
-                                
-                                strategy = job_data.get('strategy')
-                                if strategy and hasattr(strategy, 'v_avwap_plugin'):
+
+                                # 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스] job_data.get('strategy') 소각, self.strategy 직접 참조
+                                if hasattr(self.strategy, 'v_avwap_plugin'):
                                     state_data = {
                                         'bought': False,
                                         'shutdown': True,
                                         'qty': 0,
                                         'avg_price': 0.0,
-                                        'strikes': tracking_cache_global.get(f"AVWAP_STRIKES_{ticker}", 0) if tracking_cache_global is not None else 0
+                                        'strikes': tracking_cache_global.get(f"AVWAP_STRIKES_{ticker}", 0) if tracking_cache_global is not None else 0,
+                                        'daily_bought_qty': 0,
+                                        'daily_sold_qty': 0,
+                                        'first_scan_done': False,
+                                        'first_scan_passed': False
                                     }
-                                    await asyncio.to_thread(strategy.v_avwap_plugin.save_state, ticker, now_est, state_data)
+                                    await asyncio.to_thread(self.strategy.v_avwap_plugin.save_state, ticker, now_est, state_data)
                             except Exception as e:
                                 logging.error(f"🚨 [{ticker}] AVWAP 환각 소각 중 예외 발생: {e}")
 
@@ -400,7 +425,7 @@ class TelegramSyncEngine:
                                 temp_invested = sum(float(item.get("qty", 0)) * float(item.get("price", 0)) for item in q_data_before)
                                 temp_avg = temp_invested / vrev_ledger_qty if vrev_ledger_qty > 0 else 0.0
                                 missing_price = temp_avg
-                            
+                                
                                 if buy_execs:
                                     b_tot_amt = sum(int(float(ex.get('ft_ccld_qty') or '0')) * float(ex.get('ft_ccld_unpr3') or '0') for ex in buy_execs)
                                     b_tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in buy_execs)
@@ -564,7 +589,7 @@ class TelegramSyncEngine:
                                                 _vf_out.flush()
                                                 os.fsync(_vf_out.fileno())
                                             os.replace(tmp_path, f_path)
-                                                
+                                            
                                         await asyncio.to_thread(_write_v_state, v_state, vwap_state_file)
                                         logging.info(f"🔧 [{ticker}] VWAP 잔차 수학적 보정 완료: {old_sell_qty} -> {v_state['executed']['SELL_QTY']}")
                                 except Exception as e:
@@ -586,17 +611,17 @@ class TelegramSyncEngine:
                                     if b_tot_q > 0:
                                         real_buy_price = round(b_tot_amt / b_tot_q, 4)
                                 
-                                if real_buy_price == actual_avg:
-                                    search_start_dt = (now_kst - datetime.timedelta(days=4)).strftime('%Y%m%d')
-                                    past_raw = await asyncio.to_thread(self.broker.get_execution_history, ticker, search_start_dt, query_end_dt)
-                                    past_execs = filter_to_est(past_raw)
-                                    if past_execs:
-                                        p_buy_execs = [ex for ex in past_execs if ex.get('sll_buy_dvsn_cd') == "02"]
-                                        if p_buy_execs:
-                                            b_tot_amt = sum(int(float(ex.get('ft_ccld_qty') or '0')) * float(ex.get('ft_ccld_unpr3') or '0') for ex in p_buy_execs)
-                                            b_tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in p_buy_execs)
-                                            if b_tot_q > 0:
-                                                real_buy_price = round(b_tot_amt / b_tot_q, 4)
+                                    if real_buy_price == actual_avg:
+                                        search_start_dt = (now_kst - datetime.timedelta(days=4)).strftime('%Y%m%d')
+                                        past_raw = await asyncio.to_thread(self.broker.get_execution_history, ticker, search_start_dt, query_end_dt)
+                                        past_execs = filter_to_est(past_raw)
+                                        if past_execs:
+                                            p_buy_execs = [ex for ex in past_execs if ex.get('sll_buy_dvsn_cd') == "02"]
+                                            if p_buy_execs:
+                                                b_tot_amt = sum(int(float(ex.get('ft_ccld_qty') or '0')) * float(ex.get('ft_ccld_unpr3') or '0') for ex in p_buy_execs)
+                                                b_tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in p_buy_execs)
+                                                if b_tot_q > 0:
+                                                    real_buy_price = round(b_tot_amt / b_tot_q, 4)
                             except Exception as e:
                                 logging.error(f"🚨 수동매수 실제 체결단가 역산 중 예외 발생 (기존 평단가 fallback): {e}")
 
@@ -652,6 +677,10 @@ class TelegramSyncEngine:
                 # ==========================================================
                 if not is_rev:
                     sold_today_v14 = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01") if target_execs else 0
+                    
+                    # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] 체결 원장 디커플링 (AVWAP 당일 체결량 차감)
+                    sold_today_v14 = max(0, sold_today_v14 - avwap_daily_sell)
+                    
                     if actual_qty == 0 and (ledger_qty > 0 or sold_today_v14 > 0):
                         if now_kst.hour < 10:
                             await context.bot.send_message(chat_id, "⏳ <b>증권사 확정 정산(10:00 KST) 대기 중입니다.</b> 가결제 오차 방지를 위해 졸업 카드 발급 및 장부 초기화가 보류됩니다.", parse_mode='HTML')
@@ -662,7 +691,7 @@ class TelegramSyncEngine:
                                 prev_c = await asyncio.wait_for(
                                     asyncio.to_thread(self.broker.get_previous_close, ticker),
                                     timeout=10.0
-                                )
+                                 )
                             except asyncio.TimeoutError:
                                 prev_c = 0.0
                                 logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 전일 종가 조회 타임아웃 (10초). 0.0으로 대체")

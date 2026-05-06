@@ -9,6 +9,9 @@
 # NEW: [콜드 스타트 런타임 붕괴 방어] scheduled_vwap_init_and_cancel 진입부 tx_lock None 가드 이식 완료.
 # NEW: [VWAP 잔차 증발 방어 롤백 엔진 이식] 타격 스킵(호가 이탈) 및 주문 거절/미체결 발생 시 삭감된 예산을 코어 엔진(버킷)으로 100% 환불(Refund)하는 파이프라인 개통 완료.
 # MODIFIED: [V44.79 팩트 교정] 잔차 환불 인플레이션 맹점 및 미체결 늪 원천 차단
+# 🚨 MODIFIED: [V46.04 KIS 리젝 텔레메트리 이식] 거절 사유 로깅 추가
+# 🚨 MODIFIED: [V46.05 이벤트 루프 교착 방어] Lock Starvation 대비 호흡 연장
+# 🚨 MODIFIED: [V47.02 런타임 붕괴 방어] target_sweep_qty UnboundLocalError 스코프 전진 배치로 영구 소각 완료
 # ==========================================================
 import logging
 import datetime
@@ -125,9 +128,9 @@ async def scheduled_vwap_init_and_cancel(context):
                             if version == "V14" and is_manual_vwap:
                                 await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
                                 await asyncio.to_thread(broker.cancel_all_orders_safe, t, "SELL")
-                                msg = f"🌅 <b>[{t}] 장 마감 33분 전 엔진 기상 (Fail-Safe 전환)</b>\n"
-                                msg += f"▫️ 프리장에 선제 전송해둔 '예방적 양방향 LOC 덫'을 전량 취소(Nuke)했습니다.\n"
-                                msg += f"▫️ 1분 단위 정밀 타격(VWAP 슬라이싱) 모드로 교전 수칙을 변경합니다. ⚔️"
+                                msg = f"🌅 <b>[{t}] 하이브리드 타임 슬라이싱 기상 (자가 치유 가동)</b>\n"
+                                msg += f"▫️ 장 마감 33분 전 진입을 확인하여 기존 LOC 덫 강제 취소(Nuke)했습니다.\n"
+                                msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
                             else:
                                 msg = f"🌅 <b>[{t}] 가상 에스크로 해제 및 엔진 기상</b>\n"
                                 msg += f"▫️ 자전거래(FDS) 우회를 위해 설정된 <b>'가상 에스크로(Virtual Escrow)'를 해제</b>하고 자금을 실전 배치합니다.\n"
@@ -139,7 +142,7 @@ async def scheduled_vwap_init_and_cancel(context):
                         except Exception as e:
                             logging.error(f"🚨 자가 치유 Nuke 실패: {e}", exc_info=True)
                             vwap_cache[f"REV_{t}_nuked"] = False 
-             
+              
     try:
         await asyncio.wait_for(_do_init(), timeout=45.0)
     except Exception as e:
@@ -252,7 +255,7 @@ async def scheduled_vwap_trade(context):
                             if hasattr(strategy, 'load_avwap_state'):
                                 avwap_state = await asyncio.to_thread(strategy.load_avwap_state, t, now_est)
                                 avwap_qty = int(avwap_state.get('qty', 0))
-                                
+                            
                             if version == "V_REV":
                                 strategy_rev = app_data.get('strategy_rev')
                                 queue_ledger = app_data.get('queue_ledger')
@@ -282,7 +285,7 @@ async def scheduled_vwap_trade(context):
                                 msg = f"🌅 <b>[{t}] 가상 에스크로 해제 및 엔진 기상 (자가 치유 가동)</b>\n"
                                 msg += f"▫️ 장 마감 33분 전 진입을 확인하여 가상 에스크로를 해제했습니다.\n"
                                 msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
-                                
+                            
                             vwap_cache[f"REV_{t}_nuked"] = True
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
@@ -387,10 +390,11 @@ async def scheduled_vwap_trade(context):
                                 layer_1_price = sum(item.get('qty', 0) * item.get('price', 0.0) for item in lots_for_date) / layer_1_qty
                                 layer_1_trigger = round(layer_1_price * 1.006, 2)
                         
+                        # 🚨 MODIFIED: [V47.02 런타임 붕괴 방어] target_sweep_qty 스코프 전진 배치로 UnboundLocalError 영구 소각
+                        target_sweep_qty = 0
+                        sweep_type = ""
+
                         if not is_zero_start and minutes_to_close <= 3:
-                            target_sweep_qty = 0
-                            sweep_type = ""
-                            
                             if total_q > 0 and curr_p >= jackpot_trigger:
                                 target_sweep_qty = total_q
                                 sweep_type = "잭팟 전량"
@@ -580,7 +584,7 @@ async def scheduled_vwap_trade(context):
                                 )
                             except Exception as plan_e:
                                 logging.error(f"🚨 [{t}] get_dynamic_plan 실행 에러 (해당 티커 건너뜀): {plan_e}")
-                             
+                                
                             if rev_plan is None:
                                 continue
                         
@@ -590,11 +594,11 @@ async def scheduled_vwap_trade(context):
                                 msg += f"▫️ 기관급 자금 쏠림으로 인해 위험한 1분 단위 타임 슬라이싱(VWAP)을 전면 중단합니다.\n"
                                 msg += f"▫️ <b>잔여 할당량 전량을 양방향 LOC 방어선으로 전환 배치 완료!</b>\n"
                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
-                        
+                                
                                 for o in rev_plan.get('orders', []):
                                     if o['qty'] > 0:
                                         await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], "LOC")
-                                        await asyncio.sleep(0.2)
+                                await asyncio.sleep(0.2)
                                 continue
                                 
                             target_orders = rev_plan.get('orders', [])
@@ -706,6 +710,10 @@ async def scheduled_vwap_trade(context):
                                     await asyncio.to_thread(broker.cancel_order, t, odno)
                                     await asyncio.sleep(1.0)
                                 except: pass
+                        else:
+                            # NEW: [V46.04 KIS 리젝 텔레메트리 이식] 거절 사유 로깅
+                            err_msg = res.get('msg1', '알 수 없는 오류') if isinstance(res, dict) else '응답 없음'
+                            logging.warning(f"🚨 [{t}] VWAP {side} 주문 KIS 서버 거절(Reject): {err_msg} (수량: {slice_qty}, 가격: {exec_price})")
                         
                         # NEW: [VWAP 잔차 증발 방어] 주문 거절(Reject) 또는 부분 체결 시 미체결 물량만큼 예산/수량 롤백 격발
                         unfilled_qty = slice_qty - ccld_qty
@@ -723,6 +731,8 @@ async def scheduled_vwap_trade(context):
                         await asyncio.sleep(0.2)
 
         try:
-            await asyncio.wait_for(_do_vwap(), timeout=45.0)
+            # 🚨 MODIFIED: [V46.05 이벤트 루프 교착 방어] Lock Starvation 대비 호흡 연장
+            await asyncio.wait_for(_do_vwap(), timeout=90.0)
         except Exception as e:
             logging.error(f"🚨 VWAP 스케줄러 에러: {e}", exc_info=True)
+

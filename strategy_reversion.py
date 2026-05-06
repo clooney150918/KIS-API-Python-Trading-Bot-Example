@@ -8,6 +8,9 @@
 # MODIFIED: [V44.48 런타임 붕괴 방어] 들여쓰기 붕괴(IndentationError) 완벽 교정.
 # NEW: [VWAP 잔차 증발 방어 롤백 엔진] 주문 거절/미체결 시 삭감된 예산을 버킷 식별자 기반으로 원상 복구(Refund)하는 환불 파이프라인 개통 완료.
 # NEW: [V46.01 팩트 교정] 소형 시드 1주 타격 영구 동결(Data Starvation) 및 분할 교착 맹점 원천 차단
+# 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: 잔차 파탄 완벽 해체] 소형 시드 분할 교착 방어 시 기저 버킷(bucket) 동기화 및 초기화 로직 100% 추가.
+# 🚨 MODIFIED: [V48.00 단일 바구니(Single Bucket) 롤백] Buy1과 Buy2 예산 스틸링(Stealing)을 허용하여 체결 우위 극대화 및 데이터 기아 원천 차단.
+# ==========================================================
 import math
 import os
 import json
@@ -21,8 +24,9 @@ class ReversionStrategy:
     # 🚨 [AI 에이전트 절대 주의 환각 방어막] V42 U-Curve 락온 무결성 유지를 위해 config 주입을 훼손하지 말 것
     def __init__(self, config):
         self.cfg = config
+        # MODIFIED: [V48.00 단일 바구니 롤백] BUY1/BUY2 분리 바구니 전면 소각 및 BUY_SHARED 공용 바구니 이식
         self.residual = {
-            "BUY1": {}, "BUY2": {}, 
+            "BUY_SHARED": {}, 
             "SELL_L1": {}, "SELL_UPPER": {}, "SELL_JACKPOT": {}
         }
         self.executed = {"BUY_BUDGET": {}, "SELL_QTY": {}}
@@ -182,8 +186,8 @@ class ReversionStrategy:
 
     def reset_residual(self, ticker):
         self._load_state_if_needed(ticker)
-        self.residual["BUY1"][ticker] = 0.0
-        self.residual["BUY2"][ticker] = 0.0
+        # MODIFIED: [V48.00 단일 바구니 롤백] 잔여 버킷 리셋 대상 정규화
+        self.residual["BUY_SHARED"][ticker] = 0.0
         self.residual["SELL_L1"][ticker] = 0.0
         self.residual["SELL_UPPER"][ticker] = 0.0
         self.residual["SELL_JACKPOT"][ticker] = 0.0
@@ -318,7 +322,11 @@ class ReversionStrategy:
 
         is_strong_up = vwap_status.get('is_strong_up', False)
         is_strong_down = vwap_status.get('is_strong_down', False)
-        trigger_loc = is_strong_up or is_strong_down 
+        
+        # 🚨 MODIFIED: [V46.03 V-REV & AVWAP 듀얼 런타임 붕괴 및 예산 탈취(Stealing) 패러독스 완벽 수술]
+        # 🚨 [AI 에이전트 절대 주의 - 환각 방어막]
+        # 0주 새출발 시에는 강한 추세장(60% 지배력)이더라도 일괄 덤핑(trigger_loc)으로 빠지지 않고 무조건 1분 타임 슬라이싱(VWAP U-Curve)을 강제하여 베이스캠프를 분할 확보해야 함.
+        trigger_loc = (is_strong_up or is_strong_down) and not is_zero_start_session
 
         orders = []
 
@@ -397,23 +405,16 @@ class ReversionStrategy:
             if rem_budget <= 0:
                 return {"orders": [], "trigger_loc": False, "total_q": total_q}
             
-            # MODIFIED: [예산 탈취 디커플링 수술]
-            # 🚨 [AI 에이전트 절대 주의 - 환각 방어막]
-            # Buy1과 Buy2가 순차적 차감으로 서로의 예산을 훔치는 맹점을 소각.
-            # 각각의 최대 할당량(alloc_cash * 0.5)을 한계치로 독립 캡핑한 후 초과 시 균등 축소 적용.
-            half_alloc = float(alloc_cash) * 0.5
-            raw_b1_slice = half_alloc * current_weight
-            raw_b2_slice = half_alloc * current_weight
+            # MODIFIED: [V48.00 단일 바구니(Single Bucket) 롤백] Buy1과 Buy2 예산 스틸링(Stealing)을 허용하여 체결 우위 극대화
+            raw_slice = float(alloc_cash) * current_weight
+            shared_bucket = float(self.residual["BUY_SHARED"].get(ticker, 0.0)) + raw_slice
             
-            b1_bucket = float(self.residual["BUY1"].get(ticker, 0.0)) + raw_b1_slice
-            b2_bucket = float(self.residual["BUY2"].get(ticker, 0.0)) + raw_b2_slice
-
-            # MODIFIED: [V44.80 팩트 교정] 소형 시드 1주 타격 영구 동결 방어를 위한 safe_cap 적용
-            safe_cap = max(half_alloc, curr_p if curr_p > 0 else half_alloc)
-            b1_budget_slice = min(b1_bucket, safe_cap)
-            b2_budget_slice = min(b2_bucket, safe_cap)
+            # 50:50 동적 분할
+            b1_budget_slice = shared_bucket * 0.5
+            b2_budget_slice = shared_bucket * 0.5
             
             total_slice = b1_budget_slice + b2_budget_slice
+            
             # MODIFIED: [V46.01 팩트 교정] 소형 시드 1주 타격 영구 동결(Data Starvation) 및 분할 교착 맹점 원천 수술
             if total_slice > 0:
                 # 1. 예산 초과 시 비율 삭감
@@ -421,45 +422,42 @@ class ReversionStrategy:
                     ratio = rem_budget / total_slice
                     b1_budget_slice *= ratio
                     b2_budget_slice *= ratio
+                    shared_bucket = rem_budget # 잔여 버킷의 폭주를 막기 위해 한계치로 강제 캡핑
                     
                 # 2. 분할 교착 방어: 1주를 살 돈(rem_budget)은 있으나 버킷이 쪼개져 못 살 경우 하나로 병합
                 if curr_p > 0 and rem_budget >= curr_p and b1_budget_slice < curr_p and b2_budget_slice < curr_p:
                     if (b1_budget_slice + b2_budget_slice) >= curr_p:
-                        if b1_budget_slice >= b2_budget_slice:
-                            b1_budget_slice += b2_budget_slice
-                            b2_budget_slice = 0.0
-                        else:
-                            b2_budget_slice += b1_budget_slice
-                            b1_budget_slice = 0.0
-                    # 장 마감 직전(min_idx >= 28)에는 잔여 예산이 1주 이상 남았다면 마이너스 가불을 허용하여 강제 스윕 타격
-                    elif min_idx >= 28:
-                        if b1_budget_slice >= b2_budget_slice:
-                            b1_budget_slice = curr_p
-                        else:
-                            b2_budget_slice = curr_p
+                        b1_budget_slice += b2_budget_slice
+                        b2_budget_slice = 0.0
+                        
+                # 장 마감 직전(min_idx >= 28)에는 잔여 예산이 1주 이상 남았다면 마이너스 가불을 허용하여 강제 스윕 타격
+                elif min_idx >= 28:
+                    if b1_budget_slice >= b2_budget_slice:
+                        b1_budget_slice = curr_p
+                    else:
+                        b2_budget_slice = curr_p
+
+            spent_b1 = 0.0
+            spent_b2 = 0.0
 
             if curr_p > 0:
-                # MODIFIED: [NameError 런타임 붕괴 수술] 선언되지 않은 환각 변수(buy_star_price) 참조 전면 소각 및 0.5회분 무조건 매수 팩트 락온
                 if is_zero_start_session or curr_p <= p1_trigger:
                     alloc_q1 = int(math.floor(b1_budget_slice / curr_p))
-                    self.residual["BUY1"][ticker] = b1_bucket - (alloc_q1 * curr_p)
+                    spent_b1 = alloc_q1 * curr_p
                     if alloc_q1 > 0:
-                        # MODIFIED: [잔차 증발 방어] 버킷 식별자 주입
-                        orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger, "bucket": "BUY1"})
-                else:
-                    self.residual["BUY1"][ticker] = b1_bucket
+                        # MODIFIED: [잔차 증발 방어] 공용 버킷 식별자 주입
+                        orders.append({"side": "BUY", "qty": alloc_q1, "price": p1_trigger, "bucket": "BUY_SHARED"})
 
                 if curr_p <= p2_trigger:
                     alloc_q2 = int(math.floor(b2_budget_slice / curr_p))
-                    self.residual["BUY2"][ticker] = b2_bucket - (alloc_q2 * curr_p)
+                    spent_b2 = alloc_q2 * curr_p
                     if alloc_q2 > 0:
-                         # MODIFIED: [잔차 증발 방어] 버킷 식별자 주입
-                        orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger, "bucket": "BUY2"})
-                else:
-                    self.residual["BUY2"][ticker] = b2_bucket
+                        # MODIFIED: [잔차 증발 방어] 공용 버킷 식별자 주입
+                        orders.append({"side": "BUY", "qty": alloc_q2, "price": p2_trigger, "bucket": "BUY_SHARED"})
+
+                self.residual["BUY_SHARED"][ticker] = max(0.0, shared_bucket - spent_b1 - spent_b2)
             else:
-                self.residual["BUY1"][ticker] = b1_bucket
-                self.residual["BUY2"][ticker] = b2_bucket
+                self.residual["BUY_SHARED"][ticker] = shared_bucket
 
         else: # SELL
             rem_qty_total = total_q
