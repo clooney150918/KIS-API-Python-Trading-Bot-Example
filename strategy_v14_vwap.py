@@ -5,6 +5,7 @@
 # MODIFIED: [V44.27 AVWAP 잔고 오염 방어] V14_VWAP 런타임 엔진에 KIS 총잔고 대신 암살자 물량이 배제된 pure_qty를 주입하여 동적 플랜 훼손 원천 차단
 # MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
 # NEW: [VWAP 잔차 증발 방어 롤백 엔진] 주문 거절/미체결 시 삭감된 예산을 버킷 식별자 기반으로 원상 복구(Refund)하는 환불 파이프라인 개통 완료.
+# 🚨 MODIFIED: [V50.02 30분 압축 락온] 타임 윈도우 스캔 범위를 range(27, 60)에서 range(27, 57)로 정밀 교정하여 15:56 타격 종료 완벽 동기화.
 
 import math
 import logging
@@ -125,8 +126,8 @@ class V14VwapStrategy:
         except Exception as e:
             logging.critical(f"🚨 [SNAPSHOT SAVE FAILED] {ticker} 스냅샷 저장 실패. 지시서 보존 불가! 원인: {e}")
             if temp_path and os.path.exists(temp_path):
-                try: os.unlink(temp_path)
-                except OSError: pass
+                 try: os.unlink(temp_path)
+                 except OSError: pass
 
     def load_daily_snapshot(self, ticker):
         snap_file = self._get_snapshot_file(ticker)
@@ -256,7 +257,7 @@ class V14VwapStrategy:
         }
         
         self.save_daily_snapshot(ticker, plan_result)
-            
+        
         return plan_result
 
     def get_dynamic_plan(self, ticker, current_price, prev_close, current_weight, min_idx, alloc_cash, qty, avg_price, market_type="REG"):
@@ -299,7 +300,8 @@ class V14VwapStrategy:
             logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
             profile = {}
             
-        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
+        # 🚨 MODIFIED: [V50.02] 스캔 윈도우 30분 압축 락온 완료 (27~57)
+        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 57)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
         now_est = datetime.now(ZoneInfo('America/New_York'))

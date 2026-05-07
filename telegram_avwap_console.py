@@ -1,26 +1,19 @@
 # ==========================================================
 # FILE: telegram_avwap_console.py
-# MODIFIED: [V44.30] AVWAP 관제탑 순수 모니터링화 (설정 제어 버튼 소각)
-# MODIFIED: [V44.31] 체력 분석 기준 팩트 교정 - 현재가가 아닌 '당일 고가(High)' 기준으로 방전율 및 잔여 체력 계산 락온 완료
-# NEW: [1단계 타임라인 수술] 10:00 EST 타임쉴드 버그를 10:20 EST로 절대 락온 및 UI 텍스트 팩트 교정.
-# 🚨 MODIFIED: [V44.50 이벤트 루프 교착 방어] 관제탑 렌더링 시 발생하는 모든 JSON 설정 파일 스캔 및 속성 조회를 비동기 래핑 완료.
-# 🚨 MODIFIED: [V44.61 팩트 교정] 관제탑 실시간 VWAP 연산 시 프리마켓 노이즈 전면 소각 및 정규장 100% 락온
-# 🚨 MODIFIED: [V44.62 인덴테이션 붕괴 수술] PEP8 규격 강제 및 IndentationError(런타임 즉사) 맹점 영구 소각 완료.
-# MODIFIED: [V44.63 자율주행 수익률 하향 스위칭] AUTO 모드 수익률 스펙트럼 1.0%~4.0% 절대 락온 완료
-# 🚨 MODIFIED: [V44.72 팩트 교정] AVWAP 관제탑 day_high 파라미터 누수 배선 연결
-# 🚨 MODIFIED: [V44.73 팩트 교정] AVWAP 관제탑 가상 예산(0.0) 누수 및 타격 조건 충족 렌더링 락온
-# 🚨 MODIFIED: [V44.74 팩트 교정] AVWAP 관제탑 딥매수 완료 후 현재가 증발 맹점 완벽 수술
-# 🚨 MODIFIED: [V44.75 팩트 교정] 봇 재가동(업데이트) 시 메모리 증발로 인한 AVWAP 정보 유실(0주 표출) 시각적 맹점 원천 차단. 관제탑 자체 Self-Healing 로드 엔진 이식
-# NEW: [V45.00 동적 킬 스위치 상태 렌더링] 기초자산 정규장 순수 진폭(High/Low)을 추출하여 Zero-Line 관통 여부(횡보 감시) 및 SHUTDOWN 상태를 직관적으로 렌더링.
-# NEW: [V46 단판 승부 락온] 단판 승부 3대 조건 검증 및 관제탑 UI 렌더링 팩트 교정 완료.
-# 🚨 MODIFIED: [V46.06 관제탑 조건1 렌더링 기초지수 락온] 렌더링 시각적 디커플링 및 패러독스 교정
-# 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] 하드스탑/타임스탑 텍스트 전면 소각 및 오버나이트 홀딩 상태 팩트 렌더링 이식
+# ==========================================================
+# MODIFIED: [V47.00 하이킨아시 듀얼 모멘텀 추세 시스템 락온]
+# - 04:00 EST 프리마켓 1분봉 파서 스캔 확장 및 데이터 기아 해체
+# - 하이킨아시 5min 리샘플링 기반 3대 진입 조건(원웨이, 모멘텀, 체력) 락온
+# - 15:00 EST 오버나이트 존버(Hold) 모드 이식 및 투트랙 엑시트 렌더링
+# - 10:00 EST 단판 승부 및 조기퇴근(단일 출장) 셧다운 로직 영구 소각 (무한 스캔 개방)
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
 # ==========================================================
 import logging
 import datetime
 from zoneinfo import ZoneInfo
 import math
 import asyncio
+import pandas as pd
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class AvwapConsolePlugin:
@@ -43,7 +36,6 @@ class AvwapConsolePlugin:
         if not avwap_tickers:
             return "⚠️ <b>[AVWAP 암살자 오프라인]</b>\n▫️ AVWAP 지원 종목이 없습니다.", None
         
-        # 🚨 [V44.30 수술] 모드 활성화 여부 상관없이 무조건 렌더링하도록 락다운 해제
         active_avwap = avwap_tickers
 
         tracking_cache = app_data.get('sniper_tracking', {})
@@ -53,12 +45,14 @@ class AvwapConsolePlugin:
         base_prev_vwap, base_curr_vwap = 0.0, 0.0
         avg_vwap_5m = 0.0
         base_day_high, base_day_low, base_prev_c = 0.0, 0.0, 0.0
-        # NEW: [V45.00 동적 킬 스위치] 정규장 스캔용 변수
         base_reg_high, base_reg_low = 0.0, 0.0
+        
+        ha_status_text = "데이터 부족"
+        ha_2_bullish_no_lower = False
+        ha_2_bearish_no_upper = False
         
         df_1m = None
         try:
-            # 기초자산 당일 고/저/전일종가 스캔
             try:
                 base_prev_c_val = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, base_tkr), timeout=2.0)
                 base_prev_c = float(base_prev_c_val) if base_prev_c_val else 0.0
@@ -85,14 +79,19 @@ class AvwapConsolePlugin:
             if df_1m is not None and not df_1m.empty:
                 df = df_1m.copy()
                 
-                # 🚨 MODIFIED: [V44.61 팩트 수술] 관제탑 실시간 VWAP 연산 시 프리마켓 노이즈 원천 차단
+                # 🚨 MODIFIED: [V47.00] 04:00~15:59 EST 구간 강제 확장
                 if 'time_est' in df.columns:
-                    df = df[(df['time_est'] >= '093000') & (df['time_est'] <= '155900')]
+                    df = df[(df['time_est'] >= '040000') & (df['time_est'] <= '155900')]
                 
                 if not df.empty:
-                    # NEW: [V45.00 동적 킬 스위치] 정규장 전용 순수 고가/저가 스캔 락온
-                    base_reg_high = float(df['high'].astype(float).max())
-                    base_reg_low = float(df['low'].astype(float).min())
+                    # 정규장 전용 순수 고가/저가 스캔 락온
+                    df_reg = df[df['time_est'] >= '093000']
+                    if not df_reg.empty:
+                        base_reg_high = float(df_reg['high'].astype(float).max())
+                        base_reg_low = float(df_reg['low'].astype(float).min())
+                    else:
+                        base_reg_high = float(df['high'].astype(float).max())
+                        base_reg_low = float(df['low'].astype(float).min())
                     
                     df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
                     df['vol'] = df['volume'].astype(float)
@@ -110,6 +109,49 @@ class AvwapConsolePlugin:
                         avg_vwap_5m = recent_5['vol_tp'].sum() / sum_vol_5
                     else:
                         avg_vwap_5m = base_curr_vwap
+
+                    # 🚨 [V47.00] 하이킨아시 5min 리샘플링 구현 및 관제탑 실시간 렌더링 락온
+                    try:
+                        df_ha = df.copy()
+                        df_ha['datetime'] = pd.to_datetime(df_ha.index)
+                        df_ha.set_index('datetime', inplace=True)
+                        df_5m = df_ha.resample('5min', label='left', closed='left').agg({
+                            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+                        }).dropna()
+
+                        if not df_5m.empty:
+                            df_5m['HA_Close'] = (df_5m['open'].astype(float) + df_5m['high'].astype(float) + df_5m['low'].astype(float) + df_5m['close'].astype(float)) / 4.0
+                            ha_open = []
+                            for i in range(len(df_5m)):
+                                if i == 0:
+                                    ha_open.append((float(df_5m['open'].iloc[i]) + float(df_5m['close'].iloc[i])) / 2.0)
+                                else:
+                                    ha_open.append((ha_open[i-1] + float(df_5m['HA_Close'].iloc[i-1])) / 2.0)
+                            
+                            df_5m['HA_Open'] = pd.Series(ha_open, index=df_5m.index)
+                            df_5m['HA_High'] = df_5m[['high', 'HA_Open', 'HA_Close']].max(axis=1)
+                            df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
+                            
+                            df_5m['No_Lower_Wick'] = (df_5m['HA_Open'] - df_5m['HA_Low']) <= 0.01
+                            df_5m['No_Upper_Wick'] = (df_5m['HA_High'] - df_5m['HA_Open']) <= 0.01
+                            df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
+                            df_5m['Is_Bearish'] = df_5m['HA_Close'] < df_5m['HA_Open']
+
+                            if len(df_5m) >= 2:
+                                last_2 = df_5m.tail(2)
+                                ha_2_bullish_no_lower = last_2['Is_Bullish'].all() and last_2['No_Lower_Wick'].all()
+                                ha_2_bearish_no_upper = last_2['Is_Bearish'].all() and last_2['No_Upper_Wick'].all()
+
+                            last_ha = df_5m.iloc[-1]
+                            ha_dir = "양봉" if last_ha['Is_Bullish'] else "음봉"
+                            if last_ha['Is_Bullish']:
+                                ha_wick = "아래 꼬리 없음" if last_ha['No_Lower_Wick'] else "아래 꼬리 존재"
+                            else:
+                                ha_wick = "위 꼬리 없음" if last_ha['No_Upper_Wick'] else "위 꼬리 존재"
+                            ha_status_text = f"{ha_dir} ({ha_wick})"
+                    except Exception as e:
+                        logging.error(f"관제탑 HA 연산 실패: {e}")
+
                 else:
                     base_curr_vwap = float(df_1m['close'].iloc[-1])
                     avg_vwap_5m = base_curr_vwap
@@ -128,7 +170,6 @@ class AvwapConsolePlugin:
             msg += f"▫️ 당일 고가(프리포함): <b>${base_day_high:.2f}</b> ({b_high_pct:+.2f}%)\n"
             msg += f"▫️ 당일 저가(프리포함): <b>${base_day_low:.2f}</b> ({b_low_pct:+.2f}%)\n"
             
-        # NEW: [V45.00 동적 킬 스위치 상태 렌더링]
         if base_prev_c > 0 and base_reg_high > 0 and base_reg_low > 0:
             if base_reg_high > base_prev_c and base_reg_low < base_prev_c:
                 zero_line_status = "🔴 관통 (추세 붕괴 / 횡보장 셧다운)"
@@ -151,7 +192,6 @@ class AvwapConsolePlugin:
         keyboard = []
 
         for t in active_avwap:
-            # 🚨 MODIFIED: [V44.75 팩트 수술] 관제탑 호출 시 메모리 증발(업데이트/재부팅) 상태라면 디스크에서 직접 자가 복구(Self-Healing) 실행
             if not tracking_cache.get(f"AVWAP_INIT_{t}"):
                 try:
                     saved_state = await asyncio.to_thread(self.strategy.v_avwap_plugin.load_state, t, now_est)
@@ -165,7 +205,6 @@ class AvwapConsolePlugin:
                 except Exception as e:
                     logging.error(f"🚨 AVWAP 관제탑 상태 자가 복구 실패 ({t}): {e}")
 
-            # 🚨 MODIFIED: 파일 I/O 속성 조회 비동기 래핑
             is_avwap_active = await asyncio.to_thread(getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False), "SOXL" if t == "SOXS" else t)
             active_str = "🟢 가동 중" if is_avwap_active else "⚪ 대기 중 (OFF)"
             
@@ -195,23 +234,19 @@ class AvwapConsolePlugin:
             strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
             is_shutdown = tracking_cache.get(f"AVWAP_SHUTDOWN_{t}", False)
             
-            # 🚨 MODIFIED: 파일 I/O 속성 조회 비동기 래핑
-            is_multi = await asyncio.to_thread(getattr(self.cfg, 'get_avwap_multi_strike_mode', lambda x: False), t)
             user_target_pct = await asyncio.to_thread(getattr(self.cfg, 'get_avwap_target_profit', lambda x: 4.0), t)
             target_mode = tracking_cache.get(f"AVWAP_TARGET_MODE_{t}", "AUTO") 
             
             label = "롱" if t == "SOXL" else "숏"
             msg += f"\n🎯 <b>[ {t} ({label}) 작전반 - {active_str} ]</b>\n"
 
-            # NEW: [V46 단판 승부 락온]
+            # 🚨 [V47.00] 하이킨아시 3대 조건 연산 및 렌더링 락온
             momentum_met = False
-            trend_str = "🔴 <b>조건 미달 (단판 승부 대기)</b>"
+            trend_str = "🔴 <b>조건 미달 (실시간 추세 돌파 감시)</b>"
             
-            # 잔여 체력 선제 연산
             cond1_met, cond2_met, cond3_met = False, False, False
             rem_5_pct_console = 0.0
 
-            # 🚨 MODIFIED: [V46.06 관제탑 조건1 렌더링 기초지수 락온]
             if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
                 if t == "SOXS":
                     cond1_met = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
@@ -224,41 +259,40 @@ class AvwapConsolePlugin:
                 if atr5 > 0:
                     rem_5_pct_console = atr5 - actual_gap_pct
                     cond3_met = (rem_5_pct_console >= 1.0)
-            
-            if base_prev_vwap > 0 and base_curr_vwap > 0 and avg_vwap_5m > 0:
-                gap1 = base_curr_vwap - base_prev_vwap
-                gap2 = avg_vwap_5m - base_curr_vwap
+                    
+            if base_prev_vwap > 0 and base_curr_vwap > 0:
                 if t == "SOXS":
-                    cond2_met = (gap1 < 0) and (gap2 < 0)
+                    cond2_met = (base_curr_vwap < base_prev_vwap) and ha_2_bearish_no_upper
                 else:
-                    cond2_met = (gap1 > 0) and (gap2 > 0)
+                    cond2_met = (base_curr_vwap > base_prev_vwap) and ha_2_bullish_no_lower
             
             c1_str = "🟢" if cond1_met else "🔴"
             c2_str = "🟢" if cond2_met else "🔴"
             c3_str = "🟢" if cond3_met else "🔴"
 
             if t == "SOXS":
-                criteria = "H/L방향(-) &amp; VWAP(-) &amp; 체력(&gt;=1%)"
+                criteria = "H/L방향(-) &amp; HA모멘텀(-) &amp; 체력(&gt;=1%)"
             else:
-                criteria = "H/L방향(+) &amp; VWAP(+) &amp; 체력(&gt;=1%)"
+                criteria = "H/L방향(+) &amp; HA모멘텀(+) &amp; 체력(&gt;=1%)"
 
-            if base_prev_vwap > 0 and base_curr_vwap > 0 and avg_vwap_5m > 0 and prev_c > 0 and atr5 > 0:
+            if base_prev_vwap > 0 and base_curr_vwap > 0 and prev_c > 0 and atr5 > 0:
                 if cond1_met and cond2_met and cond3_met:
                     momentum_met = True
-                    trend_str = "🟢 <b>조건 충족 (10:00 단판 격발 대기)</b>"
+                    trend_str = "🟢 <b>조건 충족 (타격 개시 대기)</b>"
                 else:
-                    trend_str = "🔴 <b>조건 미달 (조건 부적합)</b>"
+                    trend_str = "🔴 <b>조건 미달 (실시간 추세 돌파 감시)</b>"
             else:
                 trend_str = "⚠️ 데이터 수집 대기 중"
 
             msg += f"▫️ 판별 기준: <code>{criteria}</code>\n"
-            msg += f"▫️ <b>[10:00 EST 단판 승부 조건]</b>\n"
+            msg += f"▫️ <b>[ 하이킨아시 듀얼 모멘텀 조건 ]</b>\n"
             msg += f"   {c1_str} 고저가 방향 원웨이 일치\n"
-            msg += f"   {c2_str} VWAP 갭 모멘텀 일치\n"
+            msg += f"   {c2_str} HA 모멘텀 일치 (현재 5T: {ha_status_text})\n"
             msg += f"   {c3_str} 잔여 체력 1% 이상 (현재: {rem_5_pct_console:.1f}%)\n"
             msg += f"▫️ 타격 상태: {trend_str}\n"
 
-            strike_icon_txt = "단판 승부 (1회 조기퇴근 락온)"
+            # 🚨 [V47.00] 다중 출장 개방 무한 타격 텍스트 교체
+            strike_icon_txt = "무한 출장 (실시간 추세 돌파 락온)"
             if strikes > 0:
                 msg += f"▫️ 모드: <b>{strike_icon_txt} ({strikes}회차 교전 완료)</b>\n"
             else:
@@ -280,7 +314,6 @@ class AvwapConsolePlugin:
                 high_rebound_gap = day_high - day_low if day_high >= day_low else 0.0
                 high_rebound_pct = (high_rebound_gap / prev_c) * 100 if prev_c > 0 else 0.0
                 
-                # 🚨 MODIFIED: [V44.31 수술] 현재가가 아닌 당일 고가 기준으로 방전율 및 잔여 체력 계산
                 exh_5 = (high_rebound_pct / atr5 * 100) if atr5 > 0 else 0
                 rem_5_pct = atr5 - high_rebound_pct
                 
@@ -296,7 +329,6 @@ class AvwapConsolePlugin:
                 msg += f"▫️ 당일 저가: <b>${day_low:.2f}</b> ({low_pct:+.2f}%/<b>베이스</b>)\n"
                 msg += f"▫️ 현재가: <b>${curr_p:.2f}</b> ({curr_pct:+.2f}%/<b>+{curr_rebound_pct:.2f}%</b>)\n"
                 
-                # 🚨 MODIFIED: [V44.74 팩트 교정] 매수평단과 현재가 동시 표출 락온
                 if avwap_qty > 0 and avwap_avg > 0:
                     avg_pct = ((avwap_avg - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                     avg_rebound_gap = avwap_avg - day_low if avwap_avg >= day_low else 0.0
@@ -310,7 +342,6 @@ class AvwapConsolePlugin:
                 msg += f"               <b>({exh_5:.0f}% 소진 / 고가 기준)</b>\n"
 
             if target_mode == "AUTO":
-                # MODIFIED: [V44.63 자율주행 수익률 하향 스위칭] UI 표출용 스펙트럼 1.0%~4.0% 절대 락온 완료
                 if exh_5 >= 90: base_target = 1.0
                 elif exh_5 >= 80: base_target = 2.0
                 elif exh_5 >= 70: base_target = 3.0
@@ -319,7 +350,6 @@ class AvwapConsolePlugin:
                 if rem_5_pct > 0:
                     rem_cap = math.floor(rem_5_pct * 10) / 10.0
                     dynamic_target = min(base_target, rem_cap)
-                    # MODIFIED: [V44.63 자율주행 수익률 하향 스위칭] 최소 1.0% 보장 하드 클램핑 락온
                     dynamic_target = max(1.0, dynamic_target)
                 else:
                     dynamic_target = 1.0
@@ -335,19 +365,23 @@ class AvwapConsolePlugin:
                 target_price = avwap_avg * (1 + locked_pct / 100.0)
                 if target_mode == "AUTO":
                     target_display = f"🤖자율주행 (+{locked_pct:.1f}%)"
-                # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] 하드스탑 소각
                 msg += f"▫️ 목표 익절: <b>${target_price:.2f}</b> ({target_display})\n"
             else:
                 msg += f"▫️ 목표 익절: <b>{target_display}</b>\n"
 
+            curr_time = now_est.time()
+            time_1500 = datetime.time(15, 0)
+            
             status_txt = "👀 타점 스캔중"
             if not is_avwap_active:
                 status_txt = "⚪ 모드 비활성 (레이더 관측 중)"
             elif is_shutdown: 
-                # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] 분기망 교정
-                # 🚨 [AI 에이전트 절대 주의 - 스마트 롤오버 환각 방어막]
+                # 🚨 [V47.00] 15:00 EST 이후 존버 홀딩 모드 명시적 표출 락온
                 if avwap_qty > 0:
-                    status_txt = "🌙 오버나이트 홀딩 중 (목표가 익절 대기)"
+                    if curr_time >= time_1500 and curr_p <= avwap_avg:
+                        status_txt = "🌙 오버나이트 존버 모드 (절대손절금지)"
+                    else:
+                        status_txt = "🌙 오버나이트 홀딩 중 (목표가 익절 대기)"
                 else:
                     status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
             elif avwap_qty > 0: 
@@ -365,7 +399,7 @@ class AvwapConsolePlugin:
                         base_day_open=0.0,
                         avwap_avg_price=avwap_avg,
                         avwap_qty=avwap_qty,
-                        avwap_alloc_cash=999999.0, # 🚨 MODIFIED: [V44.73] 텔레그램 관제탑 가상 예산(0.0) 누수 방어를 위해 넉넉한 가상 예산 주입
+                        avwap_alloc_cash=999999.0,
                         context_data=avwap_ctx,
                         df_1min_base=df_1m,
                         now_est=now_est,
@@ -375,14 +409,13 @@ class AvwapConsolePlugin:
                         day_high=day_high,
                         day_low=day_low,
                         atr5=atr5,
-                        base_day_high=base_day_high, # 🚨 MODIFIED: V46.06 추가
-                        base_day_low=base_day_low    # 🚨 MODIFIED: V46.06 추가
+                        base_day_high=base_day_high,
+                        base_day_low=base_day_low
                     )
 
                     action = decision.get('action')
                     reason = decision.get('reason', '')
                     
-                    # 🚨 MODIFIED: [V45.00] 타격 조건 충족 및 셧다운 격발 직관적 렌더링 락온
                     if action in ['BUY', 'SELL']:
                         status_txt = f"🔥 타격 조건 100% 충족 ({reason})"
                     elif action == 'SHUTDOWN':
@@ -394,7 +427,6 @@ class AvwapConsolePlugin:
 
             msg += f"▫️ 상태: <b>{status_txt}</b>\n"
 
-        # 🚨 MODIFIED: [V44.30] 설정 모드 스위칭 버튼 영구 소각 (순수 모니터링 기능만 유지)
         keyboard.append([
             InlineKeyboardButton("🔄 관제탑 새로고침", callback_data="AVWAP_SET:REFRESH:NONE"),
             InlineKeyboardButton("🔙 닫기", callback_data="RESET:CANCEL")
@@ -404,4 +436,3 @@ class AvwapConsolePlugin:
         msg += f"💡 <i>설정 제어는 /settlement (전술설정) 메뉴에서 가능합니다.</i>"
 
         return msg, InlineKeyboardMarkup(keyboard)
-

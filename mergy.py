@@ -14,7 +14,6 @@ TARGET_FILES = [
     "manual_ledger.py",
     "plugin_updater.py",
     "queue_ledger.py",
-    "scheduler_aftermarket.py",
     "scheduler_core.py",
     "scheduler_regular.py",
     "scheduler_sniper.py",

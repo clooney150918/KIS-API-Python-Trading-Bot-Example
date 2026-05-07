@@ -12,6 +12,7 @@
 # 🚨 MODIFIED: [V46.04 KIS 리젝 텔레메트리 이식] 거절 사유 로깅 추가
 # 🚨 MODIFIED: [V46.05 이벤트 루프 교착 방어] Lock Starvation 대비 호흡 연장
 # 🚨 MODIFIED: [V47.02 런타임 붕괴 방어] target_sweep_qty UnboundLocalError 스코프 전진 배치로 영구 소각 완료
+# 🚨 MODIFIED: [V50.02 30분 압축 락온] 타임 윈도우 스캔 범위를 range(27, 60)에서 range(27, 57)로 정밀 교정하여 15:56 타격 종료 완벽 동기화.
 # ==========================================================
 import logging
 import datetime
@@ -142,7 +143,7 @@ async def scheduled_vwap_init_and_cancel(context):
                         except Exception as e:
                             logging.error(f"🚨 자가 치유 Nuke 실패: {e}", exc_info=True)
                             vwap_cache[f"REV_{t}_nuked"] = False 
-              
+               
     try:
         await asyncio.wait_for(_do_init(), timeout=45.0)
     except Exception as e:
@@ -230,8 +231,9 @@ async def scheduled_vwap_trade(context):
                     profile = VWAP_PROFILES.get(t, {})
                 except ImportError:
                     profile = {}
-                    
-                target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
+                     
+                # 🚨 MODIFIED: [V50.02] 스캔 윈도우 30분 압축 락온 완료 (27~57)
+                target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 57)]
                 total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
                 time_str = now_est.strftime('%H:%M')
                 
@@ -424,10 +426,10 @@ async def scheduled_vwap_trade(context):
                                     if actual_sweep_qty > 0:
                                         bid_price = float(await asyncio.to_thread(broker.get_bid_price, t) or 0.0)
                                         exec_price = bid_price if bid_price > 0 else curr_p
-                                        
+
                                         res = await asyncio.to_thread(broker.send_order, t, "SELL", actual_sweep_qty, exec_price, "LIMIT")
                                         odno = res.get('odno', '') if isinstance(res, dict) else ''
-                                        
+                        
                                         if res and res.get('rt_cd') == '0' and odno:
                                             if not vwap_cache.get(f"REV_{t}_sweep_msg_sent"):
                                                 msg = f"🌪️ <b>[{t}] V-REV 본대 {sweep_type} 3분 가속 스윕(Sweep) 개시!</b>\n"
@@ -480,7 +482,7 @@ async def scheduled_vwap_trade(context):
                                                             fd, tmp_path = tempfile.mkstemp(dir="data", text=True)
                                                             with os.fdopen(fd, 'w', encoding='utf-8') as _pf:
                                                                 json.dump(p_data, _pf)
-                                                                # MODIFIED: [제4헌법 원자적 쓰기 무결성 락온] flush 및 fsync 이식
+                                                                # MODIFIED: [제4헌법 원자적 쓰기 무결성 락온] flush 및 fsync 추가
                                                                 _pf.flush()
                                                                 os.fsync(_pf.fileno())
                                                             os.replace(tmp_path, f_path)
@@ -735,4 +737,3 @@ async def scheduled_vwap_trade(context):
             await asyncio.wait_for(_do_vwap(), timeout=90.0)
         except Exception as e:
             logging.error(f"🚨 VWAP 스케줄러 에러: {e}", exc_info=True)
-

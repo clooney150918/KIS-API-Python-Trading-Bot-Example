@@ -10,6 +10,8 @@
 # NEW: [V46.01 팩트 교정] 소형 시드 1주 타격 영구 동결(Data Starvation) 및 분할 교착 맹점 원천 차단
 # 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: 잔차 파탄 완벽 해체] 소형 시드 분할 교착 방어 시 기저 버킷(bucket) 동기화 및 초기화 로직 100% 추가.
 # 🚨 MODIFIED: [V48.00 단일 바구니(Single Bucket) 롤백] Buy1과 Buy2 예산 스틸링(Stealing)을 허용하여 체결 우위 극대화 및 데이터 기아 원천 차단.
+# 🚨 MODIFIED: [V50.02 30분 압축 락온] 타임 윈도우 스캔 범위를 range(27, 60)에서 range(27, 57)로 정밀 교정하여 15:56 타격 종료 완벽 동기화.
+# 🚨 MODIFIED: [V50.03 분할 교착 및 예산 강제 축소 버그 완벽 수술] 기존 elif 구조로 인해 버려지던 가불 로직을 독립된 if문으로 분리하고, 이미 예산이 넉넉한 경우를 1주 가격(curr_p)으로 강제 축소해버리는 치명적 맹점 원천 차단.
 # ==========================================================
 import math
 import os
@@ -248,7 +250,8 @@ class ReversionStrategy:
             logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
             profile = {}
             
-        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 60)]
+        # 🚨 MODIFIED: [V50.02] 스캔 윈도우 30분 압축 락온 완료 (27~57)
+        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 57)]
         total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
         
         now_est = datetime.now(ZoneInfo('America/New_York'))
@@ -430,12 +433,15 @@ class ReversionStrategy:
                         b1_budget_slice += b2_budget_slice
                         b2_budget_slice = 0.0
                         
-                # 장 마감 직전(min_idx >= 28)에는 잔여 예산이 1주 이상 남았다면 마이너스 가불을 허용하여 강제 스윕 타격
-                elif min_idx >= 28:
-                    if b1_budget_slice >= b2_budget_slice:
-                        b1_budget_slice = curr_p
-                    else:
-                        b2_budget_slice = curr_p
+                # 🚨 MODIFIED: [V50.03 분할 교착 및 예산 강제 축소 버그 완벽 수술] 
+                # 기존 elif 구조로 인해 버려지던 가불 로직을 독립된 if문으로 분리하고,
+                # 이미 예산이 넉넉한 경우(10주 이상 살 예산)를 1주 가격(curr_p)으로 강제 축소해버리는 치명적 맹점 원천 차단.
+                if min_idx >= 28 and curr_p > 0 and rem_budget >= curr_p:
+                    if b1_budget_slice < curr_p and b2_budget_slice < curr_p:
+                        if b1_budget_slice >= b2_budget_slice:
+                            b1_budget_slice = curr_p
+                        else:
+                            b2_budget_slice = curr_p
 
             spent_b1 = 0.0
             spent_b2 = 0.0

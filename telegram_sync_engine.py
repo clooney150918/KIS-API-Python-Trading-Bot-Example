@@ -9,6 +9,7 @@
 # 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: AVWAP 물량 납치 패러독스 완벽 해체] job_data 의존성 전면 소각 및 bot_data 다이렉트 락온.
 # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] KIS 체결 원장 스캔 시 AVWAP 당일 체결량 수학적 디커플링 이식 완료
 # 🚨 MODIFIED: [V47.01 런타임 즉사 방어] _sync_escrow_cash 내부 IndentationError 팩트 100% 교정
+# 🚨 MODIFIED: [V49.02 런타임 붕괴 완벽 수술] 0주 졸업 판별 로직 내 last_sell_dt 스코프 전진 배치 및 로깅 구문 팩트 종속화 적용으로 UnboundLocalError 영구 소각 완료
 # ==========================================================
 import logging
 import datetime
@@ -404,6 +405,9 @@ class TelegramSyncEngine:
                                     if tot_q > 0:
                                         actual_clear_price = round(tot_amt / tot_q, 4)
                             
+                            # NEW: [V49.02 런타임 붕괴 방어] 스코프 전진 배치
+                            last_sell_dt = "당일"
+
                             if actual_clear_price == 0.0:
                                 if raw_execs:
                                     recent_sells = [ex for ex in raw_execs if ex.get('sll_buy_dvsn_cd') == "01"]
@@ -415,8 +419,9 @@ class TelegramSyncEngine:
                                         tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in same_day_sells)
                                         if tot_q > 0:
                                             actual_clear_price = round(tot_amt / tot_q, 4)
-                        
-                            logging.info(f"🔍 [{ticker}] 과거 4일치 광역 스캔 및 최근일({last_sell_dt}) 추출 폴백으로 매도 단가(${actual_clear_price})를 복원했습니다.")
+                                        
+                                        # MODIFIED: [V49.02] 로깅 구문 팩트 종속화 (실제 폴백 발동 시에만 기록)
+                                        logging.info(f"🔍 [{ticker}] 과거 4일치 광역 스캔 및 최근일({last_sell_dt}) 추출 폴백으로 매도 단가(${actual_clear_price})를 복원했습니다.")
 
                             if tot_q > vrev_ledger_qty:
                                 missing_qty = tot_q - vrev_ledger_qty
@@ -537,7 +542,7 @@ class TelegramSyncEngine:
                         if _vrev_snap_ok:
                             msg = f"🎉 <b>[{ticker} V-REV 잭팟 스윕(전량 익절) 감지!]</b>\n▫️ 잔고가 0주가 되어 LIFO 큐 지층을 100% 소각(초기화)했습니다."
                             if added_seed > 0:
-                                msg += f"\n💸 <b>자동 복리 +${added_seed:,.0f}</b> 이 다음 운용 시드에 완벽하게 추가되었습니다!"
+                                 msg += f"\n💸 <b>자동 복리 +${added_seed:,.0f}</b> 이 다음 운용 시드에 완벽하게 추가되었습니다!"
                             await context.bot.send_message(chat_id, msg, parse_mode='HTML')
                             
                             if snapshot:
@@ -560,7 +565,7 @@ class TelegramSyncEngine:
                                     logging.error(f"📸 V-REV 스냅샷 이미지 렌더링/발송 실패: {e}")
                         else:
                             await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} V-REV 0주 강제 정산 완료]</b>\n▫️ 0주를 확인하여 큐를 안전하게 비웠으나 통신 지연으로 졸업 카드는 생략되었습니다.", parse_mode='HTML')
-                                    
+                            
                         await self._sync_escrow_cash(ticker)
                         return "SUCCESS"
                         
@@ -610,7 +615,7 @@ class TelegramSyncEngine:
                                     b_tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in buy_execs)
                                     if b_tot_q > 0:
                                         real_buy_price = round(b_tot_amt / b_tot_q, 4)
-                                
+                                    
                                     if real_buy_price == actual_avg:
                                         search_start_dt = (now_kst - datetime.timedelta(days=4)).strftime('%Y%m%d')
                                         past_raw = await asyncio.to_thread(self.broker.get_execution_history, ticker, search_start_dt, query_end_dt)
@@ -646,7 +651,7 @@ class TelegramSyncEngine:
                                     if os.path.exists(f_path):
                                         with open(f_path, 'r', encoding='utf-8') as f:
                                             return json.load(f)
-                                    return {}
+                                        return {}
                                 
                                 all_q = await asyncio.to_thread(_read_all_q_manual, q_file)
                                 all_q[ticker] = q_data

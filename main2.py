@@ -2,12 +2,12 @@
 # FILE: main.py
 # ==========================================================
 # MODIFIED: [V44.68 콜드 스타트 방어막 전진 배치 및 팩트 교정]
-# [main.py] - 🌟 100% 통합 무결점 완성본 (V44.68) 🌟
 # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
 # 제3헌법: KST 타임존 및 is_dst 기반의 동적 스케줄링 전면 소각. 모든 스케줄러 등록 시 ZoneInfo('America/New_York') 기준의 절대 시간으로 하드코딩 락온.
 # MODIFIED: [V44.47 KST 타임 패러독스 영구 소각] APScheduler 잡 등록 배선 EST 100% 락온 완료.
 # NEW: [전역 타임아웃 이식] scheduled_volatility_scan 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
 # NEW: [환각 방어막 이식] 10:00 EST 옴니 매트릭스 타임라인 보호용 백신 주석 하드코딩.
+# NEW: [V48.02 애프터마켓 로터리 덫 전면 폐기] 애프터마켓 3% 지정가 덫 스케줄러 영구 소각 및 배선 철거 완료.
 # ==========================================================
 import os
 import logging
@@ -36,7 +36,6 @@ from scheduler_core import (
 from scheduler_sniper import scheduled_sniper_monitor
 from scheduler_vwap import scheduled_vwap_trade, scheduled_vwap_init_and_cancel
 from scheduler_regular import scheduled_regular_trade
-from scheduler_aftermarket import scheduled_after_market_lottery
 
 TICKER_BASE_MAP = {
     "SOXL": "SOXX",
@@ -173,7 +172,7 @@ def main():
     
     print("=" * 60)
     # MODIFIED: [V44.68 콜드 스타트 방어막 전진 배치 및 팩트 교정]
-    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V44.68 락온)")
+    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V48.02 락온)")
     print(f"⏰ 자동 동기화: 21:00 EST 확정 정산 엔진 락온 가동")
     # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     print("🛡️ 1-Tier 자율주행 지표 스캔 대기 중... (매일 10:00 EST 격발)")
@@ -261,9 +260,6 @@ def main():
     # 매 1분 스나이퍼 및 VWAP 타격
     jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
-    
-    # 🚨 [EST 100% 락온] 애프터마켓 로터리 덫: 16:05 EST
-    jq.run_daily(scheduled_after_market_lottery, time=datetime.time(16, 5, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [EST 100% 락온] 자정 청소 작업: 17:00 EST
     jq.run_daily(scheduled_self_cleaning, time=datetime.time(17, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
