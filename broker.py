@@ -29,6 +29,7 @@
 # 🚨 MODIFIED: [V44.76 팩트 교정] 당일 고가/저가 스캔 시 프리마켓 진폭 100% 합산 롤백 (보수적 체력 방어막 복원)
 # 🚨 MODIFIED: [V47.00 하이킨아시 파서 open 컬럼 강제 수혈 락온]
 # 🚨 MODIFIED: [V49.11 체력 스캔 프리/애프터장 팩트 수혈] ATR5/ATR14 연산 시 prepost=True 속성을 강제 주입하여 장외 진폭까지 100% 반영
+# NEW: [V47 시계열 체력 측정 로직] 당일 최고가/최저가 및 발생 타임스탬프 캡처 및 영속화 엔진 탑재
 # ==========================================================
 
 import requests
@@ -105,7 +106,7 @@ class KoreaInvestmentBroker:
             if 'access_token' in data:
                 self.token = data['access_token']
                 expire_str = (datetime.datetime.now(kst).replace(tzinfo=None) + datetime.timedelta(seconds=int(data['expires_in']))).strftime('%Y-%m-%d %H:%M:%S')
-                
+       
                 dir_name = os.path.dirname(self.token_file)
                 if dir_name and not os.path.exists(dir_name):
                     os.makedirs(dir_name, exist_ok=True)
@@ -121,7 +122,6 @@ class KoreaInvestmentBroker:
                     shutil.move(temp_path, self.token_file)
                 finally:
                     if os.path.exists(temp_path):
-             
                         try: os.remove(temp_path)
                         except Exception: pass
             else:
@@ -150,14 +150,12 @@ class KoreaInvestmentBroker:
         for attempt in range(2): 
             try:
                 if method.upper() == "GET":
-              
                     res = requests.get(url, headers=headers, params=params, timeout=10)
                 else:
                     res = requests.post(url, headers=headers, data=json.dumps(data) if data else None, timeout=10)
                     
                 resp_json = res.json()
          
-        
                 if resp_json.get('rt_cd') != '0':
                     msg1_lower = resp_json.get('msg1', '').lower()
                     msg_cd = resp_json.get('msg_cd', '').lower()
@@ -167,7 +165,7 @@ class KoreaInvestmentBroker:
                         if attempt == 0: 
                             old_token = self.token 
                             print(f"\n🚨 [안전장치 가동] API 토큰 만료 감지! : {msg1_lower}")
-                   
+                
                             self._get_access_token(force=True)
                             
                             if self.token == old_token or self.token is None:
@@ -256,7 +254,7 @@ class KoreaInvestmentBroker:
         
         params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00"}
         res = self._call_api("CTRP6504R", "/uapi/overseas-stock/v1/trading/inquire-present-balance", "GET", params=params)
-        
+      
         if res.get('rt_cd') == '0':
             api_success = True
             o2 = res.get('output2', {})
@@ -308,24 +306,18 @@ class KoreaInvestmentBroker:
                         avg = self._safe_float(item.get('pchs_avg_pric', 0))
                         
                         if qty > 0 and ord_psbl_qty == 0:
-                       
                             ord_psbl_qty = qty
                         
                         if qty > 0:
                             if ticker not in holdings: 
-                    
                                 holdings[ticker] = {'qty': qty, 'ord_psbl_qty': ord_psbl_qty, 'avg': avg}
                             else:
                                 prev = holdings[ticker]
-                              
-   
                                 if prev['qty'] == qty and abs(prev['avg'] - avg) < 0.001:
                                     continue 
-                               
       
                                 total_qty = prev['qty'] + qty
                                 new_avg = ((prev['avg'] * prev['qty']) + (avg * qty)) / total_qty if total_qty > 0 else avg
-                      
            
                                 holdings[ticker]['qty'] = total_qty
                                 holdings[ticker]['ord_psbl_qty'] += ord_psbl_qty
@@ -336,13 +328,11 @@ class KoreaInvestmentBroker:
                     nk200 = (resp_json.get('ctx_area_nk200', '') or '').strip()
 
                     if tr_cont in ['M', 'F'] and nk200:
-      
                         time.sleep(0.2)
                         continue
                     else:
                         break
                 else:
-         
                     break
         
         if api_success: return cash, holdings
@@ -365,7 +355,6 @@ class KoreaInvestmentBroker:
             if df.index.tz is None:
                 df.index = df.index.tz_localize('UTC').tz_convert(est)
             else:
-         
                 df.index = df.index.tz_convert(est)
 
             regular_market = df.between_time('09:30', '15:59').copy()
@@ -376,14 +365,12 @@ class KoreaInvestmentBroker:
 
             regular_market['Date'] = regular_market.index.date
             daily_stats = regular_market.groupby('Date').agg(
-       
                 Total_Vol_Price=('Vol_x_Price', 'sum'),
                 Total_Vol=('Volume', 'sum')
             )
 
             daily_stats['VWAP'] = np.where(daily_stats['Total_Vol'] > 0,
                                            daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'],
-           
                                            np.nan)
 
             daily_stats = daily_stats.dropna(subset=['VWAP'])
@@ -410,14 +397,12 @@ class KoreaInvestmentBroker:
             
             if df.empty: return None
      
-            
             df = _flatten_columns(df)
                  
             est = ZoneInfo('America/New_York')
             
             if df.index.tz is None:
                 df.index = df.index.tz_localize('UTC').tz_convert(est)
-          
             else:
                 df.index = df.index.tz_convert(est)
                 
@@ -434,7 +419,6 @@ class KoreaInvestmentBroker:
             regular_market = regular_market.dropna(subset=['Volume', 'High', 'Low', 'Close'])
             
             typical_price = (regular_market['High'] + regular_market['Low'] + regular_market['Close']) / 3.0
-         
             vol_price = typical_price * regular_market['Volume']
             
             cum_vol_price = vol_price.cumsum()
@@ -443,7 +427,6 @@ class KoreaInvestmentBroker:
             vwap_series = pd.Series(np.where(cum_vol > 0, cum_vol_price / cum_vol, np.nan), index=cum_vol.index).ffill() 
             current_vwap = float(vwap_series.iloc[-1]) if not vwap_series.empty else 0.0
            
-  
             if pd.isna(current_vwap):
                 current_vwap = 0.0
              
@@ -451,7 +434,6 @@ class KoreaInvestmentBroker:
                 'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'
             }).dropna()
             
- 
             if resampled.empty: return None
                 
             resampled['Vol_MA10'] = resampled['Volume'].rolling(10, min_periods=1).mean()
@@ -459,7 +441,6 @@ class KoreaInvestmentBroker:
             
             last_candle = resampled.iloc[-1]
             vol_ma10 = float(last_candle['Vol_MA10']) if not pd.isna(last_candle['Vol_MA10']) else float(last_candle['Volume'])
-      
             vol_ma20 = float(last_candle['Vol_MA20']) if not pd.isna(last_candle['Vol_MA20']) else float(last_candle['Volume'])
             
             latest_1m = regular_market.iloc[-1] 
@@ -467,14 +448,12 @@ class KoreaInvestmentBroker:
             return {
                 'open': float(last_candle['Open']),
                 'high': float(last_candle['High']),  
-          
                 'low': float(last_candle['Low']),    
                 'close': float(latest_1m['Close']), 
                 'volume': float(last_candle['Volume']), 
                 'vol_ma10': vol_ma10,
                 'vol_ma20': vol_ma20,
                 'vwap': current_vwap  
-           
             }
         except Exception as e:
             print(f"⚠️ [Broker] 실시간 5분봉 조회 실패 ({ticker}): {e}")
@@ -485,7 +464,6 @@ class KoreaInvestmentBroker:
             stock = yf.Ticker(ticker)
             hist = stock.history(period="1d", interval="1m", prepost=True, timeout=5)
             if not hist.empty: return float(hist['Close'].iloc[-1])
-     
             else: raise ValueError("YF 실시간 데이터 응답 지연 (timeout)") 
         except Exception as e:
             print(f"⚠️ [야후] 현재가 에러, 한투 API 우회 가동: {e}")
@@ -512,7 +490,6 @@ class KoreaInvestmentBroker:
                 if isinstance(output2, list) and len(output2) > 0: return float(output2[0].get('pask1', 0.0))
                 elif isinstance(output2, dict): return float(output2.get('pask1', 0.0))
         except Exception as e:
-      
             pass
         return 0.0
 
@@ -540,7 +517,6 @@ class KoreaInvestmentBroker:
                 now_est = datetime.datetime.now(est)
                 
                 cutoff_date = now_est.date()
-              
                 if now_est.time() <= datetime.time(16, 0, 30): cutoff_date -= datetime.timedelta(days=1)
                 
                 if hist.index.tzinfo is None: hist.index = hist.index.tz_localize('UTC').tz_convert(est)
@@ -581,7 +557,6 @@ class KoreaInvestmentBroker:
                     closes = [float(x['clos']) for x in output2[:5]]
                     return sum(closes) / len(closes)
         except Exception as e:
-   
             pass
         return 0.0
 
@@ -601,6 +576,47 @@ class KoreaInvestmentBroker:
             # MODIFIED: [V47.00 하이킨아시 파서 open 컬럼 강제 수혈 락온]
             df = df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'})
             df['time_est'] = df.index.strftime('%H%M00')
+            
+            # NEW: [V47 시계열 체력 측정 로직] 당일 최고가/최저가 및 발생 타임스탬프 캡처 및 영속화
+            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+            # 제4헌법 준수: 데이터 기아를 막기 위해 원자적 쓰기로 avwap_cache.json에 팩트 박제
+            try:
+                max_high = float(df['high'].max())
+                min_low = float(df['low'].min())
+                time_high_idx = df['high'].astype(float).idxmax()
+                time_low_idx = df['low'].astype(float).idxmin()
+                
+                time_high_str = df.loc[time_high_idx, 'time_est'] if not pd.isna(time_high_idx) else ""
+                time_low_str = df.loc[time_low_idx, 'time_est'] if not pd.isna(time_low_idx) else ""
+                
+                cache_file = "data/avwap_cache.json"
+                cache_data = {}
+                if os.path.exists(cache_file):
+                    try:
+                        with open(cache_file, 'r', encoding='utf-8') as f:
+                            cache_data = json.load(f)
+                    except Exception: pass
+                
+                if ticker not in cache_data:
+                    cache_data[ticker] = {}
+                    
+                cache_data[ticker]['day_high'] = max_high
+                cache_data[ticker]['day_low'] = min_low
+                cache_data[ticker]['time_high'] = time_high_str
+                cache_data[ticker]['time_low'] = time_low_str
+                cache_data[ticker]['date'] = datetime.datetime.now(est).strftime("%Y-%m-%d")
+                
+                dir_name = os.path.dirname(cache_file) or '.'
+                os.makedirs(dir_name, exist_ok=True)
+                fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
+                with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                    json.dump(cache_data, f_out, ensure_ascii=False, indent=4)
+                    f_out.flush()
+                    os.fsync(f_out.fileno())
+                os.replace(tmp_path, cache_file)
+            except Exception as e:
+                logging.error(f"🚨 [{ticker}] 시계열 체력 팩트 캐싱 실패: {e}")
+
             return df[['open', 'high', 'low', 'close', 'volume', 'time_est']]
         except Exception as e:
             return None
@@ -610,7 +626,6 @@ class KoreaInvestmentBroker:
         valid_orders = []
         fk200, nk200 = "", ""
         
-  
         for attempt in range(10):
             params = {
                 "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, 
@@ -618,7 +633,6 @@ class KoreaInvestmentBroker:
             }
             headers = self._get_header("TTTS3018R")
             url = f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-nccs"
-     
             res, resp_json = self._api_request("GET", url, headers, params=params)
             
             if res and resp_json.get('rt_cd') == '0':
@@ -626,7 +640,6 @@ class KoreaInvestmentBroker:
                 if isinstance(output, dict): output = [output]
                 valid_orders.extend([item for item in output if item.get('pdno') == ticker])
      
-                
                 tr_cont = res.headers.get('tr_cont', '') if hasattr(res, 'headers') else ''
                 fk200 = (resp_json.get('ctx_area_fk200', '') or '').strip()
                 nk200 = (resp_json.get('ctx_area_nk200', '') or '').strip()
@@ -638,7 +651,6 @@ class KoreaInvestmentBroker:
             else:
                 return False
                 
-     
         return valid_orders
 
     def get_unfilled_orders(self, ticker):
@@ -651,11 +663,10 @@ class KoreaInvestmentBroker:
         for i in range(3):
             orders = self.get_unfilled_orders_detail(ticker)
             if orders is False:
-       
                 return False
         
             if not orders: return True
-            
+         
             target_orders = orders
             if side == "BUY": target_orders = [o for o in orders if o.get('sll_buy_dvsn_cd') == '02']
             elif side == "SELL": target_orders = [o for o in orders if o.get('sll_buy_dvsn_cd') == '01']
@@ -667,7 +678,6 @@ class KoreaInvestmentBroker:
             
         final_orders = self.get_unfilled_orders_detail(ticker)
         if final_orders is False:
-    
             return False
             
         failed_orders = []
@@ -676,7 +686,6 @@ class KoreaInvestmentBroker:
         else: failed_orders = final_orders
             
         if failed_orders:
-    
             return False
              
         return True
@@ -714,18 +723,15 @@ class KoreaInvestmentBroker:
                 
                 for rp in [raw_p1, raw_p2, raw_p3]:
                     try:
-      
                         val = float(rp)
                         if val > 0:
                             o_price = val
                             break 
-     
                     except (TypeError, ValueError):
                         pass
                   
                 for tp in target_prices:
                     if o_price > 0 and abs(o_price - tp) < 0.005: 
-   
                         target_orders.append(o)
                         break
              
@@ -733,7 +739,6 @@ class KoreaInvestmentBroker:
             self.cancel_order(ticker, o.get('odno'))
             time.sleep(0.3)
              
-    
         return len(target_orders)
 
     def send_order(self, ticker, side, qty, price, order_type="LIMIT"):
@@ -754,7 +759,6 @@ class KoreaInvestmentBroker:
             elif order_type == "MOC": ord_dvsn = "33"
             elif order_type == "LOO": ord_dvsn = "02"
             elif order_type == "MOO": ord_dvsn = "31"
-     
             elif order_type == "AFTER_LIMIT": 
                 ord_dvsn = "00"  
             else: ord_dvsn = "00"
@@ -762,14 +766,12 @@ class KoreaInvestmentBroker:
             final_price = self._ceil_2(price)
             if order_type in ["MOC", "MOO"]: final_price = 0
             elif order_type not in ["MOC", "MOO"] and final_price <= 0.0:
-           
                 return {'rt_cd': '999', 'msg1': f'유효하지 않은 주문 가격: {price}'}
             
             body = {
                 "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd,
                 "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(final_price),
                 "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn 
-          
             }
             res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/order", "POST", body=body)
             
@@ -778,13 +780,11 @@ class KoreaInvestmentBroker:
             output = res.get('output', {})
             odno = output.get('ODNO', '') if isinstance(output, dict) else ''
             
-   
             if rt_cd != '0' and attempt == 0 and ("거래소" in msg1 or "시장" in msg1 or "exchange" in msg1.lower() or "코드" in msg1):
                 if ticker in self._excg_cd_cache:
                     del self._excg_cd_cache[ticker]
                 time.sleep(0.5)
                 continue
-       
                 
             return {'rt_cd': rt_cd, 'msg1': msg1, 'odno': odno}
             
@@ -794,7 +794,6 @@ class KoreaInvestmentBroker:
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         body = {
             "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd,
-          
             "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02",
             "ORD_QTY": "0", "OVRS_ORD_UNPR": "0", "ORD_SVR_DVSN_CD": "0"
         }
@@ -805,7 +804,6 @@ class KoreaInvestmentBroker:
         valid_execs = []
         odno_map = {}
         fk200, nk200 = "", ""
-        
         
         for attempt in range(10): 
             params = {
@@ -821,57 +819,46 @@ class KoreaInvestmentBroker:
             res, resp_json = self._api_request("GET", url, headers, params=params)
             
             if res and resp_json.get('rt_cd') == '0':
-           
                 output = resp_json.get('output', [])
                 if isinstance(output, dict): output = [output] 
                 for item in output:
                     try:
                         raw_qty = item.get('ft_ccld_qty') or '0'
-              
                         raw_unpr = item.get('ft_ccld_unpr3') or '0'
                         item_qty = float(raw_qty)
                         item_price = float(raw_unpr)
                         
-                     
                         if item_qty > 0:
                             odno = item.get('odno') or ''
                             if not odno:
                                 odno_map[f"__nk_{id(item)}"] = {
-         
                                     "item": dict(item),
                                     "total_qty": item_qty,
                                     "total_amt": item_qty * item_price
-       
                                  }
                             elif odno not in odno_map:
                                 odno_map[odno] = {
-                    
                                     # MODIFIED: [V49.10 런타임 붕괴 방어] 딕셔너리 내부 및 else 블록 들여쓰기 단차 교정
                                     "item": dict(item),
                                     "total_qty": item_qty,
-        
                                     "total_amt": item_qty * item_price
                                 }
                             else:
-                    
                                 odno_map[odno]["total_qty"] += item_qty
                                 odno_map[odno]["total_amt"] += (item_qty * item_price)
                              
                     except (TypeError, ValueError) as e:
-        
                         continue
-                        
+              
                 tr_cont = res.headers.get('tr_cont', '') if hasattr(res, 'headers') else ''
                 fk200 = (resp_json.get('ctx_area_fk200', '') or '').strip()
                 nk200 = (resp_json.get('ctx_area_nk200', '') or '').strip()
      
-                
                 if tr_cont in ['M', 'F'] and nk200:
                     time.sleep(0.3) 
                     continue
                 else: break 
             else:
-       
                  break
 
         for key, data in odno_map.items():
@@ -881,7 +868,6 @@ class KoreaInvestmentBroker:
             merged_item["ft_ccld_unpr3"] = str(avg_price)
             valid_execs.append(merged_item)
             
-  
         return valid_execs
 
     def get_genesis_ledger(self, ticker, limit_date_str=None):
@@ -893,7 +879,6 @@ class KoreaInvestmentBroker:
         final_qty = curr_qty
         final_avg = float(ticker_info.get('avg', 0.0))
         
-     
         if curr_qty == 0: return [], 0, 0.0
             
         ledger_records = []
@@ -918,39 +903,35 @@ class KoreaInvestmentBroker:
                 for ex in execs:
                     try:
                         side_cd = ex.get('sll_buy_dvsn_cd')
- 
                         exec_qty = int(float(ex.get('ft_ccld_qty') or '0'))
                         exec_price = float(ex.get('ft_ccld_unpr3') or '0')
                     except (TypeError, ValueError) as e:
                         # MODIFIED: [V49.10 런타임 붕괴 방어] 들여쓰기 오염 교정
                         continue
-                        
+     
                     record_qty = exec_qty
                     
                     if side_cd == "02": 
                         if curr_qty <= exec_qty: 
                             record_qty = curr_qty 
                             curr_qty = 0
-                   
                             genesis_reached = True
                         else: curr_qty -= exec_qty
                     else: curr_qty += exec_qty
                     
                     ledger_records.append({
-          
                         'date': f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}",
-                         'side': "BUY" if side_cd == "02" else "SELL",
+                        'side': "BUY" if side_cd == "02" else "SELL",
                         'qty': record_qty, 'price': exec_price
                     })
                  
-                    if genesis_reached: break
+                if genesis_reached: break
                         
             target_date -= datetime.timedelta(days=1)
             time.sleep(0.1) 
                 
         if curr_qty > 0 and loop_counter >= 365:
             ledger_records.append({
-            
                 'date': 'INCOMPLETE', 'side': 'UNKNOWN', 'qty': curr_qty, 'price': final_avg, 'is_incomplete': True
             })
                 
@@ -961,19 +942,17 @@ class KoreaInvestmentBroker:
         try:
             stock = yf.Ticker(ticker)
             splits = stock.splits
-        
+   
             if splits is not None and not splits.empty:
                 if last_date_str == "":
                     est = ZoneInfo('America/New_York')
                     seven_days_ago = datetime.datetime.now(est) - datetime.timedelta(days=7)
                     safe_last_date = seven_days_ago.strftime('%Y-%m-%d')
-             
                 else: safe_last_date = last_date_str
                     
                 for split_date_dt, ratio in splits.items():
                     if isinstance(split_date_dt, str):
                         split_date = split_date_dt[:10]
-                 
                     else:
                         split_date = pd.Timestamp(split_date_dt).strftime('%Y-%m-%d')
                     if split_date > safe_last_date: return float(ratio), split_date
@@ -991,20 +970,17 @@ class KoreaInvestmentBroker:
             # MODIFIED: [V49.10 런타임 붕괴 방어] 들여쓰기 오염 교정 (13 -> 12칸)
             class TargetFloat(float): pass
             
-    
             if target_index == "SOXX":
                 hv_val, weight, target_drop, base_amp = ve.get_soxl_target_drop_full()
                 ret = TargetFloat(target_drop)
                 ret.metric_val, ret.weight, ret.base_amp, ret.metric_name = hv_val, weight, base_amp, "SOXX HV"
                 ret.metric_base = round(hv_val / weight, 2) if weight > 0 else 25.0
-         
             else:
                 vxn_val, weight, target_drop, base_amp = ve.get_tqqq_target_drop_full()
                 ret = TargetFloat(target_drop)
                 ret.metric_val, ret.weight, ret.base_amp, ret.metric_name = vxn_val, weight, base_amp, "실시간 VXN"
                 ret.metric_base = round(vxn_val / weight, 2) if weight > 0 else 20.0
             
-     
             ret.is_panic = False
             ret.gap_pct = 0.0 
             return ret
@@ -1055,7 +1031,6 @@ class KoreaInvestmentBroker:
                 row['High'] - row['Low'],
                 abs(row['High'] - row['Prev_Close']) if not pd.isna(row['Prev_Close']) else 0,
                 abs(row['Low'] - row['Prev_Close']) if not pd.isna(row['Prev_Close']) else 0
-        
             ), axis=1)
             
             hist['ATR5'] = hist['TR'].rolling(window=5).mean()
@@ -1067,7 +1042,7 @@ class KoreaInvestmentBroker:
             if last_close > 0:
                 atr5_val  = last_row['ATR5']
                 atr14_val = last_row['ATR14']
-                 
+            
                 if pd.isna(atr5_val) or pd.isna(atr14_val):
                     return 0.0, 0.0
                

@@ -1,12 +1,16 @@
 # ==========================================================
 # FILE: telegram_avwap_console.py
 # ==========================================================
+# 🚨 MODIFIED: [V53.11 시계열 체력 듀얼 대칭 락온] 
+# 숏(SOXS) 진입 시 상승 체력 차단 필터 UI 팩트 교정 및 판별 기준 텍스트 대칭화
+# 🚨 MODIFIED: [V53.09 관제탑 UI 횡보장 킬 스위치 시각적 렌더링 강제 바이패스]
 # MODIFIED: [V47.00 하이킨아시 듀얼 모멘텀 추세 시스템 락온]
 # - 04:00 EST 프리마켓 1분봉 파서 스캔 확장 및 데이터 기아 해체
 # - 하이킨아시 5min 리샘플링 기반 3대 진입 조건(원웨이, 모멘텀, 체력) 락온
 # - 15:00 EST 오버나이트 존버(Hold) 모드 이식 및 투트랙 엑시트 렌더링
 # - 10:00 EST 단판 승부 및 조기퇴근(단일 출장) 셧다운 로직 영구 소각 (무한 스캔 개방)
 # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# NEW: [V47] 시계열 체력 필터 및 현재가 vs 실시간 VWAP 갭 조건 관제탑 렌더링 100% 통합
 # ==========================================================
 import logging
 import datetime
@@ -14,6 +18,8 @@ from zoneinfo import ZoneInfo
 import math
 import asyncio
 import pandas as pd
+import json
+import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class AvwapConsolePlugin:
@@ -46,6 +52,7 @@ class AvwapConsolePlugin:
         avg_vwap_5m = 0.0
         base_day_high, base_day_low, base_prev_c = 0.0, 0.0, 0.0
         base_reg_high, base_reg_low = 0.0, 0.0
+        base_curr_p = 0.0
         
         ha_status_text = "데이터 부족"
         ha_2_bullish_no_lower = False
@@ -60,8 +67,11 @@ class AvwapConsolePlugin:
                 base_hl = await asyncio.wait_for(asyncio.to_thread(self.broker.get_day_high_low, base_tkr), timeout=2.0)
                 base_day_high = float(base_hl[0]) if base_hl else 0.0
                 base_day_low = float(base_hl[1]) if base_hl else 0.0
+                
+                base_curr_p_val = await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, base_tkr), timeout=2.0)
+                base_curr_p = float(base_curr_p_val) if base_curr_p_val else 0.0
             except Exception as e:
-                logging.debug(f"🚨 기초자산 H/L/PrevC 스캔 에러: {e}")
+                logging.debug(f"🚨 기초자산 H/L/PrevC/CurrP 스캔 에러: {e}")
 
             avwap_ctx = None
             if hasattr(self.strategy, 'v_avwap_plugin'):
@@ -102,6 +112,9 @@ class AvwapConsolePlugin:
                         base_curr_vwap = df['vol_tp'].sum() / cum_vol
                     else:
                         base_curr_vwap = float(df['close'].iloc[-1])
+                    
+                    if base_curr_p == 0.0:
+                        base_curr_p = float(df['close'].iloc[-1])
                         
                     recent_5 = df.tail(5)
                     sum_vol_5 = recent_5['vol'].sum()
@@ -132,6 +145,7 @@ class AvwapConsolePlugin:
                             df_5m['HA_High'] = df_5m[['high', 'HA_Open', 'HA_Close']].max(axis=1)
                             df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
                             
+                            # 0.01$ 갭 필터링
                             df_5m['No_Lower_Wick'] = (df_5m['HA_Open'] - df_5m['HA_Low']) <= 0.01
                             df_5m['No_Upper_Wick'] = (df_5m['HA_High'] - df_5m['HA_Open']) <= 0.01
                             df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
@@ -153,7 +167,8 @@ class AvwapConsolePlugin:
                         logging.error(f"관제탑 HA 연산 실패: {e}")
 
                 else:
-                    base_curr_vwap = float(df_1m['close'].iloc[-1])
+                    base_curr_p = float(df_1m['close'].iloc[-1]) if base_curr_p == 0.0 else base_curr_p
+                    base_curr_vwap = base_curr_p
                     avg_vwap_5m = base_curr_vwap
 
         except asyncio.TimeoutError:
@@ -169,14 +184,9 @@ class AvwapConsolePlugin:
             b_low_pct = ((base_day_low - base_prev_c) / base_prev_c) * 100
             msg += f"▫️ 당일 고가(프리포함): <b>${base_day_high:.2f}</b> ({b_high_pct:+.2f}%)\n"
             msg += f"▫️ 당일 저가(프리포함): <b>${base_day_low:.2f}</b> ({b_low_pct:+.2f}%)\n"
+            msg += f"▫️ 현재가(1T 종가): <b>${base_curr_p:.2f}</b>\n"
             
-        if base_prev_c > 0 and base_reg_high > 0 and base_reg_low > 0:
-            if base_reg_high > base_prev_c and base_reg_low < base_prev_c:
-                zero_line_status = "🔴 관통 (추세 붕괴 / 횡보장 셧다운)"
-            else:
-                zero_line_status = "🟢 방어 (추세 유지 / 원웨이)"
-            msg += f"▫️ 횡보 감시: <b>{zero_line_status}</b>\n"
-        
+        # 🚨 MODIFIED: [V53.09 관제탑 UI 횡보장 킬 스위치 시각적 렌더링 강제 바이패스]
         if base_prev_vwap > 0:
             msg += f"▫️ 전일 VWAP: <b>${base_prev_vwap:,.2f}</b>\n"
             rt_gap = ((base_curr_vwap - base_prev_vwap) / base_prev_vwap) * 100
@@ -190,6 +200,30 @@ class AvwapConsolePlugin:
                 msg += f"▫️ 5분 평균 VWAP: <b>${avg_vwap_5m:,.2f}</b>\n"
 
         keyboard = []
+
+        # NEW: [V47] 시계열 체력 스캔 팩트 로드 (비동기 래핑)
+        trend_sequence = "PENDING"
+        try:
+            def _read_avwap_cache():
+                cache_file = "data/avwap_cache.json"
+                if os.path.exists(cache_file):
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        return json.load(f)
+                return {}
+            avwap_cache_data = await asyncio.to_thread(_read_avwap_cache)
+            base_cache_info = avwap_cache_data.get(base_tkr, {})
+            t_high = base_cache_info.get('time_high', "")
+            t_low = base_cache_info.get('time_low', "")
+            if t_high and t_low:
+                # 🚨 [V53.11 듀얼 대칭 락온] 시계열 비교 팩트 정밀 교정
+                if t_high < t_low:
+                    trend_sequence = "BEAR"
+                elif t_low < t_high:
+                    trend_sequence = "BULL"
+                else:
+                    trend_sequence = "PENDING"
+        except Exception as e:
+            logging.debug(f"시계열 체력 스캔 렌더링 에러: {e}")
 
         for t in active_avwap:
             if not tracking_cache.get(f"AVWAP_INIT_{t}"):
@@ -245,13 +279,21 @@ class AvwapConsolePlugin:
             trend_str = "🔴 <b>조건 미달 (실시간 추세 돌파 감시)</b>"
             
             cond1_met, cond2_met, cond3_met = False, False, False
+            cond_seq = True
             rem_5_pct_console = 0.0
 
+            # 🚨 [V53.11] 듀얼 체력 대칭 락온 (롱/숏 거울 구조 시각화)
+            if t == "SOXL" and trend_sequence == "BEAR":
+                cond_seq = False
+            elif t == "SOXS" and trend_sequence == "BULL":
+                cond_seq = False
+
             if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
+                is_neg_gap_state = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
                 if t == "SOXS":
-                    cond1_met = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
+                    cond1_met = is_neg_gap_state
                 else:
-                    cond1_met = (base_day_high > base_prev_c) and (base_day_low > base_prev_c)
+                    cond1_met = not is_neg_gap_state
                     
             if prev_c > 0 and day_high > 0 and day_low > 0:
                 actual_gap_dollar = day_high - day_low
@@ -260,23 +302,25 @@ class AvwapConsolePlugin:
                     rem_5_pct_console = atr5 - actual_gap_pct
                     cond3_met = (rem_5_pct_console >= 1.0)
                     
-            if base_prev_vwap > 0 and base_curr_vwap > 0:
+            if base_curr_p > 0 and base_curr_vwap > 0:
                 if t == "SOXS":
-                    cond2_met = (base_curr_vwap < base_prev_vwap) and ha_2_bearish_no_upper
+                    cond2_met = (base_curr_p < base_curr_vwap) and ha_2_bearish_no_upper
                 else:
-                    cond2_met = (base_curr_vwap > base_prev_vwap) and ha_2_bullish_no_lower
+                    cond2_met = (base_curr_p > base_curr_vwap) and ha_2_bullish_no_lower
             
             c1_str = "🟢" if cond1_met else "🔴"
             c2_str = "🟢" if cond2_met else "🔴"
             c3_str = "🟢" if cond3_met else "🔴"
+            c_seq_str = "🟢" if cond_seq else "🔴"
 
+            # HTML Entity escape 적용 (런타임 에러 방어)
             if t == "SOXS":
-                criteria = "H/L방향(-) &amp; HA모멘텀(-) &amp; 체력(&gt;=1%)"
+                criteria = "H/L방향(-) &amp; 시계열하락 &amp; HA모멘텀(현재가&lt;VWAP) &amp; 체력(&gt;=1%)"
             else:
-                criteria = "H/L방향(+) &amp; HA모멘텀(+) &amp; 체력(&gt;=1%)"
+                criteria = "H/L방향(+) &amp; 시계열상승 &amp; HA모멘텀(현재가&gt;VWAP) &amp; 체력(&gt;=1%)"
 
-            if base_prev_vwap > 0 and base_curr_vwap > 0 and prev_c > 0 and atr5 > 0:
-                if cond1_met and cond2_met and cond3_met:
+            if base_curr_p > 0 and base_curr_vwap > 0 and prev_c > 0 and atr5 > 0:
+                if cond1_met and cond2_met and cond3_met and cond_seq:
                     momentum_met = True
                     trend_str = "🟢 <b>조건 충족 (타격 개시 대기)</b>"
                 else:
@@ -287,11 +331,18 @@ class AvwapConsolePlugin:
             msg += f"▫️ 판별 기준: <code>{criteria}</code>\n"
             msg += f"▫️ <b>[ 하이킨아시 듀얼 모멘텀 조건 ]</b>\n"
             msg += f"   {c1_str} 고저가 방향 원웨이 일치\n"
+            
+            # 🚨 [V53.11] 롱/숏 대칭 시계열 텍스트 분기
+            if t == "SOXL":
+                seq_text = "상승/대기" if cond_seq else "하락세(Time_High&lt;Time_Low)"
+            else:
+                seq_text = "하락/대기" if cond_seq else "상승세(Time_Low&lt;Time_High)"
+            msg += f"   {c_seq_str} 시계열 체력 통과 ({seq_text})\n"
+                
             msg += f"   {c2_str} HA 모멘텀 일치 (현재 5T: {ha_status_text})\n"
             msg += f"   {c3_str} 잔여 체력 1% 이상 (현재: {rem_5_pct_console:.1f}%)\n"
             msg += f"▫️ 타격 상태: {trend_str}\n"
 
-            # 🚨 [V47.00] 다중 출장 개방 무한 타격 텍스트 교체
             strike_icon_txt = "무한 출장 (실시간 추세 돌파 락온)"
             if strikes > 0:
                 msg += f"▫️ 모드: <b>{strike_icon_txt} ({strikes}회차 교전 완료)</b>\n"
@@ -388,7 +439,6 @@ class AvwapConsolePlugin:
                 status_txt = "🎯 딥매수 완료 (익절 감시중)"
             else:
                 try:
-                    base_curr_p = float(df_1m['close'].iloc[-1]) if df_1m is not None and not df_1m.empty else 0.0
                     avwap_state_dict = {"strikes": strikes}
                     
                     decision = self.strategy.v_avwap_plugin.get_decision(

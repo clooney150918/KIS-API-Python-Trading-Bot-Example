@@ -7,6 +7,9 @@
 # 🚨 [V27.14 그랜드 수술] 코파일럿 합작 - Atomic Write(장부 증발 방어), Thread Lock(동시접근 덮어쓰기 차단), 유령 로트(0주) 무한루프 소각, EST 타임존 병합 통일 및 백업 자가 치유(Self-Healing) 파이프라인 완벽 구축
 # 🚨 [V27.15 핫픽스] 초기화 Torn Write 방어, add_lot $0.00 주입 차단, pop_lots 미달 차감 감사 추적 및 sync_with_broker 런타임 붕괴 방어막 이식
 # MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
+# 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
+# 외부 모듈(telegram_callbacks, telegram_states, telegram_sync_engine)이 
+# 파일 I/O를 직접 수행하며 발생하는 락(Lock) 우회 맹점을 차단하기 위한 4대 스레드 세이프 전용 메서드 신설.
 # ==========================================================
 import os
 import json
@@ -257,3 +260,42 @@ class QueueLedger:
             data[ticker] = q
             self._save_unsafe(data)
             return True
+
+    # NEW: [V55.00 오퍼레이션 SSOT - 텔레그램 전용 스레드 세이프 메서드 4종 신설]
+    def delete_lot(self, ticker, target_date):
+        """특정 날짜(target_date)의 지층을 핀셋으로 도려내어 삭제합니다."""
+        with self._lock:
+            data = self._load_unsafe()
+            q = data.get(ticker, [])
+            new_q = [lot for lot in q if lot.get('date') != target_date]
+            data[ticker] = new_q
+            self._save_unsafe(data)
+
+    def edit_lot(self, ticker, target_date, qty, price):
+        """특정 날짜(target_date)의 지층 수량과 평단가를 정밀 수정합니다."""
+        qty_int = int(float(qty or 0))
+        price_f = float(price or 0.0)
+        with self._lock:
+            data = self._load_unsafe()
+            q = data.get(ticker, [])
+            for lot in q:
+                if lot.get('date') == target_date:
+                    lot['qty'] = qty_int
+                    lot['price'] = round(price_f, 4)
+                    break
+            data[ticker] = q
+            self._save_unsafe(data)
+
+    def clear_queue(self, ticker):
+        """해당 종목의 큐 장부를 100% 완전 소각(초기화)합니다."""
+        with self._lock:
+            data = self._load_unsafe()
+            data[ticker] = []
+            self._save_unsafe(data)
+
+    def overwrite_queue(self, ticker, q_data):
+        """수동 매수(MANUAL_SYNC) 등 팩트 지층 배열을 강제 주입(덮어쓰기)합니다."""
+        with self._lock:
+            data = self._load_unsafe()
+            data[ticker] = q_data
+            self._save_unsafe(data)

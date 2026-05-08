@@ -6,6 +6,9 @@
 # MODIFIED: [V44.45 헌법 수술] 파일 I/O 원자적 쓰기(Atomic Write) 엔진 전면 이식 및 런타임 붕괴 방어막(fsync) 하드코딩 완료.
 # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보] 큐 장부에 존재하지 않는 _load 메서드 호출 찌꺼기 100% 소각.
 # MODIFIED: [맹점 4 수술] 텔레그램 상태 제어 시 발생하는 cfg.get_seed 동기 I/O 블로킹 뇌관 전면 비동기 래핑 완료.
+# 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
+# 지층 수정(EDITQ_) 시 존재하던 지저분한 다이렉트 파일 I/O(open, json, tempfile) 로직을 전면 적출하고, 
+# QueueLedger의 스레드 세이프(Thread-safe) 코어 메서드(edit_lot)로 직결(Lock-on)하여 동시성 충돌 뇌관 완전 해체.
 # ==========================================================
 import logging
 import datetime
@@ -87,45 +90,11 @@ class TelegramStates:
                 except Exception:
                     pass
 
-                # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] 파일 I/O 비동기 래핑 및 원자적 쓰기 강제
-                def _update_q_ledger():
-                    q_file = "data/queue_ledger.json"
-                    all_q = {}
-                    if os.path.exists(q_file):
-                        try:
-                            with open(q_file, 'r', encoding='utf-8') as f:
-                                all_q = json.load(f)
-                        except Exception:
-                            pass
-                    
-                    ticker_q = all_q.get(ticker, [])
-                    for item in ticker_q:
-                        if item.get('date') == target_date:
-                            item['qty'] = qty
-                            item['price'] = price
-                            break
-                    
-                    all_q[ticker] = ticker_q
-                    
-                    dir_name = os.path.dirname(q_file) or '.'
-                    os.makedirs(dir_name, exist_ok=True)
-                    fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-                    
-                    try:
-                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                            json.dump(all_q, f_out, ensure_ascii=False, indent=4)
-                            f_out.flush()
-                            os.fsync(f_out.fileno())
-                        os.replace(tmp_path, q_file)
-                    except Exception as e:
-                        if os.path.exists(tmp_path):
-                            os.remove(tmp_path)
-                        raise e
-                        
-                    # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보]
-                    # (기존 hasattr(self.queue_ledger, '_load') 찌꺼기 100% 영구 소각 완료)
-                            
-                await asyncio.to_thread(_update_q_ledger)
+                # 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT] 텔레그램 다이렉트 파일 I/O 및 락 우회 병목 영구 소각
+                # 기존 _update_q_ledger 내부 함수(json.dump, tempfile 등)를 전면 적출하고 
+                # QueueLedger의 Thread-safe 코어 메서드인 edit_lot을 비동기(to_thread) 래핑하여 직결 완료.
+                if getattr(self, 'queue_ledger', None):
+                    await asyncio.to_thread(self.queue_ledger.edit_lot, ticker, target_date, qty, price)
                 
                 del controller.user_states[chat_id]
                 short_date = target_date[:10]
@@ -178,7 +147,7 @@ class TelegramStates:
                 
                 # MODIFIED: [맹점 4 수술] 파일 I/O 동기 블로킹 비동기 래핑
                 curr = await asyncio.to_thread(self.cfg.get_seed, ticker)
-                
+
                 new_v = curr + val if action == "ADD" else (max(0, curr - val) if action == "SUB" else val)
                 await asyncio.to_thread(self.cfg.set_seed, ticker, new_v)
                 await update.message.reply_text(f"✅ [{ticker}] 시드 변경: ${new_v:,.0f}")

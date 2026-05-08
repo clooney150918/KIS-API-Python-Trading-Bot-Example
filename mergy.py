@@ -31,7 +31,6 @@ TARGET_FILES = [
     "telegram_view.py",
     "version_history.py",
     "volatility_engine.py",
-    "vwap_data.py"
 ]
 
 with open(output_filename, 'w', encoding='utf-8') as outfile:

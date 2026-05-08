@@ -8,6 +8,9 @@
 # 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 사용자가 설정하는 커스텀 목표 수익률(Target) 및 근무 모드(조기퇴근/다중출장) 파라미터를 하위 플러그인(strategy_v_avwap)으로 전달하는 라우터 배선 복구 완료.
 # 🚨 MODIFIED: [V44.03 AVWAP 매수 방어] **kwargs 배선 개통으로 5일 ATR 등 신규 파라미터 주입 호환성 확보
 # 🚨 MODIFIED: [V44.61 팩트 교정] VWAP 지배력(Dominance) 분석 시 프리마켓 거래량 노이즈 원천 차단 및 정규장 100% 락온
+# 🚨 MODIFIED: [V54.06 SSOT 코어 통일 및 Split-Brain 영구 소각]
+# 1) V_REV 모드 판별 시 억지스러운 is_active 플래그 의존도를 100% 소각하고, version="V_REV" 자체를 단일 진실 공급원(SSOT)으로 락온.
+# 2) get_plan 내부 V_REV 더미 반환 시 is_reverse=True 로 강제 결속하여 UI 렌더링 엇박자(프랑켄슈타인 맹점) 완벽 해체.
 # ==========================================================
 import logging
 import pandas as pd
@@ -145,9 +148,13 @@ class InfiniteStrategy:
                 is_snapshot_mode=is_snapshot_mode
             )
         elif version == "V_REV":
+            # 🚨 MODIFIED: [V54.06 SSOT 코어 통일 및 Split-Brain 영구 소각]
+            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+            # V_REV 모드라면 억지스러운 is_active 플래그 의존도를 완전히 소각하고 is_reverse를 True로 강제 락온(SSOT).
+            # 이를 통해 텔레그램 지시서 렌더링 시 발생하는 공수 스플릿 브레인(Split-Brain) 현상을 100% 원천 차단함.
             plan = {
                 'core_orders': [], 'bonus_orders': [], 'orders': [],
-                't_val': 0.0, 'is_reverse': False, 'star_price': 0.0, 'one_portion': 0.0
+                't_val': 0.0, 'is_reverse': True, 'star_price': 0.0, 'one_portion': 0.0
             }
         else:
             # MODIFIED: [V44.58 라우팅 누수 디커플링 붕괴 엣지 케이스 수술] v14_plugin.get_plan 호출 시 is_snapshot_mode 파라미터 배선 팩트 복구 완료

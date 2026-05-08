@@ -430,7 +430,6 @@ class TelegramController:
         latest_version = await asyncio.to_thread(self.cfg.get_latest_version) 
         msg = self.view.get_start_message(target_hour, season_icon, latest_version) 
         await update.message.reply_text(msg, parse_mode='HTML')
-
     async def cmd_sync(self, update, context):
         if not self._is_admin(update):
             return
@@ -619,12 +618,15 @@ class TelegramController:
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
                  
-                if cached_snap and "orders" in cached_snap and logic_qty > 0:
+                # 🚨 MODIFIED: [V-REV 지시서 매도 가이던스 디커플링 누수 완벽 수술]
+                # 예방적 덫 전면 소각으로 인해 스냅샷의 orders 리스트가 비어있음에도 "orders" 키 존재 여부만으로 
+                # 분기를 타서 큐(Queue) 역산 로직(elif)을 스킵해버리는 치명적 시각적 맹점 원천 차단
+                snap_sells_for_ui = [o for o in cached_snap.get("orders", []) if o.get('side') == 'SELL' and "잭팟" not in o.get('desc', '')] if cached_snap else []
+                if cached_snap and snap_sells_for_ui and logic_qty > 0:
                     sell_idx = 1
-                    for o in cached_snap["orders"]:
-                        if o.get('side') == 'SELL' and "잭팟" not in o.get('desc', ''):
-                            v_rev_guidance += f" 🔵 매도{sell_idx}(Pop{sell_idx}) ${o['price']:.2f} <b>{o['qty']}주</b> ({tag})\n"
-                            sell_idx += 1
+                    for o in snap_sells_for_ui:
+                        v_rev_guidance += f" 🔵 매도{sell_idx}(Pop{sell_idx}) ${o['price']:.2f} <b>{o['qty']}주</b> ({tag})\n"
+                        sell_idx += 1
                             
                     if not is_manual_vwap:
                         if 'avg_price' in cached_snap:

@@ -116,6 +116,7 @@ async def scheduled_volatility_scan(context):
             print(f"⚠️ 옴니 매트릭스 판별 실패: {regime_data.get('msg')}")
 
         active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
+        
         if not active_tickers:
             print("📊 현재 운용 중인 종목이 없습니다.")
         else:
@@ -126,17 +127,18 @@ async def scheduled_volatility_scan(context):
                 
                 # 🚨 MODIFIED: [V44.65 엣지 타임라인 동기화 및 오프닝 휩소 원천 락다운]
                 # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
+                # MODIFIED: [V53.05 제7헌법 타임아웃 10초 절대 락온 팩트 교정]
                 try:
                     weight_data = await asyncio.wait_for(
                         asyncio.to_thread(vol_engine.calculate_weight, target_base),
-                        timeout=15.0
+                        timeout=10.0
                     )
                     raw_weight = weight_data.get('weight', 1.0) if isinstance(weight_data, dict) else weight_data
                     real_weight = float(raw_weight)
                     if not math.isfinite(real_weight):
                         raise ValueError(f"비정상 수학 수치 산출: {real_weight}")
                 except asyncio.TimeoutError:
-                    logging.warning(f"[{ticker}] 변동성 지표 산출 타임아웃 (15초 초과). 중립 안전마진(1.0) 강제 적용.")
+                    logging.warning(f"[{ticker}] 변동성 지표 산출 타임아웃 (10초 초과). 중립 안전마진(1.0) 강제 적용.")
                     real_weight = 1.0
                 except Exception as e:
                     logging.warning(f"[{ticker}] 변동성 지표 산출 실패. 중립 안전마진(1.0) 강제 적용: {e}")

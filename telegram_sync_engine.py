@@ -10,6 +10,9 @@
 # 🚨 MODIFIED: [V47.00 AVWAP 오버나이트 홀딩 락온] KIS 체결 원장 스캔 시 AVWAP 당일 체결량 수학적 디커플링 이식 완료
 # 🚨 MODIFIED: [V47.01 런타임 즉사 방어] _sync_escrow_cash 내부 IndentationError 팩트 100% 교정
 # 🚨 MODIFIED: [V49.02 런타임 붕괴 완벽 수술] 0주 졸업 판별 로직 내 last_sell_dt 스코프 전진 배치 및 로깅 구문 팩트 종속화 적용으로 UnboundLocalError 영구 소각 완료
+# 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
+# process_auto_sync 실행 중 MANUAL_BUY 및 MANUAL_SYNC 감지 시 작동하던 _write_q_manual, _write_q_file 등의
+# 다이렉트 파일 I/O 로직을 100% 적출하고, QueueLedger의 스레드 세이프 코어 메서드(overwrite_queue)로 락온 완료.
 # ==========================================================
 import logging
 import datetime
@@ -288,7 +291,7 @@ class TelegramSyncEngine:
                             else:
                                 calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
                                 logging.info(f"🛡️ [{ticker}] CALIB_SELL 0달러 폴백 방어: 원장 결측으로 기존 장부 평단가(${calib_price:.4f})를 강제 주입했습니다.")
-                                
+                            
                             calib_avg = temp_sim_avg
                         elif calib_side == "BUY" and actual_avg <= 0.0:
                             calib_price = temp_sim_avg if temp_sim_avg > 0 else (temp_avg if temp_avg > 0 else 0.01)
@@ -324,6 +327,7 @@ class TelegramSyncEngine:
                     
                     if gap_qty != 0:
                         await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] 통합 메인 장부(MAIN LEDGER) 비파괴 보정 완료!</b>\n▫️ KIS 실잔고 오차 수량({gap_qty}주)을 역사 보존 상태로 안전하게 교정했습니다.", parse_mode='HTML')
+                
                     elif exec_today_buy > 0 or exec_today_sell > 0:
                         logging.info(f"📜 [{ticker}] 당일 데이트레이딩 체결 원장(제로섬 회귀)이 메인 장부에 완벽히 복원 기입되었습니다.")
 
@@ -461,30 +465,10 @@ class TelegramSyncEngine:
                                 })
                                 vrev_ledger_qty = tot_q
                                 
-                                q_file = "data/queue_ledger.json"
+                                # MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
+                                # 기존 _write_q_file 등 다이렉트 파일 조작 코드를 100% 소각하고 QueueLedger의 스레드 세이프 코어 메서드(overwrite_queue)로 락온 완료.
                                 try:
-                                    def _read_all_q(f_path):
-                                        if os.path.exists(f_path):
-                                            with open(f_path, 'r', encoding='utf-8') as f:
-                                                return json.load(f)
-                                        return {}
-                                    
-                                    all_q = await asyncio.to_thread(_read_all_q, q_file)
-                                    all_q[ticker] = q_data_before
-                                    
-                                    def _write_q_file(q_data_dict, file_path):
-                                        os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else '.', exist_ok=True)
-                                        fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(file_path) if os.path.dirname(file_path) else '.')
-                                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                                            json.dump(q_data_dict, f_out, indent=4, ensure_ascii=False)
-                                            f_out.flush()
-                                            os.fsync(f_out.fileno())
-                                        os.replace(tmp_path, file_path)
-                                        
-                                    await asyncio.to_thread(_write_q_file, all_q, q_file)
-                                    
-                                    # 🚨 [2단계 수술] 여기서 남아있던 hasattr(self.queue_ledger...) 호출부 전면 소각
-                                    
+                                    await asyncio.to_thread(self.queue_ledger.overwrite_queue, ticker, q_data_before)
                                     logging.info(f"🔧 [{ticker}] 미동기화 수동 매수 물량({missing_qty}주, 진성단가 ${missing_price})을 졸업 큐에 다이렉트 영속화하여 PnL 오차 교정 및 스냅샷 충돌 방어 완료.")
                                 except Exception as e:
                                     logging.error(f"🚨 MANUAL_SYNC LIFO 큐 파일 I/O 영속화 실패: {e}")
@@ -542,7 +526,7 @@ class TelegramSyncEngine:
                         if _vrev_snap_ok:
                             msg = f"🎉 <b>[{ticker} V-REV 잭팟 스윕(전량 익절) 감지!]</b>\n▫️ 잔고가 0주가 되어 LIFO 큐 지층을 100% 소각(초기화)했습니다."
                             if added_seed > 0:
-                                 msg += f"\n💸 <b>자동 복리 +${added_seed:,.0f}</b> 이 다음 운용 시드에 완벽하게 추가되었습니다!"
+                                msg += f"\n💸 <b>자동 복리 +${added_seed:,.0f}</b> 이 다음 운용 시드에 완벽하게 추가되었습니다!"
                             await context.bot.send_message(chat_id, msg, parse_mode='HTML')
                             
                             if snapshot:
@@ -645,30 +629,10 @@ class TelegramSyncEngine:
                                 "exec_id": f"MANUAL_BUY_{int(time.time())}"
                             })
                             
-                            q_file = "data/queue_ledger.json"
+                            # MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
+                            # 수동 매수(MANUAL_BUY) 파이프라인의 파일 I/O 찌꺼기를 도려내고 overwrite_queue 코어 메서드로 직결.
                             try:
-                                def _read_all_q_manual(f_path):
-                                    if os.path.exists(f_path):
-                                        with open(f_path, 'r', encoding='utf-8') as f:
-                                            return json.load(f)
-                                        return {}
-                                
-                                all_q = await asyncio.to_thread(_read_all_q_manual, q_file)
-                                all_q[ticker] = q_data
-                                
-                                def _write_q_manual(q_dict, file_path):
-                                    os.makedirs(os.path.dirname(file_path) if os.path.dirname(file_path) else '.', exist_ok=True)
-                                    fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(file_path) if os.path.dirname(file_path) else '.')
-                                    with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                                        json.dump(q_dict, f_out, indent=4, ensure_ascii=False)
-                                        f_out.flush()
-                                        os.fsync(f_out.fileno())
-                                    os.replace(tmp_path, file_path)
-                                    
-                                await asyncio.to_thread(_write_q_manual, all_q, q_file)
-                                
-                                # 🚨 [2단계 수술] 여기서 남아있던 hasattr(self.queue_ledger, 'data') 찌꺼기 전면 소각
-                                
+                                await asyncio.to_thread(self.queue_ledger.overwrite_queue, ticker, q_data)
                                 logging.info(f"🔧 [{ticker}] 수동 매수 감지! KIS 실잔고에 맞춰 LIFO 큐에 신규 지층({gap_qty}주, 진성단가 ${real_buy_price}) 다이렉트 편입 및 파일 영속화 완료.")
                                 await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 수동 매수 편입 완료!</b>\n▫️ KIS 실잔고에 맞춰 신규 지층(<b>{gap_qty}주</b>, 추정단가 ${real_buy_price})을 정밀 추가했습니다.", parse_mode='HTML')
                             except Exception as e:
