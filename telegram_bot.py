@@ -9,6 +9,8 @@
 # 🚨 MODIFIED: [맹점 4 수술] 텔레그램 명령어 호출 시 발생하는 모든 동기 I/O(cfg 속성 조회) 전면 비동기 래핑 완료.
 # 🚨 MODIFIED: [NameError 픽스] ticker_data_list 매핑 시 safe_seed 변수명 불일치 런타임 에러 팩트 교정 완료.
 # 🚨 MODIFIED: [V44.54 TypeError 코루틴 비동기 래핑] is_update_allowed 및 restart_daemon 호출부 await 팩트 교정 완료.
+# 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT] cmd_add_q, cmd_clear_q 내부 다이렉트 파일 I/O 영구 소각 및 QueueLedger 스레드 세이프 코어 메서드 직결.
+# 🚨 MODIFIED: [V59.04 UI 콜백 런타임 붕괴 방어] 콜백 쿼리로 명령어 호출 시 update.message가 None이 되어 발생하는 AttributeError 완벽 수술. target_msg 팩트 브릿지 탑재.
 # ==========================================================
 import logging
 import datetime
@@ -52,7 +54,7 @@ class TelegramController:
     def _is_admin(self, update: Update):
         if self.admin_id is None:
             self.admin_id = self.cfg.get_chat_id()
-            
+             
         if self.admin_id is None:
             print("⚠️ 보안 경고: ADMIN_CHAT_ID가 설정되지 않아 알 수 없는 사용자의 접근을 차단했습니다.")
             return False
@@ -63,7 +65,7 @@ class TelegramController:
         est = ZoneInfo('America/New_York')
         now_est = datetime.datetime.now(est)
         is_dst = now_est.dst() != datetime.timedelta(0)
-        
+         
         if is_dst:
             return (17, "🌞 <b>서머타임 적용 (Summer)</b>")
         else:
@@ -74,7 +76,7 @@ class TelegramController:
     async def _get_market_status(self):
         est = ZoneInfo('America/New_York')
         now = datetime.datetime.now(est)
-        
+         
         def _fetch_schedule():
             nyse = mcal.get_calendar('NYSE')
             return nyse.schedule(start_date=now.date(), end_date=now.date())
@@ -170,7 +172,7 @@ class TelegramController:
                     await asyncio.to_thread(self.cfg.set_avwap_target_profit, ticker, val)
                     if ticker == "SOXL":
                         await asyncio.to_thread(self.cfg.set_avwap_target_profit, "SOXS", val)
-                        
+                         
                 self.user_states.pop(chat_id, None)
                 
                 if 'app_data' not in context.bot_data:
@@ -217,7 +219,9 @@ class TelegramController:
         if not self._is_admin(update):
             return
             
-        status_msg = await update.message.reply_text("⏳ <b>[AVWAP 듀얼 모멘텀 관제탑]</b>\n레이더망을 가동하여 시장 데이터를 스캔 중...")
+        # 🚨 MODIFIED: [V59.04 UI 콜백 런타임 붕괴 방어] 콜백 쿼리로 호출 시 AttributeError 원천 차단
+        target_msg = update.callback_query.message if update.callback_query else update.message
+        status_msg = await target_msg.reply_text("⏳ <b>[AVWAP 듀얼 모멘텀 관제탑]</b>\n레이더망을 가동하여 시장 데이터를 스캔 중...", parse_mode='HTML')
         
         try:
             from telegram_avwap_console import AvwapConsolePlugin
@@ -323,45 +327,24 @@ class TelegramController:
             except Exception:
                 pass
 
-            def _write_add_q():
-                q_file = "data/queue_ledger.json"
-                all_q = {}
-                if os.path.exists(q_file):
-                    try:
-                        with open(q_file, 'r', encoding='utf-8') as f:
-                            all_q = json.load(f)
-                    except Exception:
-                        pass
-                        
-                ticker_q = all_q.get(ticker, [])
-                ticker_q.append({
-                    "qty": qty,
-                    "price": price,
-                    "date": f"{date_str} 23:59:59", 
-                    "type": "MANUAL_OVERRIDE"
-                })
-                ticker_q.sort(key=lambda x: x.get('date', ''), reverse=True)
-                all_q[ticker] = ticker_q
-                
-                dir_name = os.path.dirname(q_file) or '.'
-                os.makedirs(dir_name, exist_ok=True)
-                fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-                try:
-                    with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                        json.dump(all_q, f_out, ensure_ascii=False, indent=4)
-                        f_out.flush()
-                        os.fsync(f_out.fileno())
-                    os.replace(tmp_path, q_file)
-                except Exception as e:
-                    if os.path.exists(tmp_path):
-                        os.remove(tmp_path)
-                    raise e
-                    
-            await asyncio.to_thread(_write_add_q)
+            # MODIFIED: [V55.00 오퍼레이션 SSOT] 텔레그램 다이렉트 파일 I/O 영구 소각 및 코어 메서드 직결
+            if not getattr(self, 'queue_ledger', None):
+                from queue_ledger import QueueLedger
+                self.queue_ledger = QueueLedger()
+            
+            q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
+            q_data.append({
+                "qty": qty,
+                "price": price,
+                "date": f"{date_str} 23:59:59", 
+                "type": "MANUAL_OVERRIDE"
+            })
+            q_data.sort(key=lambda x: x.get('date', ''), reverse=True)
+            await asyncio.to_thread(self.queue_ledger.overwrite_queue, ticker, q_data)
             
             chat_id = update.effective_chat.id
             if ticker not in self.sync_engine.sync_locks:
-                self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+                 self.sync_engine.sync_locks[ticker] = asyncio.Lock()
             if not self.sync_engine.sync_locks[ticker].locked():
                 await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
 
@@ -382,34 +365,13 @@ class TelegramController:
             
         ticker = args[0].upper()
 
-        def _write_clear_q():
-            q_file = "data/queue_ledger.json"
-            all_q = {}
-            if os.path.exists(q_file):
-                try:
-                    with open(q_file, 'r', encoding='utf-8') as f:
-                        all_q = json.load(f)
-                except Exception:
-                    pass
-            
-            all_q[ticker] = []
-            
-            dir_name = os.path.dirname(q_file) or '.'
-            os.makedirs(dir_name, exist_ok=True)
-            fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-            try:
-                with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                    json.dump(all_q, f_out, ensure_ascii=False, indent=4)
-                    f_out.flush()
-                    os.fsync(f_out.fileno())
-                os.replace(tmp_path, q_file)
-            except Exception as e:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-                raise e
-              
         try:
-            await asyncio.to_thread(_write_clear_q)
+            # MODIFIED: [V55.00 오퍼레이션 SSOT] 텔레그램 다이렉트 파일 I/O 영구 소각 및 코어 메서드 직결
+            if not getattr(self, 'queue_ledger', None):
+                from queue_ledger import QueueLedger
+                self.queue_ledger = QueueLedger()
+            await asyncio.to_thread(self.queue_ledger.clear_queue, ticker)
+            
             chat_id = update.effective_chat.id
             
             if ticker not in self.sync_engine.sync_locks:
@@ -430,6 +392,7 @@ class TelegramController:
         latest_version = await asyncio.to_thread(self.cfg.get_latest_version) 
         msg = self.view.get_start_message(target_hour, season_icon, latest_version) 
         await update.message.reply_text(msg, parse_mode='HTML')
+
     async def cmd_sync(self, update, context):
         if not self._is_admin(update):
             return
@@ -437,7 +400,7 @@ class TelegramController:
         await update.message.reply_text("🔄 시장 분석 및 지시서 작성 중...")
         
         async with self.tx_lock:
-            cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+             cash, holdings = await asyncio.to_thread(self.broker.get_account_balance)
             
         if holdings is None:
             await update.message.reply_text("❌ KIS API 통신 오류로 계좌 정보를 불러올 수 없습니다. 잠시 후 다시 시도해주세요.")
@@ -508,7 +471,7 @@ class TelegramController:
             prev_close = await asyncio.to_thread(self.broker.get_previous_close, t)
             ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
             day_high, day_low = await asyncio.to_thread(self.broker.get_day_high_low, t)
-            
+             
             actual_avg = float(h['avg']) if h['avg'] else 0.0
             actual_qty = int(h['qty'])
             
@@ -541,7 +504,7 @@ class TelegramController:
             is_locked_reg = await asyncio.to_thread(self.cfg.check_lock, t, "REG")
             is_locked_sniper = await asyncio.to_thread(self.cfg.check_lock, t, "SNIPER")
             is_already_ordered = is_locked_reg or is_locked_sniper
-            
+             
             # 🚨 MODIFIED: [V44.49] cfg 스캔 비동기 래핑
             ver = await asyncio.to_thread(self.cfg.get_version, t)
             is_manual_vwap = await asyncio.to_thread(getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False), t)
@@ -727,7 +690,7 @@ class TelegramController:
                 avwap_avg = tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
                 avwap_budget = cash
                 avwap_strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
-                
+
                 if tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
                     avwap_status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
                 elif tracking_cache.get(f"AVWAP_BOUGHT_{t}"):
@@ -800,7 +763,7 @@ class TelegramController:
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
                 'upward_sniper': "ON" if upward_sniper_mode_on else "OFF",
                 'target': target_val, 'star_pct': round(plan.get('star_ratio', 0) * 100, 2) if 'star_ratio' in plan else 0.0,
-                'seed': seed, 'one_portion': plan.get('one_portion', 0.0), 'plan': plan,
+                'seed': safe_seed, 'one_portion': plan.get('one_portion', 0.0), 'plan': plan,
                 'is_locked': is_already_ordered, 'mode': "REG",
                 'is_reverse': is_rev, 'star_price': plan.get('star_price', 0.0),
                 'escrow': escrow_val,
@@ -886,6 +849,9 @@ class TelegramController:
         if not self._is_admin(update):
             return
             
+        # 🚨 MODIFIED: [V59.04 UI 콜백 런타임 붕괴 방어] 콜백 쿼리로 호출 시 AttributeError 원천 차단
+        target_msg = update.callback_query.message if update.callback_query else update.message
+        
         try:
             # MODIFIED: [맹점 4 수술] 파일 I/O 동기 블로킹 비동기 래핑
             history_data = await asyncio.to_thread(self.cfg.get_history)
@@ -893,7 +859,7 @@ class TelegramController:
             history_data = []
             
         if not history_data:
-            await update.message.reply_text("📭 <b>명예의 전당 (졸업 기록)이 비어있습니다.</b>", parse_mode='HTML')
+            await target_msg.reply_text("📭 <b>명예의 전당 (졸업 기록)이 비어있습니다.</b>", parse_mode='HTML')
             return
             
         sorted_hist = sorted(history_data, key=lambda x: x.get('end_date', ''), reverse=True)
@@ -914,7 +880,7 @@ class TelegramController:
             
         keyboard.append([InlineKeyboardButton("❌ 닫기", callback_data="RESET:CANCEL")])
         
-        await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        await target_msg.reply_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_mode(self, update, context):
         if not self._is_admin(update):

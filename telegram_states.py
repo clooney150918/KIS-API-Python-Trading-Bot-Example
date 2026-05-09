@@ -9,6 +9,8 @@
 # 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
 # 지층 수정(EDITQ_) 시 존재하던 지저분한 다이렉트 파일 I/O(open, json, tempfile) 로직을 전면 적출하고, 
 # QueueLedger의 스레드 세이프(Thread-safe) 코어 메서드(edit_lot)로 직결(Lock-on)하여 동시성 충돌 뇌관 완전 해체.
+# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] 
+# 15:25 전량 덤핑 헌법에 따라 무의미해진 AVWAP 목표 수익률 수동 입력 처리(CONF_AVWAP_TARGET) 블록을 100% 영구 도려냄.
 # ==========================================================
 import logging
 import datetime
@@ -110,36 +112,9 @@ class TelegramStates:
             val = float(text)
             parts = state.split("_")
             
-            # 🚨 [V44.30] AVWAP 수동 목표수익률 입력 후 /settlement 뷰포트로 즉결 이식
-            if state.startswith("CONF_AVWAP_TARGET"):
-                if val <= 0:
-                    return await update.message.reply_text("❌ 오류: 목표 수익률은 0보다 커야 합니다.")
-                ticker = parts[3]
-                if hasattr(self.cfg, 'set_avwap_target_profit'):
-                    await asyncio.to_thread(self.cfg.set_avwap_target_profit, ticker, val)
-                
-                del controller.user_states[chat_id]
-                
-                # 메모리에 MANUAL 상태를 확실히 인젝션
-                if 'app_data' not in context.bot_data:
-                    context.bot_data['app_data'] = {}
-                context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
-                
-                if context.job_queue:
-                    for job in context.job_queue.jobs():
-                        if job.data is not None:
-                            job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
-                
-                await update.message.reply_text(f"✅ <b>[{ticker}] 수동 목표 수익률이 {val}%로 설정되며 '🖐️수동 고정' 모드로 자동 전환되었습니다.</b>", parse_mode='HTML')
-                
-                # 설정 완료 후 /settlement(설정) 화면으로 직결
-                try:
-                    await controller.cmd_settlement(update, context)
-                except Exception as e:
-                    logging.error(f"수동 목표 설정 후 환경설정 복귀 에러: {e}")
-                return
-
-            elif state.startswith("SEED"):
+            # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] CONF_AVWAP_TARGET 상태의 사용자 목표 수익률 입력 처리 블록 전면 도려냄.
+            
+            if state.startswith("SEED"):
                 if val < 0:
                     return await update.message.reply_text("❌ 오류: 시드머니는 0 이상이어야 합니다.")
                     

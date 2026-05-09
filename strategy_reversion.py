@@ -1,6 +1,10 @@
 # ==========================================================
 # FILE: strategy_reversion.py
 # ==========================================================
+# 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술]
+# get_dynamic_plan 엔진이 60% 거래량 지배력을 감지하고 LOC 방어선으로 전환(trigger_loc)할 때, 
+# 상태 파일 저장을 누락한 채 루프를 탈출하여 봇이 영구 기절하던 치명적 맹점 원천 차단. 
+# return 직전에 self._save_state(ticker)를 강제 주입하여 팩트 박제 및 락온 완료.
 # MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, VWAP이 장중 매수한 로트를 기보유 물량으로 오판하여 매도를 재개(하극상)하던 맹점 원천 차단. 큐 장부에서 당일 날짜(EST)의 로트를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
 # MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
 # MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
@@ -373,7 +377,9 @@ class ReversionStrategy:
             
             if is_snapshot_mode:
                 self.save_daily_snapshot(ticker, plan_result)
-                
+
+            # 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술] 팩트 락온 주입
+            self._save_state(ticker)
             return plan_result
 
         rem_weight = 0.0
@@ -423,7 +429,7 @@ class ReversionStrategy:
                             b1_budget_slice = curr_p
                         else:
                             b2_budget_slice = curr_p
-                            
+                    
                 # 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온]
                 # 장 마감 직전(min_idx >= 28)까지 단 1주도 사지 못했다면,
                 # 전체 예산이 1주 가격보다 작더라도 무조건 가불을 땡겨서 1주를 강제 매수!

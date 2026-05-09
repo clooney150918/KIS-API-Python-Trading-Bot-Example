@@ -7,6 +7,8 @@
 # NEW: [VWAP 잔차 증발 방어 롤백 엔진] 주문 거절/미체결 시 삭감된 예산을 버킷 식별자 기반으로 원상 복구(Refund)하는 환불 파이프라인 개통 완료.
 # 🚨 MODIFIED: [V50.02 30분 압축 락온] 타임 윈도우 스캔 범위를 range(27, 60)에서 range(27, 57)로 정밀 교정하여 15:56 타격 종료 완벽 동기화.
 # 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온] 예산이 1주 가격보다 작더라도 장막판 가불을 통해 무조건 1주 베이스캠프 확보 보장.
+# 🚨 MODIFIED: [치명적 경고 3] 텔레그램 지시서 조회(min_idx < 0) 시 스냅샷 반환 디커플링 및 실시간 타격 분리 락온.
+# 🚨 MODIFIED: [치명적 경고 19] UnboundLocalError 원천 봉쇄를 위한 변수 스코프 전진 배치 수술 완료.
 # ==========================================================
 import math
 import logging
@@ -260,6 +262,15 @@ class V14VwapStrategy:
     def get_dynamic_plan(self, ticker, current_price, prev_close, current_weight, min_idx, alloc_cash, qty, avg_price, market_type="REG"):
         self._load_state_if_needed(ticker)
         
+        # NEW: [치명적 경고 19] UnboundLocalError 원천 봉쇄를 위한 변수 스코프 전진 배치
+        alloc_qty = 0
+        spent_b = 0.0
+        exact_s_qty = 0.0
+        alloc_s_qty = 0
+        b_budget_slice = 0.0
+        slice_budget = 0.0
+        b_bucket = 0.0
+        
         plan_static = self.get_plan(
             ticker=ticker,
             current_price=current_price,
@@ -279,6 +290,11 @@ class V14VwapStrategy:
         initial_qty = int(plan_static.get('initial_qty', qty))
         
         cached_plan = self.load_daily_snapshot(ticker)
+        
+        # MODIFIED: [치명적 경고 3] 텔레그램 지시서 조회(min_idx < 0) 시 스냅샷 반환 디커플링 및 실시간 타격 분리 락온
+        if min_idx < 0 and cached_plan:
+            return cached_plan
+            
         if cached_plan:
             is_zero_start_session = cached_plan.get('is_zero_start', initial_qty == 0)
         else:
@@ -291,6 +307,7 @@ class V14VwapStrategy:
                 is_zero_start_session = (qty == 0)
         
         try:
+            # MODIFIED: [치명적 경고 9] vwap_data.py 의존성 완전 소각 및 config.py 통합 프로파일 다이렉트 수혈 락온
             profile = self.cfg.get_vwap_profile(ticker) if hasattr(self.cfg, 'get_vwap_profile') else {}
         except Exception as e:
             logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")

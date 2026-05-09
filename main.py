@@ -8,6 +8,7 @@
 # NEW: [전역 타임아웃 이식] scheduled_volatility_scan 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
 # NEW: [환각 방어막 이식] 10:00 EST 옴니 매트릭스 타임라인 보호용 백신 주석 하드코딩.
 # NEW: [V48.02 애프터마켓 로터리 덫 전면 폐기] 애프터마켓 3% 지정가 덫 스케줄러 영구 소각 및 배선 철거 완료.
+# 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구 완료.
 # ==========================================================
 import os
 import logging
@@ -15,7 +16,7 @@ import datetime
 import asyncio
 import math 
 from zoneinfo import ZoneInfo
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, Defaults
 from dotenv import load_dotenv
 
 from config import ConfigManager
@@ -174,7 +175,7 @@ def main():
     
     print("=" * 60)
     # MODIFIED: [V44.68 콜드 스타트 방어막 전진 배치 및 팩트 교정]
-    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V48.02 락온)")
+    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V56.00 락온)")
     print(f"⏰ 자동 동기화: 21:00 EST 확정 정산 엔진 락온 가동")
     # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     print("🛡️ 1-Tier 자율주행 지표 스캔 대기 중... (매일 10:00 EST 격발)")
@@ -204,13 +205,18 @@ def main():
         'tz_est': est_zone, 'regime_data': {"status": "pending", "msg": "10:00 EST 이전 오프닝 휩소 대기"} 
     }
 
+    # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+    # 1. PTB 코어 버그 운운하며 datetime.time 객체에서 tzinfo=est_zone을 도려내고 Naive Time을 주입하라는 제안은 최악의 차원 붕괴를 유발하는 맹독성 환각이다.
+    # 2. 서버 로컬 타임(KST) 환경에서 순수 시간(Naive Time)을 주입할 경우, Defaults 전역 타임존이 무시되고 KST로 오판되어 모든 스케줄이 허공으로 증발(Silent Skip)한다.
+    # 3. 따라서 모든 run_daily 스케줄러에는 어떠한 예외도 없이 반드시 time=datetime.time(hour, minute, tzinfo=est_zone) 포맷으로 타임존을 100% 강제 주입(Lock-on)하여 아키텍처를 사수하라.
     app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
         .read_timeout(30.0)
         .write_timeout(30.0)
         .connection_pool_size(8)
-        .post_init(post_init) 
+        .defaults(Defaults(tzinfo=est_zone))
+        .post_init(post_init)
         .build()
     )
     
@@ -235,6 +241,7 @@ def main():
     jq.run_repeating(scheduled_token_check, interval=21600, first=10, chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [EST 100% 락온] 확정 정산: 21:00 EST (KST 기준 다음날 오전 10시(서머) 또는 11시(윈터). KIS 결제 100% 수용)
+    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     jq.run_daily(scheduled_auto_sync, time=datetime.time(21, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [콜드 스타트 방어막] 21:00~21:30 EST 사이 부팅 시 지각 기상 1회성 스케줄 강제 격발
@@ -245,18 +252,22 @@ def main():
         print("🚀 [콜드 스타트 방어막 가동] 확정 정산 누락을 방지하기 위해 5초 뒤 1회성 스케줄을 강제 격발합니다.")
     
     # 🚨 [EST 100% 락온] 매매 초기화: 04:00 EST
+    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] 10:00 EST 스캔 시간은 절대 헌법으로 락온되어 있다. 데이터 결측을 핑계로 시간을 늦추는 행위는 타임라인 디커플링을 유발하므로 영구 차단한다.
+    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 0, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [EST 100% 락온] 정규장 통합 주문: 04:05 EST
+    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     jq.run_daily(scheduled_regular_trade, time=datetime.time(4, 5, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 MODIFIED: [V44.65 엣지 타임라인 동기화 및 오프닝 휩소 원천 락다운]
     # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
     # 🚨 [EST 100% 락온] VWAP 1분 타격 개시 전 Fail-Safe: 15:27 EST
+    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 27, tzinfo=est_zone), days=(0,1,2,3,4), chat_id=ADMIN_CHAT_ID, data=app_data)
 
     # 매 1분 스나이퍼 및 VWAP 타격
@@ -264,6 +275,7 @@ def main():
     jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [EST 100% 락온] 자정 청소 작업: 17:00 EST
+    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     jq.run_daily(scheduled_self_cleaning, time=datetime.time(17, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
         
     app.run_polling()

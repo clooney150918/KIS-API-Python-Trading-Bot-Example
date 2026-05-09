@@ -7,6 +7,7 @@
 # MODIFIED: [V44.47 KST 타임 패러독스 영구 소각] 서머타임 분기 함수 통합 및 EST 절대 시간 기반으로 100% 디커플링 락온 완료.
 # NEW: [콜드 스타트 런타임 붕괴 방어] scheduled_auto_sync 내부 tx_lock None 가드 이식.
 # NEW: [전역 타임아웃 이식] scheduled_force_reset 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
+# 🚨 NEW: [달력 API 결측 연쇄 기절 방어] is_market_open 평일 강제 개장(Fail-Open) 락온 이식 완료.
 # ==========================================================
 import os
 import logging
@@ -34,10 +35,12 @@ def is_market_open():
         nyse = mcal.get_calendar('NYSE')
         schedule = nyse.schedule(start_date=today.date(), end_date=today.date())
         
+        # 🚨 MODIFIED: [달력 API 결측 연쇄 기절 방어] schedule.empty == True 여도 평일이면 무조건 Fail-Open(강제 개장) 반환 락온
         if not schedule.empty:
             return True
         else:
-            return False
+            logging.warning("⚠️ [is_market_open] 달력 API가 빈 값을 반환했으나 평일(월~금)이므로 Fail-Open(강제 개장) 방어막을 가동합니다.")
+            return True
     except Exception as e:
         logging.error(f"⚠️ 달력 라이브러리 에러 발생. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다: {e}")
         est = ZoneInfo('America/New_York')
@@ -81,6 +84,7 @@ def get_budget_allocation(cash, tickers, cfg):
                     _logical_date = _now_est - datetime.timedelta(days=1)
                 else:
                     _logical_date = _now_est
+            
                 _logical_date_str = _logical_date.strftime('%Y-%m-%d')
                 state_file = f"data/vwap_state_REV_{_logical_date_str}_{tx}.json"
                 if os.path.exists(state_file):
@@ -154,7 +158,7 @@ def perform_self_cleaning():
             if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
                 try: os.remove(f)
                 except: pass
-                
+    
         for prefix in ["daily_snapshot_*", "vwap_state_*"]:
             for f in glob.glob(f"data/{prefix}.json"):
                 if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:

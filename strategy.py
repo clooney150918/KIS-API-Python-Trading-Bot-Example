@@ -11,6 +11,8 @@
 # 🚨 MODIFIED: [V54.06 SSOT 코어 통일 및 Split-Brain 영구 소각]
 # 1) V_REV 모드 판별 시 억지스러운 is_active 플래그 의존도를 100% 소각하고, version="V_REV" 자체를 단일 진실 공급원(SSOT)으로 락온.
 # 2) get_plan 내부 V_REV 더미 반환 시 is_reverse=True 로 강제 결속하여 UI 렌더링 엇박자(프랑켄슈타인 맹점) 완벽 해체.
+# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각]
+# 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 목표 수익률 및 출장 모드 파라미터 추출 배선 영구 적출 완료.
 # ==========================================================
 import logging
 import pandas as pd
@@ -46,13 +48,13 @@ class InfiniteStrategy:
             if df.empty or len(df) < 10:
                 return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
 
-            if 'High' in df.columns and 'Low' in df.columns:
-                typical_price = (df['High'] + df['Low'] + df['Close']) / 3.0
+            if 'high' in df.columns and 'low' in df.columns:
+                typical_price = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
             else:
-                typical_price = df['Close']
-                
-            vol_x_price = typical_price * df['Volume']
-            total_vol = df['Volume'].sum()
+                typical_price = df['close'].astype(float)
+              
+            vol_x_price = typical_price * df['volume'].astype(float)
+            total_vol = df['volume'].astype(float).sum()
             
             if total_vol == 0:
                 return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
@@ -60,31 +62,29 @@ class InfiniteStrategy:
             vwap_price = vol_x_price.sum() / total_vol
             
             df_temp = pd.DataFrame()
-            df_temp['Volume'] = df['Volume']
-            df_temp['Vol_x_Price'] = vol_x_price
-            df_temp['Cum_Vol'] = df_temp['Volume'].cumsum()
-            df_temp['Cum_Vol_Price'] = df_temp['Vol_x_Price'].cumsum()
-            df_temp['Running_VWAP'] = df_temp['Cum_Vol_Price'] / df_temp['Cum_Vol']
+            df_temp['volume'] = df['volume'].astype(float)
+            df_temp['vol_x_price'] = vol_x_price
+            df_temp['cum_vol'] = df_temp['volume'].cumsum()
+            df_temp['cum_vol_price'] = df_temp['vol_x_price'].cumsum()
+            df_temp['running_vwap'] = df_temp['cum_vol_price'] / df_temp['cum_vol']
             
             idx_10pct = int(len(df_temp) * 0.1)
-            vwap_start = df_temp['Running_VWAP'].iloc[idx_10pct]
-            vwap_end = df_temp['Running_VWAP'].iloc[-1]
+            vwap_start = df_temp['running_vwap'].iloc[idx_10pct]
+            vwap_end = df_temp['running_vwap'].iloc[-1]
             vwap_slope = vwap_end - vwap_start
             
-            vol_above = df[df['Close'] > vwap_price]['Volume'].sum()
-            vol_below = df[df['Close'] <= vwap_price]['Volume'].sum()
+            vol_above = df[df['close'].astype(float) > vwap_price]['volume'].astype(float).sum()
             
             vol_above_pct = vol_above / total_vol if total_vol > 0 else 0
-            vol_below_pct = vol_below / total_vol if total_vol > 0 else 0
             
-            daily_open = df['Open'].iloc[0] if 'Open' in df.columns else df['Close'].iloc[0]
-            daily_close = df['Close'].iloc[-1]
+            daily_open = df['open'].astype(float).iloc[0]
+            daily_close = df['close'].astype(float).iloc[-1]
             
             is_up_day = daily_close > daily_open
             is_down_day = daily_close < daily_open
             
             is_strong_up = is_up_day and (vwap_slope > 0) and (vol_above_pct > 0.60)
-            is_strong_down = is_down_day and (vwap_slope < 0) and (vol_below_pct > 0.60)
+            is_strong_down = is_down_day and (vwap_slope < 0) and ((1 - vol_above_pct) > 0.60)
             
             return {
                 "vwap_price": round(vwap_price, 2),
@@ -93,7 +93,7 @@ class InfiniteStrategy:
                 "vol_above_pct": round(vol_above_pct, 4),
                 "vwap_slope": round(vwap_slope, 4)
             }
-        except Exception as e:
+        except Exception:
             return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
 
     def apply_omni_matrix_filter(self, ticker, qty, regime_data):
@@ -223,14 +223,10 @@ class InfiniteStrategy:
                     "msg": f"⛔ AVWAP 셧다운: {omni_filter['msg']}"
                 }
 
-        # 🚨 [V43.00 복원] config에서 커스텀 파라미터(목표 수익률, 근무 모드)를 동적으로 추출하여 플러그인에 전달
-        target_profit = getattr(self.cfg, 'get_avwap_target_profit', lambda x: 4.0)(exec_ticker)
-        is_multi_strike = getattr(self.cfg, 'get_avwap_multi_strike_mode', lambda x: False)(exec_ticker)
-
+        # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] target_profit 및 is_multi_strike 파라미터 추출 배선 영구 적출 완료
         # 🚨 [V44.03] 스나이퍼에서 수신한 체력 스캔 팩트 파라미터(**kwargs) 플러그인으로 바이패스
         return self.v_avwap_plugin.get_decision(
             base_ticker=base_ticker, exec_ticker=exec_ticker, base_curr_p=base_curr_p, exec_curr_p=exec_curr_p, 
             base_day_open=base_day_open, avwap_avg_price=avg_price, avwap_qty=qty, avwap_alloc_cash=alloc_cash, 
-            context_data=context_data, df_1min_base=df_1min_base, now_est=now_est, avwap_state=avwap_state,
-            target_profit=target_profit, is_multi_strike=is_multi_strike, **kwargs
+            context_data=context_data, df_1min_base=df_1min_base, now_est=now_est, avwap_state=avwap_state, **kwargs
         )

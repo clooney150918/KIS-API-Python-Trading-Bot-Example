@@ -6,6 +6,8 @@
 # 🚨 MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
 # 다중 스레드(asyncio.to_thread) 환경에서 발생하는 JSON I/O 경합 조건(Race Condition) 
 # 및 스플릿 브레인(Split-Brain) 맹점을 원천 차단하기 위해 전역 RLock 탑재 및 모든 상태 변이(Setter) 함수에 락온 이식 완료.
+# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각]
+# 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 목표 수익률 및 다중 출장 모드 설정 I/O 파이프라인 100% 소각 완료.
 # ==========================================================
 
 import json
@@ -75,8 +77,6 @@ class ConfigManager:
             "MASTER_SWITCH": "data/master_switch.json",
             "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
             "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
-            "AVWAP_MULTI_STRIKE_CFG": "data/avwap_multi_strike.json", 
-            "AVWAP_TARGET_CFG": "data/avwap_target.json", 
             "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",       
             "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json"        
         }
@@ -88,7 +88,6 @@ class ConfigManager:
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         self.DEFAULT_FEE = {"SOXL": 0.25, "TQQQ": 0.25} 
-        self.DEFAULT_AVWAP_TARGET = {"SOXL": 4.0, "SOXS": 4.0}
         
         self._escrow_cache = {}
         self._locks_mutex = threading.Lock()
@@ -324,7 +323,7 @@ class ConfigManager:
                         r['avg_price'] = round(r['avg_price'] / ratio, 4)
                     changed = True
             if changed:
-                self._save_json(self.FILES["LEDGER"], ledger)
+              self._save_json(self.FILES["LEDGER"], ledger)
 
     def overwrite_genesis_ledger(self, ticker, genesis_records, actual_avg):
         with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
@@ -432,7 +431,7 @@ class ConfigManager:
                 elif side_cd == "01": 
                     sell_qty += qty
                     sell_amt += (qty * price)
-                    
+             
         actual_buy_price = round(buy_amt / buy_qty, 4) if buy_qty > 0 else 0.0
         actual_sell_price = round(sell_amt / sell_qty, 4) if sell_qty > 0 else 0.0
         
@@ -460,7 +459,7 @@ class ConfigManager:
                             
             if changed_count > 0:
                 self._save_json(self.FILES["LEDGER"], ledger)
-                
+            
             return changed_count
 
     def clear_ledger_for_ticker(self, ticker):
@@ -712,7 +711,7 @@ class ConfigManager:
          
     def get_fee(self, t): 
         return float(self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE).get(t, 0.25))
-        
+      
     def set_fee(self, t, v):
         with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
             d = self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE)
@@ -755,42 +754,6 @@ class ConfigManager:
             d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
-
-    def get_avwap_multi_strike_mode(self, ticker): 
-        return self._load_json(self.FILES.get("AVWAP_MULTI_STRIKE_CFG", "data/avwap_multi_strike.json"), {}).get(ticker, False)
-        
-    def set_avwap_multi_strike_mode(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
-            d = self._load_json(self.FILES.get("AVWAP_MULTI_STRIKE_CFG", "data/avwap_multi_strike.json"), {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES.get("AVWAP_MULTI_STRIKE_CFG", "data/avwap_multi_strike.json"), d)
-
-    def get_avwap_target_profit(self, ticker): 
-        return float(self._load_json(self.FILES.get("AVWAP_TARGET_CFG", "data/avwap_target.json"), self.DEFAULT_AVWAP_TARGET).get(ticker, 4.0))
-        
-    def set_avwap_target_profit(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
-            d = self._load_json(self.FILES.get("AVWAP_TARGET_CFG", "data/avwap_target.json"), self.DEFAULT_AVWAP_TARGET)
-            d[ticker] = float(v)
-            self._save_json(self.FILES.get("AVWAP_TARGET_CFG", "data/avwap_target.json"), d)
-
-    def get_vrev_gap_switching_mode(self, ticker): 
-        return self._load_json(self.FILES.get("VREV_GAP_SWITCH_CFG", "data/vrev_gap_switch.json"), {}).get(ticker, False)
-        
-    def set_vrev_gap_switching_mode(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
-            d = self._load_json(self.FILES.get("VREV_GAP_SWITCH_CFG", "data/vrev_gap_switch.json"), {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES.get("VREV_GAP_SWITCH_CFG", "data/vrev_gap_switch.json"), d)
-
-    def get_vrev_gap_threshold(self, ticker): 
-        return float(self._load_json(self.FILES.get("VREV_GAP_THRESH_CFG", "data/vrev_gap_thresh.json"), {}).get(ticker, -0.67))
-        
-    def set_vrev_gap_threshold(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
-            d = self._load_json(self.FILES.get("VREV_GAP_THRESH_CFG", "data/vrev_gap_thresh.json"), {})
-            d[ticker] = float(v)
-            self._save_json(self.FILES.get("VREV_GAP_THRESH_CFG", "data/vrev_gap_thresh.json"), d)
 
     def get_master_switch(self, ticker): 
         return self._load_json(self.FILES["MASTER_SWITCH"], {}).get(ticker, "ALL")

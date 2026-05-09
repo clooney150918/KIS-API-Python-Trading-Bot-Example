@@ -1,6 +1,10 @@
 # ==========================================================
 # FILE: scheduler_vwap.py
 # ==========================================================
+# 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술]
+# - 60% 거래량 지배력 감지 후 LOC 전환 시 텔레그램 무음(disable_notification=True) 파라미터 영구 소각
+# - 텔레그램 발송 직후 로깅망을 통해 팩트 박제 추가
+# - LOC 주문 전송 시 KIS 서버 거절(Reject) 사유를 타전하도록 에러 로깅망 완벽 이식
 # MODIFIED: [V53.06 전투 사령부 외부 통신 10초 타임아웃 및 폴백 방어막 이식]
 # 🚨 MODIFIED: [V53.08 들여쓰기(Indentation) 붕괴 런타임 즉사 버그 완벽 수술]
 # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
@@ -20,6 +24,7 @@
 # 🚨 MODIFIED: [V44.48 런타임 붕괴 방어] 들여쓰기 붕괴(IndentationError) 완벽 교정 및 팩트 종속 완료.
 # 🚨 MODIFIED: [V54.01 VWAP 데이터 통합 롤백] vwap_data.py 외부 파일 임포트 소각 및 ConfigManager 수혈 락온
 # 🚨 MODIFIED: [V54.02 깡통 스냅샷 붕괴 방어] prev_c 다이렉트 추출 파이프라인 이식으로 데이터 기아(Data Starvation) 원천 차단
+# 🚨 NEW: [달력 API 결측 연쇄 기절 방어] 장마감시간 빈 값 반환 시 평일 16:00 EST 강제 폴백 락온 이식 완료.
 # ==========================================================
 import logging
 import datetime
@@ -59,13 +64,27 @@ async def scheduled_vwap_init_and_cancel(context):
 
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
-        if schedule.empty: return
-        market_close = schedule.iloc[0]['market_close'].astimezone(est)
+        # MODIFIED: [달력 API 결측 연쇄 기절 방어] schedule.empty == True 여도 평일이면 무조건 Fail-Open(강제 마감 16:00) 락온
+        if schedule.empty:
+            logging.warning("⚠️ [vwap_init] 달력 API 빈 값 반환. 평일 강제 마감시간(16:00 EST) 폴백 가동.")
+            if now_est.weekday() < 5:
+                market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+            else:
+                return
+        else:
+            market_close = schedule.iloc[0]['market_close'].astimezone(est)
     except asyncio.TimeoutError:
-        logging.error("⚠️ 장마감시간 달력 API 타임아웃. 16:00 강제 세팅.")
-        market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
-    except Exception:
-        market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+        logging.error("⚠️ 장마감시간 달력 API 타임아웃. 평일 강제 마감시간(16:00 EST) 세팅.")
+        if now_est.weekday() < 5:
+            market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+        else:
+            return
+    except Exception as e:
+        logging.error(f"⚠️ 장마감시간 달력 API 에러({e}). 평일 강제 마감시간(16:00 EST) 세팅.")
+        if now_est.weekday() < 5:
+            market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+        else:
+            return
         
     vwap_start_time = market_close - datetime.timedelta(minutes=33, seconds=15)
     vwap_end_time = market_close 
@@ -93,7 +112,7 @@ async def scheduled_vwap_init_and_cancel(context):
             for t in active_tickers:
                 version = await asyncio.to_thread(cfg.get_version, t)
                 is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
-                
+            
                 if version == "V_REV" and is_manual_vwap:
                     continue
                 
@@ -180,10 +199,10 @@ async def scheduled_vwap_init_and_cancel(context):
                                 msg += f"▫️ 장 마감 33분 전 진입을 확인하여 기존 LOC 덫 강제 취소(Nuke)했습니다.\n"
                                 msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
                             else:
-                                msg = f"🌅 <b>[{t}] 가상 에스크로 해제 및 엔진 기상</b>\n"
-                                msg += f"▫️ 자전거래(FDS) 우회를 위해 설정된 <b>'가상 에스크로(Virtual Escrow)'를 해제</b>하고 자금을 실전 배치합니다.\n"
-                                msg += f"▫️ 1분 단위 정밀 타격(VWAP 슬라이싱) 모드로 교전 수칙을 변경합니다. ⚔️"
-                                
+                                msg = f"🌅 <b>[{t}] 가상 에스크로 해제 및 엔진 기상 (자가 치유 가동)</b>\n"
+                                msg += f"▫️ 장 마감 33분 전 진입을 확인하여 가상 에스크로를 해제했습니다.\n"
+                                msg += f"▫️ 스케줄러 누락을 완벽히 극복하고 1분 단위 정밀 타격을 즉각 개시합니다. ⚔️"
+                            
                             vwap_cache[f"REV_{t}_nuked"] = True
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
@@ -221,13 +240,27 @@ async def scheduled_vwap_trade(context):
 
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
-        if schedule.empty: return
-        market_close = schedule.iloc[0]['market_close'].astimezone(est)
+        # MODIFIED: [달력 API 결측 연쇄 기절 방어] schedule.empty == True 여도 평일이면 무조건 Fail-Open(강제 마감 16:00) 락온
+        if schedule.empty:
+            logging.warning("⚠️ [vwap_trade] 달력 API 빈 값 반환. 평일 강제 마감시간(16:00 EST) 폴백 가동.")
+            if now_est.weekday() < 5:
+                market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+            else:
+                return
+        else:
+            market_close = schedule.iloc[0]['market_close'].astimezone(est)
     except asyncio.TimeoutError:
-        logging.error("⚠️ 장마감시간 달력 API 타임아웃. 16:00 강제 세팅.")
-        market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
-    except Exception:
-        market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+        logging.error("⚠️ 장마감시간 달력 API 타임아웃. 평일 강제 마감시간(16:00 EST) 세팅.")
+        if now_est.weekday() < 5:
+            market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+        else:
+            return
+    except Exception as e:
+        logging.error(f"⚠️ 장마감시간 달력 API 에러({e}). 평일 강제 마감시간(16:00 EST) 세팅.")
+        if now_est.weekday() < 5:
+            market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
+        else:
+            return
         
     vwap_start_time = market_close - datetime.timedelta(minutes=33, seconds=15)
     vwap_end_time = market_close 
@@ -582,7 +615,7 @@ async def scheduled_vwap_trade(context):
                                                     await asyncio.sleep(0.5)
                                                 except Exception as e_cancel:
                                                     logging.warning(f"⚠️ [{t}] 스윕 잔여 주문 취소 실패: {e_cancel}")
-                                                    
+                                            
                                             if ccld_qty > 0:
                                                 await asyncio.to_thread(strategy_rev.record_execution, t, "SELL", ccld_qty, exec_price)
                                                 q_snap_before_pop = list(q_data)
@@ -646,7 +679,7 @@ async def scheduled_vwap_trade(context):
                                 err_msg = f"🛑 <b>[FATAL ERROR] {t} 공수 교대 중 기존 덫 취소 실패!</b>\n▫️ 2중 예산 소진 방어를 위해 당일 남은 V-REV 교전을 강제 중단(Hard-Lock)합니다.\n▫️ 상세 오류: {e}"
                                 await context.bot.send_message(chat_id=chat_id, text=err_msg, parse_mode='HTML')
                                 continue
-                                
+                            
                         vwap_cache[f"REV_{t}_regime"] = current_regime
                         
                         if vwap_cache.get(f"REV_{t}_loc_fired"):
@@ -721,16 +754,22 @@ async def scheduled_vwap_trade(context):
                             if rev_plan is None:
                                 continue
                                 
+                            # 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술] 
+                            # 텔레그램 무음 파라미터 소각 및 에러 타전망 이식 완료
                             if not is_zero_start and rev_plan.get('trigger_loc') and minutes_to_close >= 15:
                                 vwap_cache[f"REV_{t}_loc_fired"] = True
                                 msg = f"🛡️ <b>[{t}] 60% 거래량 지배력 감지 (추세장 전환)</b>\n"
                                 msg += f"▫️ 기관급 자금 쏠림으로 인해 위험한 1분 단위 타임 슬라이싱(VWAP)을 전면 중단합니다.\n"
                                 msg += f"▫️ <b>잔여 할당량 전량을 양방향 LOC 방어선으로 전환 배치 완료!</b>\n"
-                                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
+                                await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
+                                logging.info(f"🛡️ [{t}] 60% 거래량 지배력 감지 - LOC 방어선 전환 완료")
                                 
                                 for o in rev_plan.get('orders', []):
                                     if o['qty'] > 0:
-                                        await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], "LOC")
+                                        res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], "LOC")
+                                        if res.get('rt_cd') != '0':
+                                            err_msg = res.get('msg1', '알 수 없는 오류')
+                                            logging.error(f"🚨 [{t}] LOC 전환 주문 KIS 서버 거절(Reject): {err_msg} (수량: {o['qty']}, 가격: {o['price']})")
                                 await asyncio.sleep(0.2)
                                 continue
                             
