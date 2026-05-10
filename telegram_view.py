@@ -12,6 +12,16 @@
 # - 관제탑 진입 버튼에서 '(모니터)' 꼬리표 소각 및 실전 작전 통제권 포트폴리오 매니저에게 반환.
 # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] 
 # 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 수동/자율 목표 및 출장 모드 설정 버튼 UI를 100% 영구 소각 완료.
+# 🚨 MODIFIED: [V59.05 잔재 데드코드 영구 소각] 
+# AVWAP 가동 경고문(UI) 내 손절(-8.0%) 피격 시 영구 동결이라는 낡은 텍스트를 15:25 EST 도달 시 무조건 전량 덤핑 청산으로 100% 팩트 교정 완료.
+# NEW: [V59.06] VWAP 런타임 엑스레이(Dry-Run) 진단 버튼을 주요 뷰포트(지시서, 장부, 큐 관리)에 전면 이식 완료.
+# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 전면 폐기]
+# 지시서(/sync) 렌더링 시 옴니 매트릭스 락다운 경고문을 표출하던 시각적 찌꺼기 100% 영구 소각 완료.
+# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# 1) 시작 화면 안내 텍스트 중 무결성 듀얼 모멘텀을 무결성 싱글 롱 모멘텀으로 팩트 교정 완료.
+# 2) 전술 설정 메뉴 내 관제탑 진입 버튼 텍스트에서 숏(SOXS) 렌더링 영구 소각 및 단일 롱 모멘텀 팩트 압축 완료.
+# 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] 
+# create_sync_report 내부 루프의 SOXS 바이패스 데드코드 전면 적출 및 클리닝 완료.
 # ==========================================================
 import os
 import math
@@ -73,7 +83,8 @@ class TelegramView:
         dst_state = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
         
         msg = f"🌌 [ 옴니 매트릭스 퀀트 엔진 {latest_version} ]\n"
-        msg += "💠 무결성 듀얼 모멘텀 (SOXL/SOXS) & V-REV 갭 스위칭\n\n"
+        # MODIFIED: [V61.00 숏(SOXS) 전면 소각] 무결성 싱글 롱 모멘텀 팩트 교정
+        msg += "💠 무결성 싱글 롱 모멘텀 (SOXL 전용) & V-REV 갭 스위칭\n\n"
         
         msg += f"🕒 [ 운영 스케줄 ({dst_state}) ]\n"
         msg += "🔹 6시간 간격 : 🔑 API 토큰 자동 갱신\n"
@@ -184,6 +195,8 @@ class TelegramView:
         msg += "최근 매수한 <b>1지층</b>을 시장가(MOC)로 강제 덤핑하여 가용 예산을 확보합니다."
 
         keyboard.append([InlineKeyboardButton("🩸 1지층 수동 긴급 수혈 (MOC)", callback_data=f"EMERGENCY_REQ:{ticker}")])
+        # NEW: [VWAP 엑스레이 진단 스위치 이식] 큐 장부 확인 중 즉각 진단 기능 결속
+        keyboard.append([InlineKeyboardButton(f"🔍 {ticker} VWAP 런타임 엑스레이 (Dry-Run)", callback_data=f"XRAY:VWAP:{ticker}")])
         keyboard.append([InlineKeyboardButton("🔄 대시보드 새로고침", callback_data=f"QUEUE:VIEW:{ticker}")])
         
         return msg, InlineKeyboardMarkup(keyboard)
@@ -216,13 +229,14 @@ class TelegramView:
         return msg, InlineKeyboardMarkup(keyboard)
 
     def get_avwap_warning_menu(self, ticker):
+        # 🚨 MODIFIED: [V59.05 잔재 데드코드 영구 소각] AVWAP 가동 경고문 팩트 교정
         msg = f"🛑 <b>[{ticker}] 차세대 AVWAP 듀얼 모멘텀 무장 해제 및 경고</b>\n\n"
         msg += "현재 <b>AVWAP 암살자 모드</b> 가동을 지시하셨습니다.\n"
         msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 모멘텀 타격에 쏟아붓는 초공격형 옵션입니다.\n\n"
-        msg += "⚠️ <b>[ 실전 가동 제약 사항 (V56 락온) ]</b>\n"
+        msg += "⚠️ <b>[ 실전 가동 제약 사항 (V59 락온) ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
         msg += "2. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 독립 연산됩니다.\n"
-        msg += "3. 손절(-8.0%) 피격 시 뇌동매매 방지를 위해 <b>그 즉시 당일 매매가 영구 동결(Shut-down)</b> 됩니다.\n\n"
+        msg += "3. 15:25 EST 도달 시 수익/손실 불문 <b>무조건 전량 덤핑 청산 후 당일 영구 동결(Shut-down)</b> 됩니다.\n\n"
         msg += "포트폴리오 매니저의 최종 승인을 대기합니다."
         
         keyboard = [
@@ -309,8 +323,7 @@ class TelegramView:
             t = t_info.get('ticker', 'UNK')
             v_mode = t_info.get('version', 'V14')
             
-            if t == "SOXS":
-                continue 
+            # 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] 바이패스 데드코드 영구 소각
             
             is_manual_vwap = t_info.get('is_manual_vwap', False)
             is_zero_start = t_info.get('is_zero_start', False)
@@ -355,7 +368,7 @@ class TelegramView:
                 v_mode_display = "무매4 (VWAP)" if is_manual_vwap else "무매4 (LOC)"
                 main_icon = "💎"
                 bdg_txt = f"당일 예산: ${safe_one_portion:,.0f}"
-                
+            
             is_rev_logic = t_info.get('is_reverse', False)
             proc_status = t_info.get('plan', {}).get('process_status', '')
             tracking_info = t_info.get('tracking_info', {})
@@ -451,10 +464,8 @@ class TelegramView:
             if v_mode == "V_REV":
                 body_msg += "📋 <b>[주문 가이던스 - ⚖️다중 LIFO 제어]</b>\n"
                 
+                # MODIFIED: [V60.00 옴니 매트릭스 락다운 전면 폐기] 시각적 찌꺼기 영구 소각
                 plan_info = t_info.get('plan', {})
-                omni_msg = plan_info.get('omni_msg', '')
-                if omni_msg:
-                    body_msg += f"⛔ <b>옴니 매트릭스 락다운:</b> {omni_msg}\n"
                 
                 body_msg += f"⚡ <b>[Gap Hijack 🤖자율주행]</b> 상승장 판별 시 잔여예산 스윕 대기\n"
                 
@@ -471,11 +482,9 @@ class TelegramView:
             else:
                 if is_manual_vwap and not is_rev_logic:
                     body_msg += "⏱️ <b>VWAP 스케줄:</b> 장 마감 30분 전 ➔ 1분 단위 유동성 분할 타격\n"
-                    
+                
+                # MODIFIED: [V60.00 옴니 매트릭스 락다운 전면 폐기] 시각적 찌꺼기 영구 소각
                 plan_info = t_info.get('plan', {})
-                omni_msg = plan_info.get('omni_msg', '')
-                if omni_msg:
-                    body_msg += f"⛔ <b>옴니 매트릭스 락다운:</b> {omni_msg}\n"
                 
                 body_msg += f"📋 <b>[주문 계획 - {proc_status}]</b>\n"
                 plan_orders = plan_info.get('orders', [])
@@ -495,7 +504,7 @@ class TelegramView:
                         if "수혈" in desc: 
                             ico = "🩸"
                             desc = desc.replace("🩸", "")
-                           
+                        
                         type_str = "" if o['type'] == 'LIMIT' else f"({o['type']})"
                         type_disp = f" {type_str}" if type_str else ""
                         
@@ -517,6 +526,10 @@ class TelegramView:
                     body_msg += " 💤 주문 없음 (관망/예산소진)\n"
                 
             body_msg += "\n"
+            
+            # NEW: [VWAP 엑스레이 진단(Dry-Run) 스위치 이식] 지시서 렌더링 시 V-REV 전용 버튼 추가
+            if v_mode == "V_REV":
+                keyboard.append([InlineKeyboardButton(f"🔍 {t} VWAP 런타임 엑스레이 (Dry-Run)", callback_data=f"XRAY:VWAP:{t}")])
 
         final_msg = header_msg + body_msg
         
@@ -605,7 +618,8 @@ class TelegramView:
                 # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] TARGET_MANUAL, TARGET_AUTO, EARLY, MULTI 설정 버튼 100% 적출 및 소각 완료
                 
                 if t == "SOXL":
-                    keyboard.append([InlineKeyboardButton(f"🔫 {t} (롱) + SOXS (숏) 모멘텀 관제탑", callback_data=f"AVWAP:MENU:{t}")])
+                    # MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용] 관제탑 텍스트 싱글 롱 모멘텀 팩트 교정
+                    keyboard.append([InlineKeyboardButton(f"🔫 {t} 단일 롱 모멘텀 관제탑", callback_data=f"AVWAP:MENU:{t}")])
             
             if ver == "V_REV":
                 row2 = [
@@ -715,6 +729,7 @@ class TelegramView:
             else:
                 msg += f"▪️ <b>현재 T값 : {t_val} T</b> ({int(split)}분할)\n"
         msg += f"▪️ 보유 수량 : {qty} 주 (평단 ${avg:.2f})\n"
+        
         if is_history:
             profit = sold - invested
             pct = (profit/invested*100) if invested > 0 else 0
@@ -728,6 +743,11 @@ class TelegramView:
             other = "TQQQ" if ticker == "SOXL" else "SOXL"
             keyboard.append([InlineKeyboardButton(f"🔄 {other} 장부 조회", callback_data=f"REC:VIEW:{other}")])
             keyboard.append([InlineKeyboardButton(f"🗄️ {ticker} V-REV 큐(Queue) 정밀 관리", callback_data=f"QUEUE:VIEW:{ticker}")])
+            
+            # NEW: [VWAP 엑스레이 진단 스위치 이식] 장부 대시보드 뷰에 버튼 추가
+            if is_reverse:
+                keyboard.append([InlineKeyboardButton(f"🔍 {ticker} VWAP 런타임 엑스레이 (Dry-Run)", callback_data=f"XRAY:VWAP:{ticker}")])
+                
             keyboard.append([InlineKeyboardButton("🔙 장부 대시보드 업데이트", callback_data=f"REC:SYNC:{ticker}")])
         else:
             if history_id is not None:
@@ -767,7 +787,7 @@ class TelegramView:
             draw.rectangle([40, y_box, 290, y_box + 100], fill="#2A2F3D")
             self._safe_draw_text(draw, (165, y_box + 35), f"${invested:,.2f}", font=f_b_val, fill="white", anchor="mm")
             self._safe_draw_text(draw, (165, y_box + 75), "TOTAL INVESTED", font=f_b_lbl, fill="#8E8E93", anchor="mm")
-            
+          
             draw.rectangle([310, y_box, 560, y_box + 100], fill="#2A2F3D")
             self._safe_draw_text(draw, (435, y_box + 35), f"${revenue:,.2f}", font=f_b_val, fill="white", anchor="mm")
             self._safe_draw_text(draw, (435, y_box + 75), "TOTAL REVENUE", font=f_b_lbl, fill="#8E8E93", anchor="mm")

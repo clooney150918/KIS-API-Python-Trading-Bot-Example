@@ -8,6 +8,7 @@
 # NEW: [콜드 스타트 런타임 붕괴 방어] scheduled_auto_sync 내부 tx_lock None 가드 이식.
 # NEW: [전역 타임아웃 이식] scheduled_force_reset 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
 # 🚨 NEW: [달력 API 결측 연쇄 기절 방어] is_market_open 평일 강제 개장(Fail-Open) 락온 이식 완료.
+# 🚨 MODIFIED: [V-REV SSOT 팩트 교정] scheduled_force_reset 내 낡은 is_active 의존성 영구 소각 및 version 락온.
 # ==========================================================
 import os
 import logging
@@ -153,7 +154,7 @@ def perform_self_cleaning():
             if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
                 try: os.remove(f)
                 except: pass
-                 
+                
         for f in glob.glob("data/*.bak_*"):
             if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
                 try: os.remove(f)
@@ -225,7 +226,7 @@ async def scheduled_force_reset(context):
                 except Exception:
                     pass
                 return
-            
+             
             # MODIFIED: [버그 2 수술] force_reset tx_lock 점유율 압축 및 병목 해체
             # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] 이곳의 tx_lock 점유 구간은 이미 V44.66에서 극한 압축되었다. 락 대기 병목을 핑계로 로직을 확장하는 오버 엔지니어링을 절대 금지한다.
             async with tx_lock:
@@ -238,9 +239,11 @@ async def scheduled_force_reset(context):
             
             active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
             for t in active_tickers:
+                # 🚨 MODIFIED: [V-REV SSOT 팩트 교정] 낡은 is_active 의존성 전면 소각 및 version 락온
+                version = await asyncio.to_thread(cfg.get_version, t)
                 rev_state = await asyncio.to_thread(cfg.get_reverse_state, t)
                 
-                if rev_state.get("is_active"):
+                if version == "V_REV":
                     actual_avg = float(holdings.get(t, {'avg': 0})['avg'])
                     
                     # 🚨 MODIFIED: [V44.65 KST 17:00 런타임 붕괴 및 이벤트 루프 교착 방어]
@@ -263,7 +266,8 @@ async def scheduled_force_reset(context):
                         exit_target = rev_state.get("exit_target", 0.0)
                         
                         if curr_ret >= exit_target:
-                            await asyncio.to_thread(cfg.set_reverse_state, t, False, 0, 0.0)
+                            # 🚨 MODIFIED: [V54.04] V_REV 모드라면 is_active를 False로 끄지 않고 True로 보존하여 '0주 새출발' 상태 팩트 락온 (SSOT 무결성 유지)
+                            await asyncio.to_thread(cfg.set_reverse_state, t, True, 0, 0.0)
                             await asyncio.to_thread(cfg.clear_escrow_cash, t)
                             
                             ledger_data = await asyncio.to_thread(cfg.get_ledger)

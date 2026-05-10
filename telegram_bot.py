@@ -11,6 +11,8 @@
 # 🚨 MODIFIED: [V44.54 TypeError 코루틴 비동기 래핑] is_update_allowed 및 restart_daemon 호출부 await 팩트 교정 완료.
 # 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT] cmd_add_q, cmd_clear_q 내부 다이렉트 파일 I/O 영구 소각 및 QueueLedger 스레드 세이프 코어 메서드 직결.
 # 🚨 MODIFIED: [V59.04 UI 콜백 런타임 붕괴 방어] 콜백 쿼리로 명령어 호출 시 update.message가 None이 되어 발생하는 AttributeError 완벽 수술. target_msg 팩트 브릿지 탑재.
+# 🚨 MODIFIED: [V59.05 잔재 데드코드 영구 소각] 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 수동 목표 수익률 설정 파이프라인(CONF_AVWAP_TARGET) 100% 적출 완료.
+# 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] cmd_sync 내부 루프의 SOXS 바이패스 데드코드 전면 소각 및 클리닝 완료.
 # ==========================================================
 import logging
 import datetime
@@ -40,6 +42,7 @@ class TelegramController:
         self.strategy = strategy
         self.view = TelegramView()
         self.user_states = {} 
+ 
         self.admin_id = self.cfg.get_chat_id()
         self.sync_locks = {} 
         self.tx_lock = tx_lock or asyncio.Lock()
@@ -89,7 +92,7 @@ class TelegramController:
                 return "REG", "🔥 정규장 (Fail-Open)"
             else:
                 return "CLOSE", "⛔ 장마감 (Fail-Closed)"
-        
+         
         if schedule.empty:
             return "CLOSE", "⛔ 장휴일"
         
@@ -103,7 +106,7 @@ class TelegramController:
         elif market_open <= now < market_close:
             return "REG", "🔥 정규장"
         elif market_close <= now < after_end:
-             return "AFTER", "🌙 애프터마켓"
+            return "AFTER", "🌙 애프터마켓"
         else:
             return "CLOSE", "⛔ 장마감"
 
@@ -164,39 +167,7 @@ class TelegramController:
         
         state = self.user_states.get(chat_id)
         
-        if state and state.startswith("CONF_AVWAP_TARGET_"):
-            ticker = state.split("_")[-1]
-            try:
-                val = float(text)
-                if hasattr(self.cfg, 'set_avwap_target_profit'):
-                    await asyncio.to_thread(self.cfg.set_avwap_target_profit, ticker, val)
-                    if ticker == "SOXL":
-                        await asyncio.to_thread(self.cfg.set_avwap_target_profit, "SOXS", val)
-                         
-                self.user_states.pop(chat_id, None)
-                
-                if 'app_data' not in context.bot_data:
-                    context.bot_data['app_data'] = {}
-                    
-                context.bot_data['app_data'].setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
-                if ticker == "SOXL":
-                    context.bot_data['app_data'].setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = "MANUAL"
-                
-                if context.job_queue:
-                    for job in context.job_queue.jobs():
-                        if job.data is not None:
-                            job.data.setdefault('sniper_tracking', {})[f"AVWAP_TARGET_MODE_{ticker}"] = "MANUAL"
-                            if ticker == "SOXL":
-                                job.data.setdefault('sniper_tracking', {})["AVWAP_TARGET_MODE_SOXS"] = "MANUAL"
-                
-                display_ticker = "SOXL/SOXS 듀얼" if ticker == "SOXL" else ticker
-                await update.message.reply_text(f"✅ <b>[{display_ticker}] 수동 목표 수익률이 {val}%로 설정되며 '🖐️수동 고정' 모드로 자동 전환되었습니다.</b>", parse_mode='HTML')
-                
-                await self.cmd_settlement(update, context)
-                return
-            except ValueError:
-                await update.message.reply_text("❌ 올바른 숫자를 입력하세요. (예: 2.5, 4.0)")
-                return
+        # MODIFIED: [V59.05 잔재 데드코드 영구 소각] 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 수동 목표 수익률 설정 처리 블록(CONF_AVWAP_TARGET)을 100% 영구 도려냄.
         
         if "장부 조회" in text:
             return await self.cmd_record(update, context)
@@ -344,7 +315,7 @@ class TelegramController:
             
             chat_id = update.effective_chat.id
             if ticker not in self.sync_engine.sync_locks:
-                 self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+                self.sync_engine.sync_locks[ticker] = asyncio.Lock()
             if not self.sync_engine.sync_locks[ticker].locked():
                 await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
 
@@ -450,8 +421,7 @@ class TelegramController:
                 is_sniper_active_time = True
 
         for t in sorted_tickers:
-            if t == "SOXS":
-                continue
+            # MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] 바이패스 데드코드 영구 소각
 
             is_avwap_active = False
             avwap_budget = 0.0
@@ -491,9 +461,9 @@ class TelegramController:
             if status_code == "CLOSE":
                 curr = safe_prev_close
 
-            idx_ticker = "SOXX" if t in ["SOXL", "SOXS"] else "QQQ"
+            idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
             dynamic_pct_obj = await asyncio.to_thread(self.broker.get_dynamic_sniper_target, idx_ticker)
-            dynamic_pct = float(dynamic_pct_obj) if dynamic_pct_obj is not None else (8.79 if t in ["SOXL", "SOXS"] else 4.95)
+            dynamic_pct = float(dynamic_pct_obj) if dynamic_pct_obj is not None else (8.79 if t == "SOXL" else 4.95)
             
             tracking_status = tracking_cache.get(t, {})
             current_day_high = tracking_status.get('day_high', day_high) 
@@ -554,9 +524,9 @@ class TelegramController:
                 is_simulation=True, regime_data=regime_data
             )
             
-            # 🚨 MODIFIED: [V44.49] 파일 I/O 스캔 비동기 래핑
+            # 🚨 MODIFIED: [V44.49] 파일 I/O 스캔 비동기 래핑 및 변수명 팩트 교정
             split = await asyncio.to_thread(self.cfg.get_split_count, t)
-            seed = await asyncio.to_thread(self.cfg.get_seed, t)
+            safe_seed = await asyncio.to_thread(self.cfg.get_seed, t)
             
             t_val = plan.get('t_val', 0.0)
             is_rev = plan.get('is_reverse', False)
@@ -569,28 +539,26 @@ class TelegramController:
                 if not getattr(self, 'queue_ledger', None):
                     from queue_ledger import QueueLedger
                     self.queue_ledger = QueueLedger()
-                    
+              
                 # 🚨 MODIFIED: [V44.49] 큐 장부 스캔 비동기 래핑
                 q_list = await asyncio.to_thread(self.queue_ledger.get_queue, t)
                 v_rev_q_lots = len(q_list)
                 v_rev_q_qty = sum(item.get('qty', 0) for item in q_list)
 
-                one_portion_cash = seed * 0.15
+                one_portion_cash = safe_seed * 0.15
                 plan['one_portion'] = one_portion_cash
                 half_portion_cash = one_portion_cash * 0.5
                 
                 tag = "VWAP" if is_manual_vwap else "LOC"
-                 
+                
                 # 🚨 MODIFIED: [V-REV 지시서 매도 가이던스 디커플링 누수 완벽 수술]
-                # 예방적 덫 전면 소각으로 인해 스냅샷의 orders 리스트가 비어있음에도 "orders" 키 존재 여부만으로 
-                # 분기를 타서 큐(Queue) 역산 로직(elif)을 스킵해버리는 치명적 시각적 맹점 원천 차단
                 snap_sells_for_ui = [o for o in cached_snap.get("orders", []) if o.get('side') == 'SELL' and "잭팟" not in o.get('desc', '')] if cached_snap else []
                 if cached_snap and snap_sells_for_ui and logic_qty > 0:
                     sell_idx = 1
                     for o in snap_sells_for_ui:
                         v_rev_guidance += f" 🔵 매도{sell_idx}(Pop{sell_idx}) ${o['price']:.2f} <b>{o['qty']}주</b> ({tag})\n"
                         sell_idx += 1
-                            
+                          
                     if not is_manual_vwap:
                         if 'avg_price' in cached_snap:
                             snap_avg = float(cached_snap['avg_price'])
@@ -609,7 +577,7 @@ class TelegramController:
                                 snap_avg = _snap_amt / _snap_q if _snap_q > 0 else actual_avg
                             else:
                                 snap_avg = actual_avg
-                            
+                        
                         target_jackpot = round(snap_avg * 1.01, 2) if snap_avg > 0 else 0.0
                         v_rev_guidance += f" 🎯 [전체 잭팟] ${target_jackpot:.2f} <b>{logic_qty}주</b> (옵션)\n"
                 elif q_list and logic_qty > 0:
@@ -626,7 +594,7 @@ class TelegramController:
                         
                         target_upper = round(upper_avg * 1.005, 2)
                         v_rev_guidance += f" 🔵 매도2(Pop2) ${target_upper:.2f} <b>{upper_qty}주</b> ({tag})\n"
-                
+                    
                     if not is_manual_vwap:
                         temp_qty = 0
                         temp_inv = 0.0
@@ -660,7 +628,7 @@ class TelegramController:
                         v_rev_guidance += f" 🔴 매수1(Buy1) ${b1_price:.2f} <b>{b1_qty}주</b> ({tag})\n"
                     if b2_qty > 0:
                         v_rev_guidance += f" 🔴 매수2(Buy2) ${b2_price:.2f} <b>{b2_qty}주</b> ({tag})\n"
-                        
+                
                     if is_zero_start_fact:
                         v_rev_guidance += " 🚫 <code>[0주 새출발] 기준 평단가 부재로 줍줍 생략 (1층 확보에 예산 100% 집중)</code>\n"
                     elif b2_qty > 0 and b2_price > 0:
@@ -713,7 +681,7 @@ class TelegramController:
                     try:
                         df_1min_base = await asyncio.wait_for(asyncio.to_thread(self.broker.get_1min_candles_df, avwap_base_ticker), timeout=3.0)
                         base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, avwap_base_ticker), timeout=3.0) or 0.0)
-                        
+            
                         if hasattr(self.strategy, 'v_avwap_plugin'):
                             avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0), "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)}
                             
@@ -840,7 +808,7 @@ class TelegramController:
         
         if success_tickers: 
             async with self.tx_lock:
-                _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+                 _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
             await self.sync_engine._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
         else:
             await status_msg.edit_text("✅ <b>동기화 완료</b> (표시할 진행 중인 장부가 없거나 에러 대기 중입니다)", parse_mode='HTML')
@@ -898,7 +866,7 @@ class TelegramController:
         report += "🟥 <code>25.00 이상 </code> : 패닉 셀링 (ON)\n\n"
         
         for t in active_tickers:
-            idx_ticker = "SOXX" if t in ["SOXL", "SOXS"] else "QQQ"
+            idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
             dynamic_pct_obj = await asyncio.to_thread(self.broker.get_dynamic_sniper_target, idx_ticker)
             
             if dynamic_pct_obj and hasattr(dynamic_pct_obj, 'metric_val'):

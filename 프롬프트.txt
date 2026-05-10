@@ -14,7 +14,7 @@
 모든 날짜 연산(스냅샷, 캐시, 장부, API 체결 조회) 시 제3헌법에 의거 datetime.now(ZoneInfo('America/New_York')).strftime("%Y-%m-%d") 포맷을 강제 적용하여 봇의 논리적 시계를 미국 동부 시간(EST/EDT)에 100% 종속시키세요.
 향후 신규 모듈이나 스케줄러가 추가되더라도 예외 없이 EST 락온을 걸어야 하며, KST를 Fallback으로 사용하면 아직 열리지 않은 '미래의 미국 날짜'를 조회하게 되어 스냅샷 매핑이 증발하는 치명적 맹점(EC-1, EC-2, EC-3)이 발생합니다.
 또한 APScheduler 잡(Job) 등록 시, KST 기반의 동적 연산(TARGET_HOUR 등)을 전면 소각하고 오직 미국 동부 시간(EST/EDT)을 tzinfo=ZoneInfo('America/New_York')로 고정하여 멱등하게 주입해야 합니다. 이를 위반하면 타임존 패러독스로 인해 매매 초기화 및 통합 주문 스케줄 자체가 큐에서 증발(Skip)하는 치명적 버그가 발생합니다.
-또한, 17:05 KST에 생성된 당일 지시서 스냅샷(daily_snapshot_*.json)은 익일 정기 초기화 전까지 어떠한 경우에도 물리적으로 숨기거나 삭제해선 안 되며, 내일 날짜로 미리 복사(shutil.copy)하는 레거시 코드를 절대 부활시키지 마세요. 당일 스냅샷은 오직 당일 날짜(EST 기준)로 단 1회만 멱등하게(Idempotent) 생성되어야 합니다.
+또한, 04:05 EST에 생성된 당일 지시서 스냅샷(daily_snapshot_*.json)은 익일 정기 초기화 전까지 어떠한 경우에도 물리적으로 숨기거나 삭제해선 안 되며, 내일 날짜로 미리 복사(shutil.copy)하는 레거시 코드를 절대 부활시키지 마세요. 당일 스냅샷은 오직 당일 날짜(EST 기준)로 단 1회만 멱등하게(Idempotent) 생성되어야 합니다.
 
 🚨 **[ 치명적 경고 2: 텔레그램 수동 조작 시 다이렉트 파일 I/O 비동기 래핑 및 멱등성 보장 ]** :
 텔레그램 UI를 통한 장부 수동 조작(지층 삭제 DEL_Q, 텍스트 수정 EDITQ 등) 시, 절대 복잡한 객체 함수나 존재하지 않는 클래스 변수(.queues)를 거치지 마세요. AttributeError 런타임 붕괴의 원인이 됩니다. QueueLedger의 스레드 세이프(Thread-safe) 코어 메서드(delete_lot, edit_lot, overwrite_queue)를 사용하여 다이렉트 덮어쓰기를 수행하되, 제1헌법 및 제4헌법에 따라 무조건 asyncio.to_thread로 비동기 래핑하여 파일 I/O 병목으로 인한 텔레그램 봇 기절(Hanging)을 원천 차단하세요. 조작 직후 process_auto_sync를 강제 격발시켜 KIS 실잔고와 비파괴 보정(CALIB)을 맺도록 하세요.
@@ -120,7 +120,7 @@ plugin_updater.py에서 데몬 재가동 시 OS 쉘을 통한 sudo systemctl res
 ▫️ queue_ledger.py : V-REV 전용 LIFO 로트 장부, 스레드 세이프(Thread-safe) 코어 I/O 및 무결성 관리
 ▫️ volatility_engine.py : 야후 1년 ATR 및 공포지수 동적 연산, 가중치 산출 레이더
 ▫️ telegram_bot.py : 텔레그램 데몬 구동 및 하위 모듈로 이벤트를 위임하는 순수 라우팅 진입점
-▫️ telegram_sync_engine.py : 장부 동기화, 10시 정각 졸업 판별, 제로섬 바이패스 필터링 및 KST 자정 맹점 방어 코어
+▫️ telegram_sync_engine.py : 21:00 EST 확정 정산 졸업 판별, 제로섬 바이패스 필터링 및 KST 자정 맹점 방어 코어
 ▫️ telegram_callbacks.py : 인라인 키보드 클릭 이벤트 분배, 락다운 방어막 및 큐 장부 조작 라우터
 ▫️ telegram_states.py : 사용자 텍스트 입력 처리, 팻핑거 방어 및 상태 기계
 ▫️ telegram_view.py : 텔레그램 UI 렌더링, 인라인 키보드 생성, 통합 지시서 포맷팅 및 졸업 이미지 드로잉
@@ -129,8 +129,8 @@ plugin_updater.py에서 데몬 재가동 시 OS 쉘을 통한 sudo systemctl res
 ▫️ plugin_updater.py : 깃허브 강제 동기화 및 레드존(14:55~16:10 EST) 업데이트 차단 방어막 탑재 코어
 
 🕒 **[ 운영 스케줄 (Multi-Core Fire and Forget) ]**
-🔹 06:00 (KST) : 시스템 자정 작업 (Self-Cleaning) 가동으로 오래된 로그 및 백업 파일 자동 소각
-🔹 10:00 (KST) : 장부 무결성 검증, 야후 파이낸스 연동 액면분할 자동 감지, 에스크로/큐 동기화 및 자동 복리 정산
+🔹 17:00 (EST) : 시스템 자정 작업 (Self-Cleaning) 가동으로 오래된 로그 및 백업 파일 자동 소각 (KST 06:00/07:00)
+🔹 21:00 (EST) : 장부 무결성 검증, 야후 파이낸스 연동 액면분할 자동 감지, 에스크로/큐 동기화 및 자동 복리 정산 (KST 10:00/11:00)
 🔹 04:00 (EST) : 프리마켓 개방. 매매 초기화 및 리버스 모드 일일 1회 확정 탈출 단독 판별/집행.
 🔹 04:05 (EST) : 정규장 통합 주문 실행 및 V-REV / V14_VWAP '선제적 양방향 LOC 덫' 장전.
 🔹 04:10 (EST) : 섀도우 관제탑(Time-Split Radar) 프리장 관측 모드 스캔 시작.

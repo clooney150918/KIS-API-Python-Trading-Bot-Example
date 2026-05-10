@@ -9,6 +9,9 @@
 # 야후 파이낸스 다중인덱스(MultiIndex) 붕괴 스마트 우회 엔진 및 ATR 최소 데이터 검증망 이식
 # 🚨 MODIFIED: [V40.XX 옴니 매트릭스 전면 수술] 후행성 60MA/120MA 엔진 전면 소각 및
 # 전일 VWAP vs 당일 실시간 VWAP 동행 지표(Coincident Indicator) 듀얼 모멘텀 엔진으로 100% 교체.
+# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# _fetch_vwap_momentum_regime_sync 내부의 하락장(BEAR, SOXS) 판별 블록 전면 소각 및 하락장 시 NONE 타겟 락온으로 간소화.
+# 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] determine_market_regime 독스트링 내 SOXS 환각 텍스트 100% 영구 적출 완료.
 # ==========================================================
 import yfinance as yf
 import pandas as pd
@@ -23,17 +26,17 @@ from datetime import datetime
 
 CACHE_FILE = "data/volatility_cache.json"
 
-# 🚨 [수술 완료] 블랙스완/극저변동성 발생 시 계좌 직사 및 API Reject를 막기 위한 가중치 절대 상/하한선 (Bug #1)
+# 🚨 [수술 완료] 블랙스완/극저변동성 발생 시 계좌 직사 및 API Reject를 막기 위한 가중치 절대 상/하한선
 WEIGHT_MIN = 0.5   
 WEIGHT_MAX = 2.0   
 
-# 🚨 [수술 완료] 구조적 시장 변화에 대응하기 위한 기준 ATR 상수화 (Bug #5)
+# 🚨 [수술 완료] 구조적 시장 변화에 대응하기 위한 기준 ATR 상수화
 QQQ_DEFAULT_ATR_PCT  = 1.65   
 SOXX_DEFAULT_ATR_PCT = 2.93   
 MIN_ATR_ROWS = 14  
 
 def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """ 🚨 [수술 완료] 야후 파이낸스 API 업데이트로 인한 MultiIndex 순서 붕괴 방어 (Bug #4) """
+    """ 🚨 [수술 완료] 야후 파이낸스 API 업데이트로 인한 MultiIndex 순서 붕괴 방어 """
     if isinstance(df.columns, pd.MultiIndex):
         if 'Ticker' in df.columns.names:
             df.columns = df.columns.droplevel('Ticker')
@@ -73,7 +76,7 @@ def _save_cache(key, value):
     if dir_name and not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)
         
-    # 🚨 [수술 완료] 에러 시 임시 파일 찌꺼기(Disk Leak) 영구 소각 방어막 이식 (Bug #3)
+    # 🚨 [수술 완료] 에러 시 임시 파일 찌꺼기(Disk Leak) 영구 소각 방어막 이식
     fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -110,7 +113,7 @@ def _calculate_1y_atr(ticker, cache_key, default_atr):
         df_valid = df.dropna(subset=['ATR14_pct'])
         df_1y = df_valid.tail(252)
         
-        # 🚨 [수술 완료] 최소 14일 이상의 데이터가 보장되지 않으면 캐시 폴백 (Bug #5)
+        # 🚨 [수술 완료] 최소 14일 이상의 데이터가 보장되지 않으면 캐시 폴백
         if df_1y.empty or len(df_1y) < MIN_ATR_ROWS:
             logging.warning(f"⚠️ [Engine] {ticker} ATR 데이터 부족 ({len(df_1y)}행 < {MIN_ATR_ROWS}): 캐시/기본값 사용")
             return _load_cache(cache_key, default_atr)
@@ -144,7 +147,7 @@ def get_tqqq_target_drop():
         try:
             mean_vxn = float(valid_closes_1y.mean())
             if pd.isna(mean_vxn) or mean_vxn <= 0:
-                raise ValueError("Invalid Mean")
+                 raise ValueError("Invalid Mean")
             _save_cache("VXN_MEAN", mean_vxn)
         except Exception:
             # 🚨 [수술 완료] UnboundLocalError 런타임 즉사 버그 교정 (반환값 정상 할당)
@@ -228,7 +231,7 @@ def get_tqqq_target_drop_full():
         except Exception:
             mean_vxn = _load_cache("VXN_MEAN", 20.0)
             
-        # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온 (Bug #1)
+        # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온
         if mean_vxn <= 0:
             weight = 1.0
         else:
@@ -277,7 +280,7 @@ def get_soxl_target_drop_full():
         except Exception:
             mean_hv = _load_cache("SOXX_HV_MEAN", 25.0)
         
-        # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온 (Bug #1)
+        # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온
         if mean_hv <= 0:
             weight = 1.0
         else:
@@ -342,12 +345,13 @@ def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
             target_ticker = "SOXL"
             msg_desc = "상승장 (VWAP 상승 & 양봉)"
             
+        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각]
         # 1. 당일 VWAP이 전일 VWAP보다 하락 (기관이 어제보다 싸게 롱을 던짐)
         # 2. 당일 현재가가 시가보다 낮음 (음봉: 단타 자금도 매도에 쏠림)
         elif curr_vwap < prev_vwap and current_price < day_open:
             regime = "BEAR"
-            target_ticker = "SOXS"
-            msg_desc = "하락장 (VWAP 하락 & 음봉)"
+            target_ticker = "NONE" # 숏(SOXS) 타격 영구 소각
+            msg_desc = "하락장 (VWAP 하락 & 음봉) - 숏 타격 영구 소각"
             
         # 수급과 캔들의 방향이 불일치하는 구간 (기관의 눈치 싸움 및 휩소 구간)
         else:
@@ -369,10 +373,11 @@ def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
     except Exception as e:
         return {"status": "error", "msg": str(e)}
 
+# 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] 독스트링 내 SOXS 환각 텍스트 100% 영구 적출 완료
 async def determine_market_regime(broker_instance=None) -> dict:
     """
     비동기 데드락 원천 차단 방어막이 씌워진 VWAP 모멘텀 시장 국면 판별 함수.
-    매일 특정 스케줄에 호출되어 당일의 운명(SOXL/SOXS/NONE)을 락온합니다.
+    매일 특정 스케줄에 호출되어 당일의 운명(SOXL/NONE)을 락온합니다.
     """
     try:
         # 최대 10초 무한 대기 족쇄(Timeout) 가동

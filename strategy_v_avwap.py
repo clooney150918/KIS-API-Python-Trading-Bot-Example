@@ -6,6 +6,15 @@
 # 암살자는 오직 진입(BUY) 조건만 판별하며, 진입 후에는 15:25 EST까지 100% 무조건 홀딩(HOLD) 후 
 # 수익/손실 불문 전량 덤핑(SELL)하여 본진 예산을 복구하도록 아키텍처 대수술 완료.
 # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] SELL 사유 텍스트 내부에 남아있는 레거시 키워드 '(조기퇴근)' 100% 영구 소각 완료.
+# 🚨 MODIFIED: [V59.04 프리마켓 락다운 쉴드 이식] 09:30 이전 매수 타격 원천 차단으로 제13헌법 6조 완벽 준수.
+# 🚨 MODIFIED: [V60.00 옴니 매트릭스 진입 차단망 전면 폐기 및 데드코드 소각]
+# 1) 상위 라우터(strategy.py)에서 중앙 통제가 이루어지므로, 플러그인 내부에 잘못 복사된 
+#    self.apply_omni_matrix_filter 호출 및 미정의 qty 참조 블록을 100% 영구 소각 (제2헌법 준수).
+# 2) 횡보장 락다운(allow_buy=False)에 의한 타격 중단을 원천 차단하고 오직 팩트 데이터로만 진입 판별.
+# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# 1) is_inverse 인버스 판별 변수 및 SOXS 티커 조건 분기 100% 전면 철거.
+# 2) 하이킨아시 음봉 판별 팩트(ha_latched_bear 등) 상태 메모리 및 연산 영구 소각.
+# 3) 롱(SOXL) 진입 전용 단일 팩트(cond1, cond2, cond_seq)로 아키텍처 진공 압축 완료.
 # ==========================================================
 import logging
 import datetime
@@ -41,30 +50,30 @@ class VAvwapHybridPlugin:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
 
-                    if data.get('date') != today_str:
-                        qty = data.get('qty', 0)
-                        if qty > 0:
-                            data['bought'] = True
-                            data['shutdown'] = False
-                        else:
-                            data['qty'] = 0
-                            data['avg_price'] = 0.0
-                            data['shutdown'] = False
-                            data['strikes'] = 0
-                            data['bought'] = False
-                            data['daily_bought_qty'] = 0
-                            data['daily_sold_qty'] = 0
+                if data.get('date') != today_str:
+                    qty = data.get('qty', 0)
+                    if qty > 0:
+                        data['bought'] = True
+                        data['shutdown'] = False
+                    else:
+                        data['qty'] = 0
+                        data['avg_price'] = 0.0
+                        data['shutdown'] = False
+                        data['strikes'] = 0
+                        data['bought'] = False
+                        data['daily_bought_qty'] = 0
+                        data['daily_sold_qty'] = 0
 
-                        data['HA_LATCHED_BULL'] = False
-                        data['HA_LATCHED_BEAR'] = False
+                    data['HA_LATCHED_BULL'] = False
+                    # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] HA_LATCHED_BEAR 영구 적출 완료
 
-                        data['date'] = today_str
-                        self.save_state(ticker, now_est, data)
+                    data['date'] = today_str
+                    self.save_state(ticker, now_est, data)
 
-                    return data
+                return data
             except Exception:
                 pass
-        return {"executed_buy": False, "shutdown": False, "strikes": 0, "qty": 0, "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, "HA_LATCHED_BULL": False, "HA_LATCHED_BEAR": False}
+        return {"executed_buy": False, "shutdown": False, "strikes": 0, "qty": 0, "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, "HA_LATCHED_BULL": False}
 
     def save_state(self, ticker, now_est, state_data):
         file_path = self._get_state_file(ticker, now_est)
@@ -158,6 +167,9 @@ class VAvwapHybridPlugin:
             return None
 
     def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, **kwargs):
+        # MODIFIED: [V60.00 옴니 매트릭스 중복 필터 블록 전면 소각]
+        # 제2헌법 및 제13헌법 5조에 의거, 하단에 존재하던 self.apply_omni_matrix_filter 호출 및 
+        # allow_buy 분기 블록을 흔적도 없이 적출함. 암살자는 이제 오직 팩트 지표로만 판단함.
 
         df_1min_base = df_1min_base if df_1min_base is not None else kwargs.get('base_df')
         avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
@@ -193,10 +205,8 @@ class VAvwapHybridPlugin:
         base_vwap = base_curr_p
         vwap_success = False 
 
-        is_inverse = exec_ticker.upper() in ["SOXS", "SQQQ", "SPXU"]
-
+        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] is_inverse 변수 영구 철거
         ha_2_bullish_no_lower = False
-        ha_2_bearish_no_upper = False
         trend_sequence = "PENDING"
 
         if df_1min_base is not None and not df_1min_base.empty:
@@ -224,11 +234,10 @@ class VAvwapHybridPlugin:
                     if t_high_idx < t_low_idx:
                         trend_sequence = "BEAR"
                     elif t_low_idx < t_high_idx:
-                         trend_sequence = "BULL"
+                        trend_sequence = "BULL"
 
                     if is_regular_session and curr_time < datetime.time(9, 35):
                         ha_2_bullish_no_lower = False
-                        ha_2_bearish_no_upper = False
                     else:
                         df['datetime'] = pd.to_datetime(df.index)
                         df.set_index('datetime', inplace=True)
@@ -241,7 +250,7 @@ class VAvwapHybridPlugin:
                             ha_open = []
                             for i in range(len(df_5m)):
                                 if i == 0:
-                                     ha_open.append((float(df_5m['open'].iloc[i]) + float(df_5m['close'].iloc[i])) / 2.0)
+                                    ha_open.append((float(df_5m['open'].iloc[i]) + float(df_5m['close'].iloc[i])) / 2.0)
                                 else:
                                     ha_open.append((ha_open[i-1] + float(df_5m['HA_Close'].iloc[i-1])) / 2.0)
 
@@ -250,14 +259,12 @@ class VAvwapHybridPlugin:
                             df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
 
                             df_5m['No_Lower_Wick'] = (df_5m['HA_Open'] - df_5m['HA_Low']) <= 0.01
-                            df_5m['No_Upper_Wick'] = (df_5m['HA_High'] - df_5m['HA_Open']) <= 0.01
+
                             df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
-                            df_5m['Is_Bearish'] = df_5m['HA_Close'] < df_5m['HA_Open']
 
                             if len(df_5m) >= 2:
                                 last_2 = df_5m.tail(2)
                                 ha_2_bullish_no_lower = last_2['Is_Bullish'].all() and last_2['No_Lower_Wick'].all()
-                                ha_2_bearish_no_upper = last_2['Is_Bearish'].all() and last_2['No_Upper_Wick'].all()
 
             except Exception as e:
                 logging.error(f"🚨 [V_AVWAP] 기초자산 HA 연산 실패: {e}")
@@ -313,6 +320,10 @@ class VAvwapHybridPlugin:
         if curr_time < time_0410:
             return _build_res('WAIT', '04:10_이전_오프닝_휩소_방어(10분_안전마진_대기)')
 
+        # 🚨 MODIFIED: [V59.04 프리마켓 락다운 쉴드 이식] 제13헌법 6조 완벽 준수
+        if not is_regular_session:
+            return _build_res('WAIT', '프리마켓_노이즈_원천차단_정규장_개장_대기')
+
         if curr_time >= time_1525:
             avwap_state["shutdown"] = True
             self.save_state(exec_ticker, now_est, avwap_state)
@@ -340,15 +351,11 @@ class VAvwapHybridPlugin:
         if base_day_high > 0 and base_day_low > 0 and base_prev_c > 0:
             is_neg_gap_state = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
 
-        cond1_met = False
-        if is_inverse:
-            cond1_met = is_neg_gap_state
-        else:
-            cond1_met = not is_neg_gap_state
+        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] cond1 롱 단일 팩트 락온
+        cond1_met = not is_neg_gap_state
 
         persistent_state = self.load_state(exec_ticker, now_est)
         ha_latched_bull = persistent_state.get('HA_LATCHED_BULL', False)
-        ha_latched_bear = persistent_state.get('HA_LATCHED_BEAR', False)
         latch_changed = False
 
         if ha_2_bullish_no_lower:
@@ -360,35 +367,19 @@ class VAvwapHybridPlugin:
                 ha_latched_bull = False
                 latch_changed = True
 
-        if ha_2_bearish_no_upper:
-            if not ha_latched_bear:
-                ha_latched_bear = True
-                latch_changed = True
-        if trend_sequence == "BULL" or rem_5_pct < 1.0:
-            if ha_latched_bear:
-                ha_latched_bear = False
-                latch_changed = True
-
         if latch_changed:
             persistent_state['HA_LATCHED_BULL'] = ha_latched_bull
-            persistent_state['HA_LATCHED_BEAR'] = ha_latched_bear
             self.save_state(exec_ticker, now_est, persistent_state)
 
-        cond2_met = False
-        if not is_inverse:
-            cond2_met = (base_curr_p > base_vwap) and ha_latched_bull
-        else:
-            cond2_met = (base_curr_p < base_vwap) and ha_latched_bear
+        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] cond2_met 롱 단일 팩트 락온
+        cond2_met = (base_curr_p > base_vwap) and ha_latched_bull
 
         cond3_met = True
 
+        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] cond_seq 롱 단일 팩트 락온
         cond_seq = True
-        if not is_inverse:
-            if trend_sequence == "BEAR":
-                cond_seq = False
-        else:
-            if trend_sequence == "BULL":
-                 cond_seq = False
+        if trend_sequence == "BEAR":
+            cond_seq = False
 
         if cond1_met and cond2_met and cond3_met and cond_seq:
             if avwap_alloc_cash > 0:
@@ -403,5 +394,5 @@ class VAvwapHybridPlugin:
             if not cond2_met: fail_reasons.append("HA모멘텀미달")
             if not cond3_met: fail_reasons.append("체력미달")
             if not cond_seq: 
-                fail_reasons.append("시계열체력하락세" if not is_inverse else "시계열체력상승세")
+                fail_reasons.append("시계열체력하락세")
             return _build_res('WAIT', f'진입조건대기({",".join(fail_reasons)})')

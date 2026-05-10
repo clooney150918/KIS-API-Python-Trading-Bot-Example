@@ -6,6 +6,7 @@
 # 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출 전면 비동기 래핑.
 # 🚨 MODIFIED: [V54.02 깡통 스냅샷 붕괴 방어] V-REV 예방 덫 소각 시 생성되는 더미 스냅샷에 prev_c 및 is_zero_start 팩트 다이렉트 주입 락온
+# 🚨 MODIFIED: [V-REV 데이터 기아 방어] 통신 장애로 0.0 폴백 시 루프 조기 탈출(continue) 무시 및 깡통 스냅샷 팩트 박제 락온.
 # ==========================================================
 import logging
 import datetime
@@ -97,6 +98,10 @@ async def scheduled_regular_trade(context):
                 safe_avg = float(h.get('avg') or 0.0)
                 safe_qty = int(float(h.get('qty') or 0))
 
+                # 🚨 [비동기 래핑] 파일 I/O 데드락 방어 및 스코프 전진 배치 (V-REV 데이터 기아 방어용)
+                version = await asyncio.to_thread(cfg.get_version, t)
+                is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
+
                 curr_p = 0.0
                 prev_c = 0.0
                 for _api_retry in range(3):
@@ -123,17 +128,20 @@ async def scheduled_regular_trade(context):
                     await asyncio.sleep(2.0)
 
                 if curr_p <= 0 or prev_c <= 0:
-                    msgs[t] += (
-                        f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
-                        f"▫️ 매수 방어선을 장전하지 못하고 다음 종목으로 넘어갑니다(continue 바이패스).\n"
-                    )
-                    all_success_map[t] = False
-                    await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
-                    continue
-                
-                # 🚨 [비동기 래핑] 파일 I/O 데드락 방어
-                version = await asyncio.to_thread(cfg.get_version, t)
-                is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
+                    # 🚨 MODIFIED: [V-REV 데이터 기아 방어] 가격 결측 시 조기 탈출 무시 및 깡통 스냅샷 강제 박제
+                    if version == "V_REV":
+                        msgs[t] += (
+                            f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
+                            f"▫️ 0.0 폴백 상태이나 V-REV 깡통 스냅샷(0.0) 박제를 위해 런타임을 강제 진행합니다.\n"
+                        )
+                    else:
+                        msgs[t] += (
+                            f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
+                            f"▫️ 매수 방어선을 장전하지 못하고 다음 종목으로 넘어갑니다(continue 바이패스).\n"
+                        )
+                        all_success_map[t] = False
+                        await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
+                        continue
 
                 if version == "V_REV" and is_manual_vwap:
                     msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모드 가동 중</b>\n"

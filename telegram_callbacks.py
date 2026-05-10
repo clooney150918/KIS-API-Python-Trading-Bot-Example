@@ -20,6 +20,12 @@
 # 제어 콜백 파이프라인(데드코드)을 전면 철거하고 REFRESH 기능만 보존 완료.
 # 🚨 MODIFIED: [V59.03 관제탑 진입 배선 복구] 
 # settlement 메뉴에서 '관제탑' 버튼 클릭 시 cmd_avwap을 정상 호출하도록 AVWAP:MENU 라우팅 배선 복구 완료.
+# NEW: [V59.06] VWAP 런타임 엑스레이(Dry-Run) 진단 엔진 라우터 이식 완료 (순수 Read-Only 섀도우 연산)
+# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 데드코드 전면 폐기]
+# XRAY 진단 엔진 내부에서 매수 방아쇠를 강제로 잠그던 옴니 매트릭스 스캔 블록 및 시각적 브리핑 요소를 영구 소각함.
+# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# 1) SET_VER 및 SET_VER_CONFIRM 콜백 내 SOXS 락다운 방어막 텍스트를 시스템 영구 폐기 경고로 오버라이드 완료.
+# 2) TICKER 액션 내 SOXS 경고문 교정 및 '듀얼 모멘텀' 텍스트를 '싱글 모멘텀'으로 팩트 교정 완료.
 # ==========================================================
 import logging
 import datetime
@@ -65,7 +71,7 @@ class TelegramCallbacks:
                 q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                 vrev_qty = sum(int(float(lot.get('qty', 0))) for lot in q_data if int(float(lot.get('qty', 0))) > 0)
         except Exception:
-            pass
+             pass
 
         return max(kis_qty, v14_qty, vrev_qty)
 
@@ -74,6 +80,95 @@ class TelegramCallbacks:
         chat_id = update.effective_chat.id
         data = query.data.split(":")
         action, sub = data[0], data[1] if len(data) > 1 else ""
+
+        # NEW: [VWAP 엑스레이(Dry-Run) 진단 엔진 라우터 신설]
+        # 장부 상태(Residual)를 오염시키지 않기 위해 코어 엔진을 호출하지 않고
+        # 내부에서 15:30 EST 기준 수학적 섀도우 연산을 수행하여 팩트만 타전합니다.
+        if action == "XRAY":
+            await query.answer("🔍 엑스레이 진단 엔진 가동 중... (Read-Only)", show_alert=False)
+            if sub == "VWAP":
+                ticker = data[2]
+                
+                try:
+                    # 1. 기초 팩트 스캔 (비동기 래핑 & 타임아웃 족쇄)
+                    curr_p = await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, ticker), timeout=5.0)
+                    prev_c = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, ticker), timeout=5.0)
+                    
+                    if curr_p is None: curr_p = 0.0
+                    if prev_c is None: prev_c = 0.0
+                     
+                    # MODIFIED: [V60.00] 옴니 매트릭스 판독 스캔 블록 영구 소각 완료
+                    
+                    q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker) if getattr(self, 'queue_ledger', None) else []
+                    total_q = sum(int(item.get("qty", 0)) for item in q_data)
+                    
+                    # 3. 예산 및 0주 팩트 스캔
+                    safe_seed = await asyncio.to_thread(self.cfg.get_seed, ticker)
+                    alloc_cash = safe_seed * 0.15
+                    
+                    strategy_rev = self.strategy.v_rev_plugin
+                    await asyncio.to_thread(strategy_rev._load_state_if_needed, ticker)
+                    
+                    total_spent = float(strategy_rev.executed.get("BUY_BUDGET", {}).get(ticker, 0.0))
+                    rem_budget = max(0.0, alloc_cash - total_spent)
+                    
+                    cached_plan = await asyncio.to_thread(strategy_rev.load_daily_snapshot, ticker)
+                    if cached_plan:
+                        is_zero_start = cached_plan.get("is_zero_start", cached_plan.get("total_q", -1) == 0)
+                    else:
+                        is_zero_start = (total_q == 0)
+                        
+                    # 4. VWAP 15:30 기준 프로파일 스캔 및 동적 분배
+                    profile = await asyncio.to_thread(self.cfg.get_vwap_profile, ticker)
+                    target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 57)]
+                    total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
+                    raw_weight = profile.get("15:30", 0.0)
+                    current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / len(target_keys))
+                    
+                    slice_budget = alloc_cash * current_weight
+                    shared_bucket = float(strategy_rev.residual["BUY_SHARED"].get(ticker, 0.0)) + slice_budget
+                    
+                    b1_budget = shared_bucket * 0.5
+                    b2_budget = shared_bucket * 0.5
+                    
+                    # 절대 타점(Anchor) 섀도우 연산
+                    p1_trigger = round(prev_c * 1.15, 2) if is_zero_start else round(prev_c * 0.995, 2)
+                    p2_trigger = round(prev_c * 0.999, 2) if is_zero_start else round(prev_c * 0.9725, 2)
+                    
+                    msg = f"🔍 <b>[ {ticker} V-REV 런타임 엑스레이 진단 ]</b>\n"
+                    msg += f"▫️ <b>가상 시간</b> : 15:30 EST (타임 슬라이싱 4회차)\n"
+                    msg += f"▫️ <b>현재가</b> : ${curr_p:.2f} / <b>전일종가</b> : ${prev_c:.2f}\n"
+                    # MODIFIED: [V60.00] 옴니 매트릭스 렌더링 텍스트 영구 소각 완료
+                    msg += f"▫️ <b>0주 새출발</b> : {'True' if is_zero_start else 'False'}\n"
+                    msg += f"▫️ <b>1분 할당 예산</b> : ${slice_budget:.2f} (총 예산의 {current_weight*100:.1f}%)\n"
+                    msg += f"▫️ <b>누적 잔여 예산</b> : ${rem_budget:.2f}\n\n"
+                    
+                    msg += "🎯 <b>[ 봇의 내부 판단 (Action) ]</b>\n"
+                    
+                    if rem_budget <= 0:
+                        msg += "👉 <b>예산 고갈 (Budget Empty)</b> : 할당된 1일치 예산(15%)이 모두 소진되어 타격을 종료합니다.\n"
+                    # MODIFIED: [V60.00] 옴니 매트릭스 진입 차단 분기점 영구 소각 완료
+                    else:
+                        # Buy1 타격 검증
+                        msg += f"🔴 <b>매수 타점(Buy1)</b> : ${p1_trigger:.2f} (누적 예산: ${b1_budget:.2f})\n"
+                        if curr_p <= p1_trigger:
+                            msg += f"  👉 현재가(${curr_p:.2f})가 타점 이하이므로 <b>시장가 스윕 타격이 정상 격발</b>됩니다.\n"
+                        else:
+                            msg += f"  👉 현재가(${curr_p:.2f})가 타점을 초과하여 <b>매수 스킵(예산 다음분 이월)</b> 처리됩니다.\n"
+                            
+                        # Buy2 타격 검증
+                        msg += f"🔴 <b>매수 타점(Buy2)</b> : ${p2_trigger:.2f} (누적 예산: ${b2_budget:.2f})\n"
+                        if curr_p <= p2_trigger:
+                            msg += f"  👉 현재가(${curr_p:.2f})가 타점 이하이므로 <b>시장가 스윕 타격이 정상 격발</b>됩니다.\n"
+                        else:
+                            msg += f"  👉 현재가(${curr_p:.2f})가 타점을 초과하여 <b>매수 스킵(예산 다음분 이월)</b> 처리됩니다.\n"
+                    
+                    await context.bot.send_message(chat_id=query.message.chat_id, text=msg, parse_mode='HTML')
+                    return
+                    
+                except Exception as e:
+                    await context.bot.send_message(chat_id=query.message.chat_id, text=f"🚨 엑스레이 진단 중 에러 발생: {e}", parse_mode='HTML')
+                    return
 
         if action == "UPDATE":
             await query.answer()
@@ -108,7 +203,7 @@ class TelegramCallbacks:
                     q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                 else:
                     q_data = []
-            
+             
                 msg, markup = self.view.get_queue_management_menu(ticker, q_data)
                 await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
@@ -153,8 +248,8 @@ class TelegramCallbacks:
             # 🚨 [비동기 래핑]
             q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
             if not q_data:
-                await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
-                return
+                 await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
+                 return
                 
             await query.answer("⏳ KIS 서버에 수동 긴급 수혈(MOC) 명령을 격발합니다...", show_alert=False)
             
@@ -212,7 +307,7 @@ class TelegramCallbacks:
                     await query.answer("✅ 지층 삭제 완료. KIS 원장과 동기화합니다.", show_alert=False)
                     
                     if ticker not in self.sync_engine.sync_locks:
-                        self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+                         self.sync_engine.sync_locks[ticker] = asyncio.Lock()
                     if not self.sync_engine.sync_locks[ticker].locked():
                         await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=True)
                         
@@ -419,7 +514,7 @@ class TelegramCallbacks:
                 
             if holdings is None:
                 return await query.edit_message_text("❌ API 통신 오류로 주문을 실행할 수 없습니다.")
-                 
+                
             active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
             _, allocated_cash = await asyncio.to_thread(controller._calculate_budget_allocation, cash, active_tickers)
             h = holdings.get(t, {'qty':0, 'avg':0})
@@ -442,7 +537,7 @@ class TelegramCallbacks:
                 except Exception as e:
                     logging.debug(f"YF 정규장 종가 롤오버 스캔 실패 ({t}): {e}")
                 if curr_p > 0 and prev_c == 0.0:
-                        prev_c = curr_p
+                    prev_c = curr_p
             
             ma_5day = await asyncio.to_thread(self.broker.get_5day_ma, t)
             
@@ -512,8 +607,9 @@ class TelegramCallbacks:
             if ticker == "TQQQ" and new_ver == "V_REV":
                 await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.")
                 return
+            # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] SOXS 전환 락다운 텍스트 교정
             if ticker == "SOXS":
-                await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.")
+                await context.bot.send_message(chat_id, "⚠️ [V61.00 절대 헌법] 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다.")
                 return
 
             async with self.tx_lock:
@@ -575,8 +671,9 @@ class TelegramCallbacks:
             if ticker == "TQQQ" and target_ver == "V_REV":
                 await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] TQQQ는 V14 무매4 전용 아키텍처입니다. 전환이 차단되었습니다.")
                 return
+            # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] SOXS 전환 락다운 텍스트 교정
             if ticker == "SOXS":
-                await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 타격용 티커로, 개별 모드 전환이 영구 차단되었습니다.")
+                await context.bot.send_message(chat_id, "⚠️ [V61.00 절대 헌법] 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다.")
                 return
 
             async with self.tx_lock:
@@ -715,15 +812,16 @@ class TelegramCallbacks:
             if sub == "ALL":
                 target_tickers = ["SOXL", "TQQQ"]
                 msg_txt = "SOXL + TQQQ 통합"
+            # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] 듀얼 모멘텀 -> 싱글 모멘텀 교정 및 SOXS 경고 오버라이드
             elif "," in sub:
                 if "SOXS" in sub.split(","):
-                    await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS는 듀얼 모멘텀 암살자 전용이므로 메인 장부에 등록할 수 없습니다.")
+                    await context.bot.send_message(chat_id, "⚠️ [V61.00 절대 헌법] 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다.")
                     return
                 target_tickers = sub.split(",")
-                msg_txt = " + ".join(target_tickers) + " 듀얼 모멘텀"
+                msg_txt = " + ".join(target_tickers) + " 싱글 모멘텀"
             else:
                 if sub == "SOXS":
-                    await context.bot.send_message(chat_id, "⚠️ [절대 헌법 위반] SOXS 단독 운용 모드는 영구 폐기되었습니다.")
+                    await context.bot.send_message(chat_id, "⚠️ [V61.00 절대 헌법] 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다.")
                     return
                 target_tickers = [sub]
                 msg_txt = sub + " 전용"

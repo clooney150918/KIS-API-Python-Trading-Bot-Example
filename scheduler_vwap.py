@@ -25,6 +25,9 @@
 # 🚨 MODIFIED: [V54.01 VWAP 데이터 통합 롤백] vwap_data.py 외부 파일 임포트 소각 및 ConfigManager 수혈 락온
 # 🚨 MODIFIED: [V54.02 깡통 스냅샷 붕괴 방어] prev_c 다이렉트 추출 파이프라인 이식으로 데이터 기아(Data Starvation) 원천 차단
 # 🚨 NEW: [달력 API 결측 연쇄 기절 방어] 장마감시간 빈 값 반환 시 평일 16:00 EST 강제 폴백 락온 이식 완료.
+# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 전면 폐기 및 데드코드 소각]
+# 1분 타임 슬라이싱 루프 내부에서 갭 스위칭(Gap Hijack) 진입을 가로막던 
+# omni_filter 호출 의존성을 완벽히 끊어내고 런타임 붕괴(AttributeError) 뇌관 해체.
 # ==========================================================
 import logging
 import datetime
@@ -131,6 +134,7 @@ async def scheduled_vwap_init_and_cancel(context):
                             # 🚨 MODIFIED: [V54.02] 깡통 스냅샷 붕괴 방어. prev_c 다이렉트 추출 파이프라인 이식
                             prev_c = 0.0
                             snap_for_anchor = None
+                        
                             try:
                                 if version == "V_REV" and strategy_rev:
                                     snap_for_anchor = await asyncio.to_thread(strategy_rev.load_daily_snapshot, t)
@@ -185,7 +189,7 @@ async def scheduled_vwap_init_and_cancel(context):
                                     strategy_rev.ensure_failsafe_snapshot,
                                     t, curr_p, prev_c, rev_daily_budget, q_data, total_kis_qty, avwap_qty
                                 )
-                            elif version == "V14" and is_manual_vwap and strategy and hasattr(strategy, 'v14_vwap_plugin'):
+                            elif version == "V14" and is_manual_vwap and hasattr(strategy, 'v14_vwap_plugin'):
                                 _, alloc_cash, _ = await asyncio.to_thread(cfg.calculate_v14_state, t)
                                 await asyncio.to_thread(
                                     strategy.v14_vwap_plugin.ensure_failsafe_snapshot,
@@ -267,13 +271,13 @@ async def scheduled_vwap_trade(context):
     
     if not (vwap_start_time <= now_est <= vwap_end_time):
         return
-        
+
     app_data = context.job.data
     cfg, broker, strategy, tx_lock = app_data['cfg'], app_data['broker'], app_data['strategy'], app_data['tx_lock']
     chat_id = context.job.chat_id
     base_map = app_data.get('base_map', {'SOXL': 'SOXX', 'TQQQ': 'QQQ'})
     
-    regime_data = app_data.get('regime_data')
+    # 🚨 MODIFIED: [V60.00] 옴니 매트릭스 데드코드 정리로 더 이상 사용되지 않는 regime_data 로드 코드 삭제 완료
     
     vwap_cache = app_data.setdefault('vwap_cache', {})
     today_str = now_est.strftime('%Y%m%d')
@@ -371,7 +375,7 @@ async def scheduled_vwap_trade(context):
                             h = safe_holdings.get(t) or {}
                             total_kis_qty = int(float(h.get('qty', 0)))
                             avg_price = float(h.get('avg', 0.0))
-                            
+                             
                             avwap_qty = 0
                             if hasattr(strategy, 'load_avwap_state'):
                                 avwap_state = await asyncio.to_thread(strategy.load_avwap_state, t, now_est)
@@ -381,7 +385,7 @@ async def scheduled_vwap_trade(context):
                                 rev_daily_budget = float(await asyncio.to_thread(cfg.get_seed, t) or 0.0) * 0.15
                                 q_data = await asyncio.to_thread(queue_ledger.get_queue, t)
                                 await asyncio.to_thread(
-                                    strategy_rev.ensure_failsafe_snapshot,
+                                     strategy_rev.ensure_failsafe_snapshot,
                                     t, curr_p, prev_c, rev_daily_budget, q_data, total_kis_qty, avwap_qty
                                 )
                             elif version == "V14" and is_manual_vwap and hasattr(strategy, 'v14_vwap_plugin'):
@@ -478,7 +482,7 @@ async def scheduled_vwap_trade(context):
                         if hasattr(strategy, 'load_avwap_state'):
                             avwap_state_sd = await asyncio.to_thread(strategy.load_avwap_state, t, now_est)
                             avwap_qty_for_shutdown = int(avwap_state_sd.get('qty', 0))
-                            
+                        
                         pure_actual_qty = max(0, actual_qty - avwap_qty_for_shutdown)
                         
                         q_data = await asyncio.to_thread(queue_ledger.get_queue, t)
@@ -601,7 +605,7 @@ async def scheduled_vwap_trade(context):
                                                 await asyncio.sleep(2.0)
                                                 unfilled_check = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
                                                 safe_unfilled = unfilled_check if isinstance(unfilled_check, list) else []
-                                                
+
                                                 my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
                                                 if my_order:
                                                     ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
@@ -639,7 +643,7 @@ async def scheduled_vwap_trade(context):
                                                                 _pf.flush()
                                                                 os.fsync(_pf.fileno())
                                                             os.replace(tmp_path, f_path)
-                                                            
+                                                        
                                                         await asyncio.to_thread(_save_pending_grad, pending_file, pending_data)
                                                     except Exception as pg_e:
                                                         logging.error(f"🚨 [{t}] pending_grad 마커 파일 저장 실패: {pg_e}")
@@ -648,7 +652,7 @@ async def scheduled_vwap_trade(context):
                                             msg = f"⚠️ <b>[{t}] 스윕 피니셔 덤핑 생략 (MOC 락다운 감지)</b>\n▫️ 조건이 달성되었으나, 대상 물량이 수동 긴급 수혈(MOC) 등 취소 불가 상태로 미국 거래소에 묶여 있어 스윕 덤핑을 자동 스킵합니다."
                                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                                             vwap_cache[f"REV_{t}_sweep_skip_msg"] = True
-                                        
+                            
                             if target_sweep_qty > 0:
                                 continue 
                         
@@ -689,9 +693,10 @@ async def scheduled_vwap_trade(context):
                         
                         target_orders = []
                         gap_thresh = await asyncio.to_thread(getattr(cfg, 'get_vrev_gap_threshold', lambda x: -0.67), t)
-                        omni_filter = {"allow_buy": True}  
                         
-                        if omni_filter["allow_buy"] and current_regime == "BUY" and not vwap_cache.get(f"REV_{t}_gap_hijack_fired"):
+                        # 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 전면 폐기]
+                        # omni_filter 의존성을 100% 끊어내고 순수 타점/추세(current_regime) 기반으로 갭 하이재킹(Gap Hijack) 격발
+                        if current_regime == "BUY" and not vwap_cache.get(f"REV_{t}_gap_hijack_fired"):
                             base_tkr = base_map.get(t, 'SOXX')
                             try:
                                 base_curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, base_tkr), timeout=10.0)
@@ -734,7 +739,7 @@ async def scheduled_vwap_trade(context):
                                             target_orders = [{'side': 'BUY', 'qty': buy_qty, 'price': exec_price, 'type': 'LIMIT', 'desc': '갭 스위치 스윕', 'bucket': 'BUY_GAP_HIJACK'}]
                                             vwap_cache[f"REV_{t}_gap_hijack_fired"] = True
                                             
-                                            msg = f"⚡ <b>[{t}] 🤖 옴니 매트릭스 자율주행 (Gap Hijack) 발동!</b>\n"
+                                            msg = f"⚡ <b>[{t}] 🤖 모멘텀 자율주행 (Gap Hijack) 발동!</b>\n"
                                             msg += f"▫️ 기초자산({base_tkr}) VWAP 이탈률(<b>{gap_pct:+.2f}%</b>)이 임계치(<b>{gap_thresh}%</b>)를 하향 돌파했습니다.\n"
                                             msg += f"▫️ VWAP 타임 슬라이싱 스케줄을 즉각 파기하고, 잔여 예산 100%를 매도 1호가로 전량 스윕(Sweep) 타격합니다!"
                                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
@@ -754,9 +759,8 @@ async def scheduled_vwap_trade(context):
                             if rev_plan is None:
                                 continue
                                 
-                            # 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술] 
-                            # 텔레그램 무음 파라미터 소각 및 에러 타전망 이식 완료
-                            if not is_zero_start and rev_plan.get('trigger_loc') and minutes_to_close >= 15:
+                            # 🚨 MODIFIED: [V59.04] 60% 지배력 추세장 락다운 붕괴 맹점 수술 (15분 미만 족쇄 전면 소각)
+                            if not is_zero_start and rev_plan.get('trigger_loc'):
                                 vwap_cache[f"REV_{t}_loc_fired"] = True
                                 msg = f"🛡️ <b>[{t}] 60% 거래량 지배력 감지 (추세장 전환)</b>\n"
                                 msg += f"▫️ 기관급 자금 쏠림으로 인해 위험한 1분 단위 타임 슬라이싱(VWAP)을 전면 중단합니다.\n"
@@ -897,7 +901,7 @@ async def scheduled_vwap_trade(context):
                         unfilled_qty = slice_qty - ccld_qty
                         if unfilled_qty > 0:
                             await _process_refund(unfilled_qty)
-                                
+                        
                         if ccld_qty > 0:
                             if version == "V_REV":
                                 await asyncio.to_thread(strategy_rev.record_execution, t, side, ccld_qty, exec_price)

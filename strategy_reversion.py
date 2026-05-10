@@ -252,6 +252,10 @@ class ReversionStrategy:
         now_est = datetime.now(ZoneInfo('America/New_York'))
         time_str = now_est.strftime('%H:%M')
 
+        # NEW: [유령 스냅샷 무한 스팸 덤핑 폭주 셧다운 방어막 이식]
+        if not is_snapshot_mode and now_est.hour == 15 and now_est.minute > 56:
+            return {"orders": [], "trigger_loc": False, "total_q": total_q}
+
         if not is_snapshot_mode and time_str not in target_keys:
             if cached_plan:
                 if is_zero_start_session:
@@ -378,7 +382,6 @@ class ReversionStrategy:
             if is_snapshot_mode:
                 self.save_daily_snapshot(ticker, plan_result)
 
-            # 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술] 팩트 락온 주입
             self._save_state(ticker)
             return plan_result
 
@@ -404,8 +407,6 @@ class ReversionStrategy:
             raw_slice = float(alloc_cash) * current_weight
             shared_bucket = float(self.residual["BUY_SHARED"].get(ticker, 0.0)) + raw_slice
             
-            # 🚨 MODIFIED: [V51.00 몰빵 로직 전면 철거] 
-            # 0주 새출발 시에도 무조건 50:50 예산 분할 원칙을 100% 강제 락온.
             b1_budget_slice = shared_bucket * 0.5
             b2_budget_slice = shared_bucket * 0.5
             
@@ -430,9 +431,6 @@ class ReversionStrategy:
                         else:
                             b2_budget_slice = curr_p
                     
-                # 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온]
-                # 장 마감 직전(min_idx >= 28)까지 단 1주도 사지 못했다면,
-                # 전체 예산이 1주 가격보다 작더라도 무조건 가불을 땡겨서 1주를 강제 매수!
                 if min_idx >= 28 and curr_p > 0 and total_spent == 0.0:
                     if b1_budget_slice < curr_p and b2_budget_slice < curr_p:
                         b1_budget_slice = curr_p

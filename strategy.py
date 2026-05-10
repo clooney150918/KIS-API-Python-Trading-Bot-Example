@@ -1,18 +1,19 @@
 # ==========================================================
-# [strategy.py] - 🌟 2대 코어 + 하이브리드 라우터 완성본 🌟
+# [strategy.py] - 🌟 V61.00 롱 단일 모멘텀 암살자 전용 라우터 🌟
 # ⚠️ 이 주석 및 파일명 표기는 절대 지우지 마세요.
 # 🚨 MODIFIED: [V32.00 그랜드 수술] 불필요한 AVWAP 동적 파라미터 수신 배선 완전 소각
-# NEW: [V40.XX 옴니 매트릭스 절대 헌법] TQQQ(V14) / SOXS(V-REV) 런타임 강제 라우팅(Bypass) 쉴드 이식
+# NEW: [V40.XX 옴니 매트릭스 절대 헌법] TQQQ(V14) 런타임 강제 라우팅(Bypass) 쉴드 이식
 # 🚨 MODIFIED: [V40.XX 옴니 매트릭스 전면 수술] 후행성 60MA/120MA 엔진 전면 소각 및
 # 전일 VWAP vs 당일 실시간 VWAP 동행 지표(Coincident Indicator) 듀얼 모멘텀 엔진 수신 및 라우팅 락온
-# 🚨 MODIFIED: [V43.00 작전 통제실 복구] AVWAP 사용자가 설정하는 커스텀 목표 수익률(Target) 및 근무 모드(조기퇴근/다중출장) 파라미터를 하위 플러그인(strategy_v_avwap)으로 전달하는 라우터 배선 복구 완료.
-# 🚨 MODIFIED: [V44.03 AVWAP 매수 방어] **kwargs 배선 개통으로 5일 ATR 등 신규 파라미터 주입 호환성 확보
-# 🚨 MODIFIED: [V44.61 팩트 교정] VWAP 지배력(Dominance) 분석 시 프리마켓 거래량 노이즈 원천 차단 및 정규장 100% 락온
 # 🚨 MODIFIED: [V54.06 SSOT 코어 통일 및 Split-Brain 영구 소각]
-# 1) V_REV 모드 판별 시 억지스러운 is_active 플래그 의존도를 100% 소각하고, version="V_REV" 자체를 단일 진실 공급원(SSOT)으로 락온.
-# 2) get_plan 내부 V_REV 더미 반환 시 is_reverse=True 로 강제 결속하여 UI 렌더링 엇박자(프랑켄슈타인 맹점) 완벽 해체.
-# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각]
-# 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 목표 수익률 및 출장 모드 파라미터 추출 배선 영구 적출 완료.
+# 1) V_REV 모드 판별 시 version="V_REV" 자체를 단일 진실 공급원(SSOT)으로 락온.
+# 2) get_plan 내부 V_REV 더미 반환 시 is_reverse=True 로 강제 결속하여 UI 렌더링 엇박자 해체.
+# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 엔진 전면 폐기]
+# 기회비용을 훼손하던 apply_omni_matrix_filter 엔진 및 관련 매수 차단 로직 100% 영구 소각 완료.
+# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# [ V61 절대 헌법 ]: 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다. 
+# get_plan 진입부의 SOXS 우회 방어막을 제거하고 롱 단일 모멘텀 아키텍처로 진공 압축 완료.
+# 🚨 MODIFIED: [V61.01 시각적 오염 마커 클리닝] 주석문에 유입된 외부 에디터 렌더링 마커 태그 찌꺼기 100% 도려내어 코드 결벽성 복구.
 # ==========================================================
 import logging
 import pandas as pd
@@ -29,7 +30,8 @@ class InfiniteStrategy:
         self.v14_plugin = V14Strategy(config)
         self.v_avwap_plugin = VAvwapHybridPlugin()
         # MODIFIED: [V42 U-Curve 락온 무결성 복구] ReversionStrategy 객체 생성 시 config 인자 주입 배선 100% 복구
-        # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막] V42 U-Curve 락온 무결성 유지를 위해 config 주입을 훼손하지 말 것
+        # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막] V42 U-Curve 락온 무결성 
+        # 유지를 위해 config 주입을 훼손하지 말 것
         self.v_rev_plugin = ReversionStrategy(config)
         self.v14_vwap_plugin = V14VwapStrategy(config)
 
@@ -60,7 +62,7 @@ class InfiniteStrategy:
                 return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
                 
             vwap_price = vol_x_price.sum() / total_vol
-            
+      
             df_temp = pd.DataFrame()
             df_temp['volume'] = df['volume'].astype(float)
             df_temp['vol_x_price'] = vol_x_price
@@ -96,41 +98,19 @@ class InfiniteStrategy:
         except Exception:
             return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
 
-    def apply_omni_matrix_filter(self, ticker, qty, regime_data):
-        """
-        VWAP 동행 지표 기반의 국면 데이터(regime_data)를 해석하여,
-        현재 요청된 티커(SOXL 또는 SOXS)가 당일 신규 매수 가능한지 판별합니다.
-        보유 수량(qty)이 1주라도 있다면 1층 청산(SELL)은 무조건 허용합니다.
-        """
-        if not regime_data or regime_data.get("status") != "success":
-            return {"allow_buy": False, "allow_sell": qty > 0, "msg": "VWAP 모멘텀 판별 불가 (안전 대기)"}
-
-        target_ticker = regime_data.get("target_ticker", "NONE")
-        regime = regime_data.get("regime", "SIDEWAYS")
-        desc = regime_data.get("desc", regime)
-
-        # 횡보장 휩소 구간 (방향성 충돌): 신규 매수 전면 차단 (암살자 퇴직 모드)
-        if target_ticker == "NONE" or regime == "SIDEWAYS":
-            return {"allow_buy": False, "allow_sell": qty > 0, "msg": f"{desc} - 암살자 퇴직 (신규 진입 차단)"}
-
-        # 듀얼 모멘텀 공수 일치 여부 확인
-        if ticker.upper() == target_ticker.upper():
-            return {"allow_buy": True, "allow_sell": True, "msg": f"{desc} - {ticker.upper()} 진입 락온"}
-        else:
-            return {"allow_buy": False, "allow_sell": qty > 0, "msg": f"{desc} - {ticker.upper()} 진입 차단 (타겟: {target_ticker})"}
-
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, vwap_status=None, is_snapshot_mode=False, regime_data=None):
         version = self.cfg.get_version(ticker)
         
-        # 🚨 [V40.XX 절대 헌법] SOXS = V-REV 전용, TQQQ = V14 전용 강제 락온(Bypass)
-        if ticker.upper() == "SOXS" and version != "V_REV":
-            logging.warning(f"🚨 [{ticker}] 절대 헌법 위반 감지. V_REV 모드로 강제 라우팅합니다.")
-            self.cfg.set_version(ticker, "V_REV")
-            version = "V_REV"
-        elif ticker.upper() == "TQQQ" and version != "V14":
+        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+        # [ V61 절대 헌법 ]: 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다.
+        # TQQQ는 무조건 V14 전용 락온 상태를 유지합니다.
+        
+        if ticker.upper() == "TQQQ" and version != "V14":
             logging.warning(f"🚨 [{ticker}] 절대 헌법 위반 감지. V14 모드로 강제 라우팅합니다.")
             self.cfg.set_version(ticker, "V14")
             version = "V14"
+
+        # 🚨 [V61.00] 기존 SOXS 우회 방어막(V_REV 강제 전환) 블록 100% 영구 소각 완료
 
         if version in ["V13", "V17", "V_VWAP", "V_AVWAP"]:
             logging.warning(f"[{ticker}] 폐기된 레거시 모드({version}) 감지. V14 엔진으로 강제 라우팅합니다.")
@@ -149,9 +129,8 @@ class InfiniteStrategy:
             )
         elif version == "V_REV":
             # 🚨 MODIFIED: [V54.06 SSOT 코어 통일 및 Split-Brain 영구 소각]
-            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+            # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
             # V_REV 모드라면 억지스러운 is_active 플래그 의존도를 완전히 소각하고 is_reverse를 True로 강제 락온(SSOT).
-            # 이를 통해 텔레그램 지시서 렌더링 시 발생하는 공수 스플릿 브레인(Split-Brain) 현상을 100% 원천 차단함.
             plan = {
                 'core_orders': [], 'bonus_orders': [], 'orders': [],
                 't_val': 0.0, 'is_reverse': True, 'star_price': 0.0, 'one_portion': 0.0
@@ -165,14 +144,8 @@ class InfiniteStrategy:
                 is_snapshot_mode=is_snapshot_mode
             )
             
-        # [V40.XX] 옴니 매트릭스 필터 적용 (매수 락온 및 청산 패스)
-        if regime_data is not None:
-            omni_filter = self.apply_omni_matrix_filter(ticker, qty, regime_data)
-            if not omni_filter["allow_buy"]:
-                plan['core_orders'] = [o for o in plan.get('core_orders', []) if o.get('side') != 'BUY']
-                plan['bonus_orders'] = [o for o in plan.get('bonus_orders', []) if o.get('side') != 'BUY']
-                plan['orders'] = [o for o in plan.get('orders', []) if o.get('side') != 'BUY']
-                plan['omni_msg'] = omni_filter["msg"]
+        # MODIFIED: [V60.00] 옴니 매트릭스 필터(매수 락다운) 로직 100% 영구 소각 완료.
+        # 이제 어떠한 시장 국면에서도 매수 주문은 강제 삭제되지 않으며 팩트 기반으로 전송됩니다.
                 
         return plan
 
@@ -188,7 +161,7 @@ class InfiniteStrategy:
         
         realized_pnl = net_revenue - net_invested
         realized_pnl_pct = (realized_pnl / net_invested) * 100 if net_invested > 0 else 0.0
-        
+    
         return {
             "ticker": ticker,
             "clear_price": clear_price,
@@ -213,20 +186,13 @@ class InfiniteStrategy:
 
     def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, **kwargs):
         
-        if regime_data is not None:
-            omni_filter = self.apply_omni_matrix_filter(exec_ticker, qty, regime_data)
-            if not omni_filter["allow_buy"] and qty == 0:
-                return {
-                    "action": "HOLD",
-                    "qty": 0,
-                    "price": 0.0,
-                    "msg": f"⛔ AVWAP 셧다운: {omni_filter['msg']}"
-                }
+        # MODIFIED: [V60.00] AVWAP 옴니 매트릭스 락다운 필터 100% 영구 소각 완료.
+        # 암살자는 이제 시장 국면과 상관없이 오직 타점 팩트만을 보고 타격을 집행합니다.
 
         # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] target_profit 및 is_multi_strike 파라미터 추출 배선 영구 적출 완료
         # 🚨 [V44.03] 스나이퍼에서 수신한 체력 스캔 팩트 파라미터(**kwargs) 플러그인으로 바이패스
         return self.v_avwap_plugin.get_decision(
             base_ticker=base_ticker, exec_ticker=exec_ticker, base_curr_p=base_curr_p, exec_curr_p=exec_curr_p, 
-            base_day_open=base_day_open, avwap_avg_price=avg_price, avwap_qty=qty, avwap_alloc_cash=alloc_cash, 
+            base_day_open=base_day_open, avwap_avg_price=avg_price, avwap_qty=qty, avwap_alloc_cash=alloc_cash,
             context_data=context_data, df_1min_base=df_1min_base, now_est=now_est, avwap_state=avwap_state, **kwargs
         )
