@@ -15,6 +15,8 @@
 # 다이렉트 파일 I/O 로직을 100% 적출하고, QueueLedger의 스레드 세이프 코어 메서드(overwrite_queue)로 락온 완료.
 # NEW: [V59.05] VWAP 런타임 엑스레이(Dry-Run) 진단 버튼 이식
 # 🚨 MODIFIED: [V59.07 런타임 붕괴(IndentationError) 수술] _write_v_state 등 파일 I/O 블록의 들여쓰기 팩트 완벽 교정
+# 🚨 MODIFIED: [V61.04 시각적 디커플링 영구 소각] /sync 지시서 렌더링 시 AVWAP 타임라인 강제 덮어쓰기 블록(time_1000, time_1500) 전면 철거.
+# 🚨 MODIFIED: [V61.05 런타임 붕괴 수술] snapshot = None 및 예외 처리 구간 들여쓰기(IndentationError) 팩트 교정 완료.
 # ==========================================================
 import logging
 import datetime
@@ -302,7 +304,7 @@ class TelegramSyncEngine:
                         else:
                             calib_price = actual_avg if actual_avg > 0 else temp_sim_avg
                             calib_avg = actual_avg if actual_avg > 0 else temp_sim_avg
-                            
+                        
                         calib_item = {
                             'date': target_ledger_str, 
                             'side': calib_side,
@@ -310,7 +312,7 @@ class TelegramSyncEngine:
                             'price': calib_price, 
                             'avg_price': calib_avg,
                             'exec_id': f"CALIB_{int(time.time())}",
-                            'desc': "비파괴 보정"
+                             'desc': "비파괴 보정"
                         }
                         
                         if is_rev:
@@ -473,7 +475,7 @@ class TelegramSyncEngine:
                                     await asyncio.to_thread(self.queue_ledger.overwrite_queue, ticker, q_data_before)
                                     logging.info(f"🔧 [{ticker}] 미동기화 수동 매수 물량({missing_qty}주, 진성단가 ${missing_price})을 졸업 큐에 다이렉트 영속화하여 PnL 오차 교정 및 스냅샷 충돌 방어 완료.")
                                 except Exception as e:
-                                     logging.error(f"🚨 MANUAL_SYNC LIFO 큐 파일 I/O 영속화 실패: {e}")
+                                    logging.error(f"🚨 MANUAL_SYNC LIFO 큐 파일 I/O 영속화 실패: {e}")
 
                             total_invested = sum(float(item.get("qty", 0)) * float(item.get("price", 0)) for item in q_data_before)
                             q_avg_price = total_invested / vrev_ledger_qty if vrev_ledger_qty > 0 else 0.0
@@ -497,7 +499,7 @@ class TelegramSyncEngine:
                                     added_seed = realized_pnl * compound_rate
                                     current_seed = await asyncio.to_thread(self.cfg.get_seed, ticker)
                                     await asyncio.to_thread(self.cfg.set_seed, ticker, current_seed + added_seed)
-                                
+                                 
                                 cap_dt = snapshot['captured_at']
                                 cap_dt_str = cap_dt if isinstance(cap_dt, str) else cap_dt.strftime('%Y-%m-%d')
                                 start_dt_str = q_data_before[0]['date'][:10] if q_data_before else cap_dt_str[:10]
@@ -548,7 +550,7 @@ class TelegramSyncEngine:
                                             else:
                                                 await context.bot.send_photo(chat_id=chat_id, photo=f_out)
                                 except Exception as e:
-                                    logging.error(f"📸 V-REV 스냅샷 이미지 렌더링/발송 실패: {e}")
+                                    logging.error(f"📸 졸업 이미지 발송 실패: {e}")
                         else:
                              await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} V-REV 0주 강제 정산 완료]</b>\n▫️ 0주를 확인하여 큐를 안전하게 비웠으나 통신 지연으로 졸업 카드는 생략되었습니다.", parse_mode='HTML')
                             
@@ -567,7 +569,7 @@ class TelegramSyncEngine:
                                     def _read_v_state(f_path):
                                         with open(f_path, 'r', encoding='utf-8') as vf:
                                             return json.load(vf)
-                                            
+                                    
                                     v_state = await asyncio.to_thread(_read_v_state, vwap_state_file)
                                     if "executed" in v_state and "SELL_QTY" in v_state["executed"]:
                                         old_sell_qty = v_state["executed"]["SELL_QTY"]
@@ -580,10 +582,10 @@ class TelegramSyncEngine:
                                             _vf_out.flush()
                                             os.fsync(_vf_out.fileno())
                                         os.replace(tmp_path, f_path)
-                                            
+                                              
                                     await asyncio.to_thread(_write_v_state, v_state, vwap_state_file)
                                     logging.info(f"🔧 [{ticker}] VWAP 잔차 수학적 보정 완료: {old_sell_qty} -> {v_state['executed']['SELL_QTY']}")
-                        
+                                         
                                 except Exception as e:
                                     logging.error(f"🚨 VWAP 상태 교정 에러: {e}")
 
@@ -615,7 +617,7 @@ class TelegramSyncEngine:
                                                 if b_tot_q > 0:
                                                     real_buy_price = round(b_tot_amt / b_tot_q, 4)
                             except Exception as e:
-                                logging.error(f"🚨 수동매수 실제 체결단가 역산 중 예외 발생 (기존 평단가 fallback): {e}")
+                                 logging.error(f"🚨 수동매수 실제 체결단가 역산 중 예외 발생 (기존 평단가 fallback): {e}")
 
                             if real_buy_price == actual_avg:
                                 old_invested = sum(float(item.get("qty", 0)) * float(item.get("price", 0)) for item in q_data_before)
@@ -661,7 +663,7 @@ class TelegramSyncEngine:
                             
                             try:
                                 prev_c = await asyncio.wait_for(
-                                    asyncio.to_thread(self.broker.get_previous_close, ticker),
+                                     asyncio.to_thread(self.broker.get_previous_close, ticker),
                                      timeout=10.0
                                  )
                             except asyncio.TimeoutError:
@@ -679,16 +681,16 @@ class TelegramSyncEngine:
                                     
                                     try:
                                         img_path = await asyncio.to_thread(
-                                             self.view.create_profit_image,
+                                            self.view.create_profit_image,
                                             ticker=ticker, profit=new_hist['profit'], yield_pct=new_hist['yield'],
                                             invested=new_hist['invested'], revenue=new_hist['revenue'], end_date=new_hist['end_date']
                                         )
                                         if img_path and os.path.exists(img_path):
                                             with open(img_path, 'rb') as f_out:
                                                 if img_path.lower().endswith('.gif'):
-                                                      await context.bot.send_animation(chat_id=chat_id, animation=f_out)
+                                                    await context.bot.send_animation(chat_id=chat_id, animation=f_out)
                                                 else:
-                                                     await context.bot.send_photo(chat_id=chat_id, photo=f_out)
+                                                    await context.bot.send_photo(chat_id=chat_id, photo=f_out)
                                     except Exception as e:
                                         logging.error(f"📸 졸업 이미지 발송 실패: {e}")
                                 else:

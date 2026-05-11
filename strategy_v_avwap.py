@@ -15,11 +15,19 @@
 # 1) is_inverse 인버스 판별 변수 및 SOXS 티커 조건 분기 100% 전면 철거.
 # 2) 하이킨아시 음봉 판별 팩트(ha_latched_bear 등) 상태 메모리 및 연산 영구 소각.
 # 3) 롱(SOXL) 진입 전용 단일 팩트(cond1, cond2, cond_seq)로 아키텍처 진공 압축 완료.
+# 🚨 NEW: [상대적 체력 연산 30.0% 셧다운 락온]
+# 기존 절대 진폭(1.0%) 차감 방식을 전면 소각하고, ATR5 대비 잔여 체력 비율(%)을 연산하여 30.0% 미만 시 신규 진입을 영구 동결하는 기관급 하드 마진 방어막 탑재.
+# 🚨 NEW: [V65.00 AVWAP 동적 하드스탑 락온]
+# 진입 평단가 대비 현재가의 손실률(%)이 당일 ATR5(%) 수치 이상으로 하락하는 찰나,
+# 즉시 셧다운(shutdown=True) 플래그를 활성화하고 전량 덤핑(SELL)을 격발하는 절대 방어막 탑재.
+# 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
+# 서버 병목 방어를 위해 15:25 하드코딩 덤핑을 소각하고 0~180초 난수를 차감한 동적 타임스탬프로 분산 타격 이식 완료.
 # ==========================================================
 import logging
 import datetime
 from zoneinfo import ZoneInfo
 import math
+import random
 import yfinance as yf
 import pandas as pd
 import json
@@ -67,13 +75,18 @@ class VAvwapHybridPlugin:
                     data['HA_LATCHED_BULL'] = False
                     # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] HA_LATCHED_BEAR 영구 적출 완료
 
+                    # NEW: [V66.00 AVWAP 덤핑 지터 분산 타격 락온] 매일 0~180초 사이의 지터 난수 발급 및 영속화
+                    data['dump_jitter_sec'] = random.randint(0, 180)
+
                     data['date'] = today_str
                     self.save_state(ticker, now_est, data)
 
                 return data
             except Exception:
                 pass
-        return {"executed_buy": False, "shutdown": False, "strikes": 0, "qty": 0, "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, "HA_LATCHED_BULL": False}
+        
+        # NEW: [V66.00 AVWAP 덤핑 지터 분산 타격 락온] 초기 생성 시 지터 난수 주입
+        return {"executed_buy": False, "shutdown": False, "strikes": 0, "qty": 0, "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, "HA_LATCHED_BULL": False, "dump_jitter_sec": random.randint(0, 180)}
 
     def save_state(self, ticker, now_est, state_data):
         file_path = self._get_state_file(ticker, now_est)
@@ -154,7 +167,7 @@ class VAvwapHybridPlugin:
                     avg_vol_20 = float(past_first_30m['Volume'].mean())
 
             if prev_vwap == 0.0:
-                 prev_vwap = prev_close
+                prev_vwap = prev_close
 
             return {
                 "prev_close": prev_close,
@@ -167,7 +180,7 @@ class VAvwapHybridPlugin:
             return None
 
     def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, **kwargs):
-        # MODIFIED: [V60.00 옴니 매트릭스 중복 필터 블록 전면 소각]
+        # MODIFIED: [V60.00] 옴니 매트릭스 중복 필터 블록 전면 소각
         # 제2헌법 및 제13헌법 5조에 의거, 하단에 존재하던 self.apply_omni_matrix_filter 호출 및 
         # allow_buy 분기 블록을 흔적도 없이 적출함. 암살자는 이제 오직 팩트 지표로만 판단함.
 
@@ -198,7 +211,12 @@ class VAvwapHybridPlugin:
         # 🚨 [Time-Split Radar] 듀얼 세션 스위치 및 타임 쉴드
         time_0410 = datetime.time(4, 10)
         time_0930 = datetime.time(9, 30)
-        time_1525 = datetime.time(15, 25)
+        
+        # NEW: [V66.00 AVWAP 덤핑 지터 분산 타격 락온] 동적 타임스탬프 연산
+        dump_jitter_sec = avwap_state.get('dump_jitter_sec', 0)
+        base_dump_dt = datetime.datetime.combine(now_est.date(), datetime.time(15, 25)).replace(tzinfo=ZoneInfo('America/New_York'))
+        dynamic_dump_dt = base_dump_dt - datetime.timedelta(seconds=dump_jitter_sec)
+        time_dynamic_dump = dynamic_dump_dt.time()
 
         is_regular_session = curr_time >= time_0930
 
@@ -286,7 +304,7 @@ class VAvwapHybridPlugin:
         safe_qty = int(math.floor(float(avwap_qty)))
 
         # ---------------------------------------------------------
-        # 1. 매도 (보유 중일 때) 로직 - 15:25 무조건 덤핑 락온 (장중 조기익절 영구 소각)
+        # 1. 매도 (보유 중일 때) 로직 - 동적 지터(15:22~15:25) 무조건 덤핑 락온
         # ---------------------------------------------------------
         if safe_qty > 0:
             safe_avg = avwap_avg_price if avwap_avg_price > 0 else exec_curr_p
@@ -295,18 +313,26 @@ class VAvwapHybridPlugin:
                 # MODIFIED: [V59.02 잔재 데드코드 영구 소각] 레거시 키워드 (조기퇴근) 100% 삭제
                 return _build_res('SELL', 'CORRUPT_PRICE_EMERGENCY_DUMP', qty=safe_qty, target_price=exec_curr_p)
 
-            # 🚨 MODIFIED: [V59.00 AVWAP 15:25 전량 덤핑 락온] 15:25 EST 도달 시 수익/손실 불문 무조건 전량 팩트 덤핑
-            if curr_time >= time_1525:
+            # 🚨 MODIFIED: [V66.00 AVWAP 동적 지터 덤핑 락온] 동적 타임스탬프 도달 시 무조건 전량 팩트 덤핑
+            if curr_time >= time_dynamic_dump:
                 avwap_state["shutdown"] = True
                 self.save_state(exec_ticker, now_est, avwap_state)
-                # MODIFIED: [V59.02 잔재 데드코드 영구 소각] 레거시 키워드 (조기퇴근) 100% 삭제
-                return _build_res('SELL', '15:25_도달_당일교전종료_무조건덤핑', qty=safe_qty, target_price=exec_curr_p)
+                reason_str = f'{time_dynamic_dump.strftime("%H:%M:%S")}_도달_당일교전종료_무조건덤핑'
+                return _build_res('SELL', reason_str, qty=safe_qty, target_price=exec_curr_p)
+
+            # NEW: [V65.00 AVWAP 동적 하드스탑 락온] ATR5 기반 실시간 손절 방어막 전진 배치
+            if atr5 > 0 and exec_curr_p > 0 and safe_avg > 0:
+                loss_pct = ((safe_avg - exec_curr_p) / safe_avg) * 100.0
+                if loss_pct >= atr5:
+                    avwap_state["shutdown"] = True
+                    self.save_state(exec_ticker, now_est, avwap_state)
+                    return _build_res('SELL', f'ATR5_동적_하드스탑_피격(-{loss_pct:.2f}%)_당일영구동결', qty=safe_qty, target_price=exec_curr_p)
 
             # 🚨 [AI 에이전트 절대 주의 - 환각 방어막]
             # 장중 휩소 및 조기 익절(HA 역추세, 수익률 도달) 로직 전면 영구 소각 완료.
-            # 암살자는 진입 후 15:25 EST까지 어떠한 흔들림 없이 100% 홀딩(HOLD)합니다.
+            # 암살자는 진입 후 덤핑 시간까지 어떠한 흔들림 없이 100% 홀딩(HOLD)합니다.
 
-            return _build_res('HOLD', '보유중_관망(15:25_덤핑_대기)')
+            return _build_res('HOLD', '보유중_관망(동적_지터_덤핑_대기)')
 
         # ---------------------------------------------------------
         # 2. 매수 (포지션 0주 일 때) 로직 - 배타적 갭 필터 및 모멘텀 스캔
@@ -324,10 +350,12 @@ class VAvwapHybridPlugin:
         if not is_regular_session:
             return _build_res('WAIT', '프리마켓_노이즈_원천차단_정규장_개장_대기')
 
-        if curr_time >= time_1525:
+        # 🚨 MODIFIED: [V66.00 AVWAP 동적 지터 덤핑 락온] 신규 진입 영구동결 시간 교정
+        if curr_time >= time_dynamic_dump:
             avwap_state["shutdown"] = True
             self.save_state(exec_ticker, now_est, avwap_state)
-            return _build_res('SHUTDOWN', '15:25_도달_신규진입_영구동결')
+            reason_str = f'{time_dynamic_dump.strftime("%H:%M:%S")}_도달_신규진입_영구동결'
+            return _build_res('SHUTDOWN', reason_str)
 
         base_prev_c = float(context_data.get('prev_close', 0.0))
         prev_vwap = float(context_data.get('prev_vwap', 0.0))
@@ -337,11 +365,14 @@ class VAvwapHybridPlugin:
             
         actual_gap_dollar = day_high - day_low
         actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0 if prev_c > 0 else 0.0
-        rem_5_pct = atr5 - actual_gap_pct
-        if rem_5_pct < 1.0:
+        
+        # NEW: [상대적 체력 연산 30.0% 셧다운 락온] 절대 진폭 차감이 아닌 ATR5 대비 잔여 체력 비율(%) 연산 및 락온
+        rem_relative_pct = ((atr5 - actual_gap_pct) / atr5 * 100.0) if atr5 > 0 else 0.0
+
+        if rem_relative_pct < 30.0:
             avwap_state["shutdown"] = True
             self.save_state(exec_ticker, now_est, avwap_state)
-            return _build_res('SHUTDOWN', 'ATR5_체력고갈_감지_당일신규진입_영구동결')
+            return _build_res('SHUTDOWN', 'ATR5_상대체력_30%미만_고갈_당일신규진입_영구동결')
 
         # 기초지수(SOXX) 고저가 방향 팩트 스캔
         base_day_high = float(kwargs.get('base_day_high', 0.0))
@@ -362,7 +393,9 @@ class VAvwapHybridPlugin:
             if not ha_latched_bull:
                 ha_latched_bull = True
                 latch_changed = True
-        if trend_sequence == "BEAR" or rem_5_pct < 1.0:
+                
+        # MODIFIED: [Latching 릴리스 팩트 교정] 상대 체력 30% 미만 시 상태기억 해제
+        if trend_sequence == "BEAR" or rem_relative_pct < 30.0:
             if ha_latched_bull:
                 ha_latched_bull = False
                 latch_changed = True

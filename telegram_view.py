@@ -22,6 +22,8 @@
 # 2) 전술 설정 메뉴 내 관제탑 진입 버튼 텍스트에서 숏(SOXS) 렌더링 영구 소각 및 단일 롱 모멘텀 팩트 압축 완료.
 # 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] 
 # create_sync_report 내부 루프의 SOXS 바이패스 데드코드 전면 적출 및 클리닝 완료.
+# 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
+# 암살자 가동 경고 팝업 내 15:25 도달 시 문구를 15:22~15:25 동적 지터 분산 도달 시로 팩트 교정 완료.
 # ==========================================================
 import os
 import math
@@ -229,14 +231,14 @@ class TelegramView:
         return msg, InlineKeyboardMarkup(keyboard)
 
     def get_avwap_warning_menu(self, ticker):
-        # 🚨 MODIFIED: [V59.05 잔재 데드코드 영구 소각] AVWAP 가동 경고문 팩트 교정
         msg = f"🛑 <b>[{ticker}] 차세대 AVWAP 듀얼 모멘텀 무장 해제 및 경고</b>\n\n"
         msg += "현재 <b>AVWAP 암살자 모드</b> 가동을 지시하셨습니다.\n"
         msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 모멘텀 타격에 쏟아붓는 초공격형 옵션입니다.\n\n"
-        msg += "⚠️ <b>[ 실전 가동 제약 사항 (V59 락온) ]</b>\n"
+        msg += "⚠️ <b>[ 실전 가동 제약 사항 (V66 락온) ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
         msg += "2. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 독립 연산됩니다.\n"
-        msg += "3. 15:25 EST 도달 시 수익/손실 불문 <b>무조건 전량 덤핑 청산 후 당일 영구 동결(Shut-down)</b> 됩니다.\n\n"
+        # 🚨 MODIFIED: [V66.00 AVWAP 암살자 덤핑 지터 분산 락온] 프론트엔드 경고문 팩트 교정
+        msg += "3. 15:22~15:25 EST (동적 분산 타격) 도달 시 수익/손실 불문 <b>무조건 전량 덤핑 청산 후 당일 영구 동결(Shut-down)</b> 됩니다.\n\n"
         msg += "포트폴리오 매니저의 최종 승인을 대기합니다."
         
         keyboard = [
@@ -262,7 +264,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V56.00 AVWAP 암살자 실전 재투입</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V66.00 AVWAP 암살자 실전 재투입</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -451,7 +453,7 @@ class TelegramView:
                         else:
                             safe_floor = math.ceil(safe_avg * 1.005 * 100) / 100.0
                             sn_target = max(safe_star_price, safe_floor)
-                        
+                    
                         if sn_target > 0:
                             body_msg += f"🎯 상방 스나이퍼: ${sn_target:.2f} 이상 대기\n"
             elif v_mode == "V_REV":
@@ -787,7 +789,7 @@ class TelegramView:
             draw.rectangle([40, y_box, 290, y_box + 100], fill="#2A2F3D")
             self._safe_draw_text(draw, (165, y_box + 35), f"${invested:,.2f}", font=f_b_val, fill="white", anchor="mm")
             self._safe_draw_text(draw, (165, y_box + 75), "TOTAL INVESTED", font=f_b_lbl, fill="#8E8E93", anchor="mm")
-          
+            
             draw.rectangle([310, y_box, 560, y_box + 100], fill="#2A2F3D")
             self._safe_draw_text(draw, (435, y_box + 35), f"${revenue:,.2f}", font=f_b_val, fill="white", anchor="mm")
             self._safe_draw_text(draw, (435, y_box + 75), "TOTAL REVENUE", font=f_b_lbl, fill="#8E8E93", anchor="mm")
@@ -795,6 +797,7 @@ class TelegramView:
             self._safe_draw_text(draw, (W/2, H - 35), f"{end_date}", font=f_b_lbl, fill="#636366", anchor="mm")
             return img_canvas
 
+    
         def resize_and_crop(bg_frame):
             bg_ratio = bg_frame.width / bg_frame.height
             if bg_ratio > (W / IMG_H):
@@ -809,9 +812,9 @@ class TelegramView:
         img = Image.new('RGB', (W, H), color='#1E222D')
         try:
             if os.path.exists("background.png"):
-                bg = Image.open("background.png").convert("RGB")
-                bg_cropped = resize_and_crop(bg)
-                img.paste(bg_cropped, (0, 0))
+                 bg = Image.open("background.png").convert("RGB")
+                 bg_cropped = resize_and_crop(bg)
+                 img.paste(bg_cropped, (0, 0))
             else:
                 draw = ImageDraw.Draw(img)
                 draw.rectangle([0, 0, W, IMG_H], fill="#111217")
