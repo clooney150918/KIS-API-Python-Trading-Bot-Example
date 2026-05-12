@@ -10,6 +10,7 @@
 # NEW: [V48.02 애프터마켓 로터리 덫 전면 폐기] 애프터마켓 3% 지정가 덫 스케줄러 영구 소각 및 배선 철거 완료.
 # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구 완료.
 # 🚨 MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온.
+# NEW: [V66.02 원격 로그 핀셋 추출 엔진 탑재] 텔레그램 CommandHandler 배열에 log 및 error 명령어 배선 결속 완료.
 # ==========================================================
 import os
 import logging
@@ -118,7 +119,7 @@ async def scheduled_volatility_scan(context):
             if attempt < 2:
                 logging.warning(f"⚠️ 옴니 매트릭스 스캔 실패 (시도 {attempt+1}/3). 10초 후 재시도합니다.")
                 await asyncio.sleep(10.0)
-                
+        
         app_data['regime_data'] = regime_data
         
         if regime_data.get("status") == "success":
@@ -239,12 +240,14 @@ def main():
     app.bot_data['app_data'] = app_data
     app.bot_data['bot_controller'] = bot
     
+    # 🚨 NEW: [V66.02 원격 로그 추출 명령어 배선 결속] "log", "error" 라우팅 팩트 이식 완료
     for cmd, handler in [
         ("start", bot.cmd_start), ("record", bot.cmd_record), ("history", bot.cmd_history), 
         ("sync", bot.cmd_sync), ("settlement", bot.cmd_settlement), ("seed", bot.cmd_seed), 
         ("ticker", bot.cmd_ticker), ("mode", bot.cmd_mode), ("reset", bot.cmd_reset), 
         ("version", bot.cmd_version), ("update", bot.cmd_update),
-        ("avwap", bot.cmd_avwap), ("queue", bot.cmd_queue), ("add_q", bot.cmd_add_q), ("clear_q", bot.cmd_clear_q)
+        ("avwap", bot.cmd_avwap), ("queue", bot.cmd_queue), ("add_q", bot.cmd_add_q), ("clear_q", bot.cmd_clear_q),
+        ("log", bot.cmd_log), ("error", bot.cmd_log)
     ]:
         app.add_handler(CommandHandler(cmd, handler))
         

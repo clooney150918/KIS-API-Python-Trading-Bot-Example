@@ -9,6 +9,7 @@
 # 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온] 예산이 1주 가격보다 작더라도 장막판 가불을 통해 무조건 1주 베이스캠프 확보 보장.
 # 🚨 MODIFIED: [치명적 경고 3] 텔레그램 지시서 조회(min_idx < 0) 시 스냅샷 반환 디커플링 및 실시간 타격 분리 락온.
 # 🚨 MODIFIED: [치명적 경고 19] UnboundLocalError 원천 봉쇄를 위한 변수 스코프 전진 배치 수술 완료.
+# 🚨 NEW: [KIS VWAP 알고리즘 대통합 수술] 1분 단위 타임 슬라이싱 연산 및 잔차 버킷 파편화 궤적을 100% 영구 소각하고, 할당된 1회분 총 예산을 단일 KIS VWAP 덫 예약 주문 플랜으로 통짜 스냅샷 산출하여 반환하도록 아키텍처 대수술 완료.
 # ==========================================================
 import math
 import logging
@@ -21,7 +22,8 @@ from zoneinfo import ZoneInfo
 class V14VwapStrategy:
     def __init__(self, config):
         self.cfg = config
-        self.residual = {"BUY_AVG": {}, "BUY_STAR": {}, "SELL_STAR": {}, "SELL_TARGET": {}}
+        # MODIFIED: [잔차 버킷 파편화 궤적 영구 소각] 1분 단위 슬라이싱용 잔차 버킷 철거 완료
+        self.residual = {}
         self.executed = {"BUY_BUDGET": {}, "SELL_QTY": {}}
         self.state_loaded = {}
 
@@ -51,8 +53,6 @@ class V14VwapStrategy:
             try:
                 with open(state_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    for k in self.residual.keys():
-                        self.residual[k][ticker] = float(data.get("residual", {}).get(k, 0.0))
                     for k in self.executed.keys():
                         raw_val = data.get("executed", {}).get(k, 0)
                         self.executed[k][ticker] = int(raw_val) if k == "SELL_QTY" else float(raw_val)
@@ -60,9 +60,7 @@ class V14VwapStrategy:
                     return
             except Exception:
                  pass
-                
-        for k in self.residual.keys():
-            self.residual[k][ticker] = 0.0
+                 
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
@@ -72,7 +70,7 @@ class V14VwapStrategy:
         state_file = self._get_state_file(ticker)
         data = {
             "date": today_str,
-            "residual": {k: float(self.residual[k].get(ticker, 0.0)) for k in self.residual.keys()},
+            "residual": {}, # MODIFIED: 잔차 버킷 소각에 따른 빈 딕셔너리 락온
             "executed": {
                 "BUY_BUDGET": float(self.executed.get("BUY_BUDGET", {}).get(ticker, 0.0)),
                 "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
@@ -80,15 +78,15 @@ class V14VwapStrategy:
          }
         temp_path = None
         try:
-            dir_name = os.path.dirname(state_file)
-            os.makedirs(dir_name, exist_ok=True) 
-            fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-                f.flush()
-                os.fsync(f.fileno()) 
-            os.replace(temp_path, state_file)
-            temp_path = None
+             dir_name = os.path.dirname(state_file)
+             os.makedirs(dir_name, exist_ok=True) 
+             fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
+             with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                 json.dump(data, f, ensure_ascii=False, indent=4)
+                 f.flush()
+                 os.fsync(f.fileno()) 
+             os.replace(temp_path, state_file)
+             temp_path = None
         except Exception as e:
             logging.critical(f"🚨 [STATE SAVE FAILED] {ticker} 상태 저장 실패. 봇 기억상실 위험! 원인: {e}")
             if temp_path and os.path.exists(temp_path):
@@ -96,10 +94,8 @@ class V14VwapStrategy:
                  except OSError: pass
 
     def refund_residual(self, ticker, bucket, refund_value):
-        self._load_state_if_needed(ticker)
-        if bucket in self.residual:
-            self.residual[bucket][ticker] = float(self.residual[bucket].get(ticker, 0.0)) + float(refund_value)
-            self._save_state(ticker)
+        # MODIFIED: 잔차 버킷 소각에 따라 환불 로직 바이패스 락온
+        pass
 
     def save_daily_snapshot(self, ticker, plan_data):
         today_str = self._get_logical_date_str()
@@ -109,7 +105,7 @@ class V14VwapStrategy:
             return
 
         data = {
-            "date": today_str,
+             "date": today_str,
              "plan": plan_data
         }
         temp_path = None
@@ -118,9 +114,9 @@ class V14VwapStrategy:
             os.makedirs(dir_name, exist_ok=True)
             fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=4)
-                f.flush()
-                os.fsync(f.fileno()) 
+                 json.dump(data, f, ensure_ascii=False, indent=4)
+                 f.flush()
+                 os.fsync(f.fileno()) 
             os.replace(temp_path, snap_file)
             temp_path = None
         except Exception as e:
@@ -134,8 +130,8 @@ class V14VwapStrategy:
         if os.path.exists(snap_file):
             try:
                 with open(snap_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    return data.get("plan")
+                     data = json.load(f)
+                     return data.get("plan")
             except Exception:
                 pass
         return None
@@ -177,11 +173,8 @@ class V14VwapStrategy:
     def _floor(self, val): return math.floor(val * 100) / 100.0
 
     def reset_residual(self, ticker):
-        self._load_state_if_needed(ticker)
-        for k in self.residual: self.residual[k][ticker] = 0.0
-        self.executed["BUY_BUDGET"][ticker] = 0.0
-        self.executed["SELL_QTY"][ticker] = 0
-        self._save_state(ticker)
+        # MODIFIED: 잔차 버킷 소각에 따라 리셋 로직 바이패스 락온
+        pass
 
     def record_execution(self, ticker, side, qty, exec_price):
         self._load_state_if_needed(ticker)
@@ -215,28 +208,29 @@ class V14VwapStrategy:
         process_status = "예방적방어선"
         is_zero_start_fact = False
         
+        # MODIFIED: [KIS VWAP 알고리즘 대통합 수술] 1분 단위 타임 슬라이싱 연산을 소각하고 단일 KIS VWAP 덫 예약 주문(type: "VWAP") 플랜으로 통짜 반환
         if qty == 0:
             is_zero_start_fact = True
             p_buy = self._ceil(prev_close * 1.15)
             buy_star_price = p_buy 
             
             q_buy = math.floor(dynamic_budget / p_buy) if p_buy > 0 else 0
-            if q_buy > 0: core_orders.append({"side": "BUY", "price": p_buy, "qty": q_buy, "type": "LOC", "desc": "🆕새출발(VWAP대기)"})
+            if q_buy > 0: core_orders.append({"side": "BUY", "price": p_buy, "qty": q_buy, "type": "VWAP", "desc": "🆕새출발(VWAP)"})
             process_status = "✨새출발"
         else:
             p_avg = self._ceil(avg_price)
             if t_val < (split / 2):
                 q_avg = math.floor((dynamic_budget * 0.5) / p_avg) if p_avg > 0 else 0
                 q_star = math.floor((dynamic_budget * 0.5) / buy_star_price) if buy_star_price > 0 else 0
-                if q_avg > 0: core_orders.append({"side": "BUY", "price": p_avg, "qty": q_avg, "type": "LOC", "desc": "⚓평단매수(V)"})
-                if q_star > 0: core_orders.append({"side": "BUY", "price": buy_star_price, "qty": q_star, "type": "LOC", "desc": "💫별값매수(V)"})
+                if q_avg > 0: core_orders.append({"side": "BUY", "price": p_avg, "qty": q_avg, "type": "VWAP", "desc": "⚓평단매수(VWAP)"})
+                if q_star > 0: core_orders.append({"side": "BUY", "price": buy_star_price, "qty": q_star, "type": "VWAP", "desc": "💫별값매수(VWAP)"})
             else:
                 q_star = math.floor(dynamic_budget / buy_star_price) if buy_star_price > 0 else 0
-                if q_star > 0: core_orders.append({"side": "BUY", "price": buy_star_price, "qty": q_star, "type": "LOC", "desc": "💫별값매수(V)"})
+                if q_star > 0: core_orders.append({"side": "BUY", "price": buy_star_price, "qty": q_star, "type": "VWAP", "desc": "💫별값매수(VWAP)"})
             
             q_sell = math.ceil(qty / 4)
             if q_sell > 0:
-                core_orders.append({"side": "SELL", "price": star_price, "qty": q_sell, "type": "LOC", "desc": "🌟별값매도(V)"})
+                core_orders.append({"side": "SELL", "price": star_price, "qty": q_sell, "type": "VWAP", "desc": "🌟별값매도(VWAP)"})
                 if qty - q_sell > 0:
                     core_orders.append({"side": "SELL", "price": target_price, "qty": qty - q_sell, "type": "LIMIT", "desc": "🎯목표매도(V)"})
 
@@ -271,107 +265,21 @@ class V14VwapStrategy:
         slice_budget = 0.0
         b_bucket = 0.0
         
-        plan_static = self.get_plan(
-            ticker=ticker,
-            current_price=current_price,
-            avg_price=avg_price,
-            qty=qty,
-            prev_close=prev_close,
-            available_cash=alloc_cash,
-            is_simulation=True,
-            is_snapshot_mode=False,
-            market_type=market_type
-        )
-        star_price = float(plan_static['star_price'])
-        buy_star_price = float(plan_static.get('buy_star_price', round(star_price - 0.01, 2) if star_price > 0.01 else 0.0))
-        target_price = float(plan_static['target_price'])
-        total_budget = float(plan_static['one_portion'])
-        
-        initial_qty = int(plan_static.get('initial_qty', qty))
-        
         cached_plan = self.load_daily_snapshot(ticker)
         
         # MODIFIED: [치명적 경고 3] 텔레그램 지시서 조회(min_idx < 0) 시 스냅샷 반환 디커플링 및 실시간 타격 분리 락온
-        if min_idx < 0 and cached_plan:
-            return cached_plan
-            
+        # MODIFIED: [KIS VWAP 알고리즘 대통합 수술] 1분 단위 타임 슬라이싱 연산을 소각하고 단일 KIS VWAP 덫 예약 주문 플랜으로 통짜 반환
         if cached_plan:
-            is_zero_start_session = cached_plan.get('is_zero_start', initial_qty == 0)
+            return cached_plan
         else:
-            today_str_est = self._get_logical_date_str()
-            try:
-                recs = [r for r in self.cfg.get_ledger() if r['ticker'] == ticker and not str(r.get("date", "")).startswith(today_str_est)]
-                ledger_qty, _, _, _ = self.cfg.calculate_holdings(ticker, recs)
-                is_zero_start_session = (ledger_qty == 0)
-            except Exception:
-                is_zero_start_session = (qty == 0)
-        
-        try:
-            # MODIFIED: [치명적 경고 9] vwap_data.py 의존성 완전 소각 및 config.py 통합 프로파일 다이렉트 수혈 락온
-            profile = self.cfg.get_vwap_profile(ticker) if hasattr(self.cfg, 'get_vwap_profile') else {}
-        except Exception as e:
-            logging.error(f"🚨 [{ticker}] VWAP 프로파일 로드 실패: {e}")
-            profile = {}
-            
-        target_keys = [f"15:{str(m).zfill(2)}" for m in range(27, 57)]
-        total_target_vol = sum(profile.get(k, 0.0) for k in target_keys)
-        
-        now_est = datetime.now(ZoneInfo('America/New_York'))
-        time_str = now_est.strftime('%H:%M')
-        
-        rem_weight = 0.0
-        if time_str in target_keys:
-            start_idx = target_keys.index(time_str)
-            for k in target_keys[start_idx:]:
-                rem_weight += profile.get(k, 0.0)
-                
-            raw_weight = profile.get(time_str, 0.0)
-            slice_ratio = (raw_weight / rem_weight) if rem_weight > 0 else 1.0
-            
-            current_weight = (raw_weight / total_target_vol) if total_target_vol > 0 else (1.0 / len(target_keys))
-        else:
-            slice_ratio = 0.0
-            current_weight = 0.0
-        
-        orders = []
-        
-        total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
-        rem_budget_global = max(0.0, total_budget - total_spent)
-        
-        if rem_budget_global > 0 and current_weight > 0:
-            slice_budget = total_budget * current_weight
-            b_bucket = float(self.residual["BUY_STAR"].get(ticker, 0.0)) + slice_budget
-            b_budget_slice = min(b_bucket, rem_budget_global)
-
-            if current_price > 0:
-                # 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온]
-                if min_idx >= 28 and total_spent == 0.0 and b_budget_slice < current_price:
-                    b_budget_slice = current_price
-
-                if buy_star_price > 0 and (is_zero_start_session or current_price <= buy_star_price):
-                    alloc_qty = int(math.floor(b_budget_slice / current_price))
-                    if alloc_qty > 0:
-                         spent_b = alloc_qty * current_price
-                         self.residual["BUY_STAR"][ticker] = max(0.0, b_bucket - spent_b)
-                         orders.append({"side": "BUY", "qty": alloc_qty, "price": buy_star_price if not is_zero_start_session else current_price, "desc": "VWAP분할매수", "bucket": "BUY_STAR"})
-                    else:
-                         self.residual["BUY_STAR"][ticker] = b_bucket
-                else:
-                    self.residual["BUY_STAR"][ticker] = b_bucket
-
-        rem_sell_qty = int(math.ceil(initial_qty / 4)) - int(self.executed["SELL_QTY"].get(ticker, 0))
-        if rem_sell_qty > 0 and star_price > 0 and slice_ratio > 0:
-            if current_price >= star_price:
-                 exact_s_qty = float(rem_sell_qty * slice_ratio) + float(self.residual["SELL_STAR"].get(ticker, 0.0))
-                 alloc_s_qty = int(min(math.floor(exact_s_qty), rem_sell_qty))
-                 self.residual["SELL_STAR"][ticker] = float(exact_s_qty - alloc_s_qty)
-                 if alloc_s_qty > 0:
-                     orders.append({"side": "SELL", "qty": alloc_s_qty, "price": star_price, "desc": "VWAP분할익절", "bucket": "SELL_STAR"})
-            else:
-                 self.residual["SELL_STAR"][ticker] = float(self.residual["SELL_STAR"].get(ticker, 0.0)) + float(rem_sell_qty * slice_ratio)
-
-        if is_zero_start_session and market_type != "AFTER":
-            orders = [o for o in orders if o.get("side") != "SELL"]
-
-        self._save_state(ticker)
-        return {"orders": orders, "trigger_loc": False}
+            return self.get_plan(
+                ticker=ticker,
+                current_price=current_price,
+                avg_price=avg_price,
+                qty=qty,
+                prev_close=prev_close,
+                available_cash=alloc_cash,
+                is_simulation=True,
+                is_snapshot_mode=True,
+                market_type=market_type
+            )

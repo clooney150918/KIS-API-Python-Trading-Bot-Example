@@ -33,6 +33,13 @@
 # 암살자 상태 및 작전 텍스트에 ATR5 동적 하드스탑 감시 팩트를 다이내믹하게 인젝션하여 시각적 디커플링 해체 완료.
 # 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
 # 관제탑 렌더링 시 하드코딩된 15:25 덤핑 텍스트를 소각하고, 캐시에 저장된 지터 초를 반영한 동적 타임스탬프로 시각적 팩트 교정 완료.
+# NEW: [AVWAP 수동 개입 엣지 케이스 방어] 수동 매도 후 유령 물량을 0주로 강제 동기화하는 관제탑 전용 뷰포트 신설
+# 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결]
+# 텔레그램 관제탑이 자체 캐시로 하이킨아시 락온을 연산하던 레거시 로직 영구 소각.
+# 코어 엔진의 상태 파일(JSON)을 SSOT로 삼아 100% 팩트 미러링하도록 아키텍처 수술 완료.
+# 🚨 MODIFIED: [V71.02 관제탑 V-Turn 팩트 동기화(UI 디커플링 해체) 수술]
+# 코어 엔진에 이식된 V-Turn Intercept(찐바닥 예외 허용) 조건을 관제탑에도 100% 팩트 이식.
+# 진폭 50% 돌파 및 당일 미드포인트 회복 감지 시 '하락세' 텍스트를 'V자 반등(찐바닥 포착)'으로 동적 오버라이드.
 # ==========================================================
 import logging
 import datetime
@@ -183,7 +190,7 @@ class AvwapConsolePlugin:
                                 df_5m['HA_Open'] = pd.Series(ha_open, index=df_5m.index)
                                 df_5m['HA_High'] = df_5m[['high', 'HA_Open', 'HA_Close']].max(axis=1)
                                 df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
-                        
+                                
                                 # 0.01$ 갭 필터링
                                 df_5m['No_Lower_Wick'] = (df_5m['HA_Open'] - df_5m['HA_Low']) <= 0.01
                                 df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
@@ -301,9 +308,7 @@ class AvwapConsolePlugin:
             
             # 🚨 NEW: [상대적 체력 연산 30.0% 셧다운 락온 및 UI 디커플링 수술]
             rem_relative_pct = 0.0
-
-            if trend_sequence == "BEAR":
-                cond_seq = False
+            actual_gap_pct = 0.0
 
             if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
                 is_neg_gap_state = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
@@ -316,20 +321,34 @@ class AvwapConsolePlugin:
                     rem_relative_pct = ((atr5 - actual_gap_pct) / atr5 * 100.0) if atr5 > 0 else 0.0
                     cond3_met = (rem_relative_pct >= 30.0)
                     
-            # 🚨 MODIFIED: [V56.00 상태 기억(Latching) 메모리 연산 및 디커플링 렌더링]
-            ha_latched_bull = tracking_cache.get(f"HA_LATCHED_BULL_{t}", False)
-
-            if ha_2_bullish_no_lower: ha_latched_bull = True
-            
-            # 🚨 MODIFIED: [Latching 릴리스 팩트 교정] 상대 체력 30% 미만 시 상태기억 해제
-            if trend_sequence == "BEAR" or rem_relative_pct < 30.0: ha_latched_bull = False
-
-            tracking_cache[f"HA_LATCHED_BULL_{t}"] = ha_latched_bull
+            # 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결] 
+            # 독자적 모멘텀 판독 기능 영구 소각, JSON 파일의 HA_LATCHED_BULL 팩트만을 참조 (SSOT 단일화)
+            try:
+                _saved_state = await asyncio.to_thread(self.strategy.v_avwap_plugin.load_state, t, now_est)
+                ha_latched_bull = _saved_state.get('HA_LATCHED_BULL', False)
+                tracking_cache[f"HA_LATCHED_BULL_{t}"] = ha_latched_bull
+            except Exception as e:
+                logging.error(f"🚨 관제탑 HA_LATCHED_BULL 팩트 로드 에러: {e}")
+                ha_latched_bull = tracking_cache.get(f"HA_LATCHED_BULL_{t}", False)
 
             if base_curr_p > 0 and base_curr_vwap > 0:
                 cond2_met = (base_curr_p > base_curr_vwap) and ha_latched_bull
                 if cond2_met and not ha_2_bullish_no_lower:
-                    ha_status_text = f"{ha_status_text}이지만 시계열 락온 유지"
+                     # 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결] JSON 상태와 100% 일치 렌더링
+                     ha_status_text = f"{ha_status_text}이지만 시계열 락온 유지"
+
+            # 🚨 MODIFIED: [V71.02 관제탑 V-Turn 팩트 동기화(UI 디커플링 해체) 수술]
+            seq_text = "상승/대기"
+            if trend_sequence == "BEAR":
+                cond_seq = False
+                mid_point = 0.0
+                if day_high > 0 and day_low > 0:
+                    mid_point = (day_high + day_low) / 2.0
+                if atr5 > 0 and actual_gap_pct >= (atr5 * 0.5) and curr_p >= mid_point:
+                    cond_seq = True
+                    seq_text = "V자 반등(찐바닥 포착)"
+                else:
+                    seq_text = "하락세(Time_High&lt;Time_Low)"
              
             c1_str = "🟢" if cond1_met else "🔴"
             c2_str = "🟢" if cond2_met else "🔴"
@@ -352,7 +371,7 @@ class AvwapConsolePlugin:
             msg += f"▫️ <b>[ 하이킨아시 듀얼 모멘텀 조건 ]</b>\n"
             msg += f"   {c1_str} 고저가 방향 원웨이 일치\n"
             
-            seq_text = "상승/대기" if cond_seq else "하락세(Time_High&lt;Time_Low)"
+            # 🚨 MODIFIED: [V71.02 관제탑 V-Turn 팩트 동기화(UI 디커플링 해체) 수술]
             msg += f"   {c_seq_str} 시계열 체력 통과 ({seq_text})\n"
             
             msg += f"   {c2_str} HA 모멘텀 일치 (현재 5T: {ha_status_text})\n"
@@ -449,7 +468,7 @@ class AvwapConsolePlugin:
                         avwap_state=avwap_state_dict,
                         regime_data=None,
                         prev_close=prev_c,
-                         day_high=day_high,
+                        day_high=day_high,
                         day_low=day_low,
                         atr5=atr5,
                         base_day_high=base_day_high,
@@ -469,6 +488,10 @@ class AvwapConsolePlugin:
                     logging.debug(f"AVWAP 상태 텍스트 추출 에러: {e}")
 
             msg += f"▫️ 상태: <b>{status_txt}</b>\n"
+            
+            # NEW: [AVWAP 수동 개입 엣지 케이스 방어] 수동 매도 후 유령 물량을 0주로 강제 동기화하는 관제탑 전용 뷰포트 신설
+            if avwap_qty > 0:
+                keyboard.append([InlineKeyboardButton(f"🧯 {t} 암살자 수동 청산 (0주 락온)", callback_data=f"AVWAP_SET:SYNC_ZERO:{t}")])
 
         keyboard.append([
             InlineKeyboardButton("🔄 관제탑 새로고침", callback_data="AVWAP_SET:REFRESH:NONE"),

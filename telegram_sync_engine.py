@@ -17,6 +17,7 @@
 # 🚨 MODIFIED: [V59.07 런타임 붕괴(IndentationError) 수술] _write_v_state 등 파일 I/O 블록의 들여쓰기 팩트 완벽 교정
 # 🚨 MODIFIED: [V61.04 시각적 디커플링 영구 소각] /sync 지시서 렌더링 시 AVWAP 타임라인 강제 덮어쓰기 블록(time_1000, time_1500) 전면 철거.
 # 🚨 MODIFIED: [V61.05 런타임 붕괴 수술] snapshot = None 및 예외 처리 구간 들여쓰기(IndentationError) 팩트 교정 완료.
+# NEW: [AVWAP 수동 개입 엣지 케이스 방어] 계좌 실잔고 == 본대 큐 장부 수량 감지 시 자동 핀셋 소각(Self-Healing) 방어막 이식
 # ==========================================================
 import logging
 import datetime
@@ -98,7 +99,7 @@ class TelegramSyncEngine:
                 
                 kst = ZoneInfo('Asia/Seoul')
                 now_kst = datetime.datetime.now(kst)
-            
+                
                 est = ZoneInfo('America/New_York')
                 now_est = datetime.datetime.now(est)
                 
@@ -160,7 +161,7 @@ class TelegramSyncEngine:
                             k_dt = datetime.datetime.strptime(f"{ord_dt}{ord_tmd}", "%Y%m%d%H%M%S").replace(tzinfo=kst)
                             e_dt = k_dt.astimezone(est)
                             if e_dt.strftime('%Y-%m-%d') == target_ledger_str:
-                                 filtered.append(ex)
+                               filtered.append(ex)
                         except Exception as e:
                             logging.error(f"🚨 타임존 파싱 에러: {e}")
                     return filtered
@@ -260,7 +261,7 @@ class TelegramSyncEngine:
                                 'qty': exec_qty, 'price': exec_price, 'avg_price': temp_sim_avg
                             }
                             if is_rev:
-                                 rec_item['is_reverse'] = True
+                                rec_item['is_reverse'] = True
                             new_target_records.append(rec_item)
                             
                     gap_qty = actual_qty - temp_sim_qty
@@ -326,7 +327,7 @@ class TelegramSyncEngine:
                         elif temp_recs: 
                             if actual_qty > 0:
                                 temp_recs[-1]['avg_price'] = actual_avg
-                        
+                
                     await asyncio.to_thread(self.cfg.overwrite_incremental_ledger, ticker, temp_recs, new_target_records)
                     
                     if gap_qty != 0:
@@ -364,6 +365,35 @@ class TelegramSyncEngine:
                     except Exception as e:
                         logging.error(f"🚨 AVWAP 글로벌 캐시 팩트 스캔 에러: {e}")
                     
+                    # NEW: [AVWAP 수동 개입 엣지 케이스 방어] 계좌 실잔고 == 본대 큐 장부 수량 감지 시 자동 핀셋 소각(Self-Healing)
+                    if actual_qty == vrev_ledger_qty and avwap_qty_global > 0:
+                        logging.warning(f"🚨 [{ticker}] 계좌 실잔고와 본대 장부 수량({vrev_ledger_qty}주) 일치! 수동 핀셋 매도로 판독하여 AVWAP 유령 물량({avwap_qty_global}주)을 즉각 영구 소각(Self-Healing)합니다.")
+                        try:
+                            if tracking_cache_global is not None:
+                                tracking_cache_global[f"AVWAP_QTY_{ticker}"] = 0
+                                tracking_cache_global[f"AVWAP_AVG_{ticker}"] = 0.0
+                                tracking_cache_global[f"AVWAP_BOUGHT_{ticker}"] = False
+                                tracking_cache_global[f"AVWAP_SHUTDOWN_{ticker}"] = True
+
+                            if hasattr(self.strategy, 'v_avwap_plugin'):
+                                state_data = {
+                                    'bought': False,
+                                    'shutdown': True,
+                                    'qty': 0,
+                                    'avg_price': 0.0,
+                                    'strikes': tracking_cache_global.get(f"AVWAP_STRIKES_{ticker}", 0) if tracking_cache_global is not None else 0,
+                                    'daily_bought_qty': tracking_cache_global.get(f"AVWAP_DAILY_BOUGHT_{ticker}", 0) if tracking_cache_global is not None else 0,
+                                    'daily_sold_qty': tracking_cache_global.get(f"AVWAP_DAILY_SOLD_{ticker}", 0) if tracking_cache_global is not None else 0,
+                                    'first_scan_done': tracking_cache_global.get(f"AVWAP_FIRST_SCAN_DONE_{ticker}", False) if tracking_cache_global is not None else False,
+                                    'first_scan_passed': tracking_cache_global.get(f"AVWAP_FIRST_SCAN_PASSED_{ticker}", False) if tracking_cache_global is not None else False,
+                                    'dump_jitter_sec': tracking_cache_global.get(f"AVWAP_DUMP_JITTER_{ticker}", 0) if tracking_cache_global is not None else 0
+                                }
+                                await asyncio.to_thread(self.strategy.v_avwap_plugin.save_state, ticker, now_est, state_data)
+                            
+                            avwap_qty_global = 0
+                        except Exception as e:
+                            logging.error(f"🚨 [{ticker}] AVWAP 수동 매도 환각 소각 중 예외 발생: {e}")
+
                     adjusted_actual_qty = max(0, actual_qty - avwap_qty_global)
                     
                     if adjusted_actual_qty == 0 and (vrev_ledger_qty > 0 or sold_today_vrev > 0):
@@ -387,7 +417,8 @@ class TelegramSyncEngine:
                                         'daily_bought_qty': 0,
                                         'daily_sold_qty': 0,
                                         'first_scan_done': False,
-                                        'first_scan_passed': False
+                                        'first_scan_passed': False,
+                                        'dump_jitter_sec': tracking_cache_global.get(f"AVWAP_DUMP_JITTER_{ticker}", 0) if tracking_cache_global is not None else 0
                                     }
                                     await asyncio.to_thread(self.strategy.v_avwap_plugin.save_state, ticker, now_est, state_data)
                             except Exception as e:
@@ -503,7 +534,7 @@ class TelegramSyncEngine:
                                 cap_dt = snapshot['captured_at']
                                 cap_dt_str = cap_dt if isinstance(cap_dt, str) else cap_dt.strftime('%Y-%m-%d')
                                 start_dt_str = q_data_before[0]['date'][:10] if q_data_before else cap_dt_str[:10]
-                                 
+                                
                                 hist_data = await asyncio.to_thread(self.cfg._load_json, self.cfg.FILES["HISTORY"], [])
                                 new_hist = {
                                     "id": int(time.time()),
@@ -699,7 +730,7 @@ class TelegramSyncEngine:
                                     await asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["LEDGER"], all_recs)
                                     await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} 강제 정산 완료]</b>\n잔고가 0주이나 마이너스 수익 상태이므로 명예의 전당 박제 없이 장부를 비우고 새출발 타점을 장전합니다.", parse_mode='HTML')
                             except Exception as e:
-                                 logging.error(f"강제 졸업 처리 중 에러: {e}")
+                                logging.error(f"강제 졸업 처리 중 에러: {e}")
 
                     await self._sync_escrow_cash(ticker) 
                     return "SUCCESS"

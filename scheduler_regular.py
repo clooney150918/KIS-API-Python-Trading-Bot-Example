@@ -7,14 +7,65 @@
 # MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 동기식 블로킹 호출 전면 비동기 래핑.
 # 🚨 MODIFIED: [V54.02 깡통 스냅샷 붕괴 방어] V-REV 예방 덫 소각 시 생성되는 더미 스냅샷에 prev_c 및 is_zero_start 팩트 다이렉트 주입 락온
 # 🚨 MODIFIED: [V-REV 데이터 기아 방어] 통신 장애로 0.0 폴백 시 루프 조기 탈출(continue) 무시 및 깡통 스냅샷 팩트 박제 락온.
+# 🚨 NEW: [KIS VWAP 알고리즘 권한 위임 수술] V-REV 수동 덫 장전 경고문 및 바이패스 분기를 전면 소각. 17:05 KST 기상 시 산출된 단일 지시서를 KIS VWAP 예약 주문 및 LOC 예약 주문으로 즉각 전송하고 예약 주문 번호(ODNO)를 로컬 캐시에 영속화하는 라우팅 배선 100% 개통 완료.
 # ==========================================================
 import logging
 import datetime
 from zoneinfo import ZoneInfo
 import asyncio
 import random
+import os
+import json
+import tempfile
 
 from scheduler_core import is_market_open, get_budget_allocation
+
+def _save_resv_odno_sync(ticker, odno, ord_type, side):
+    """
+    제13헌법(예약 덫 철거 및 재장전 락온)을 수행하기 위해, 
+    17:05 KST에 전송된 예약 주문 번호(ODNO)를 로컬 캐시에 영속화합니다.
+    """
+    cache_file = f"data/resv_odno_cache_{ticker}.json"
+    data = {}
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            pass
+    
+    est = ZoneInfo('America/New_York')
+    now_est = datetime.datetime.now(est)
+    
+    if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 4):
+        logical_date = now_est - datetime.timedelta(days=1)
+    else:
+        logical_date = now_est
+    today_str = logical_date.strftime('%Y-%m-%d')
+    
+    if data.get('date') != today_str:
+        data = {'date': today_str, 'orders': []}
+        
+    data['orders'].append({
+        'odno': odno,
+        'type': ord_type,
+        'side': side,
+        'timestamp': now_est.strftime('%H:%M:%S')
+    })
+    
+    try:
+        os.makedirs('data', exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir='data', text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, cache_file)
+    except Exception as e:
+        if os.path.exists(tmp):
+            try: os.remove(tmp)
+            except OSError: pass
+        logging.error(f"🚨 [{ticker}] 예약주문 ODNO 캐싱 실패 (제4헌법 위반 위험): {e}")
 
 async def scheduled_regular_trade(context):
     try:
@@ -29,8 +80,6 @@ async def scheduled_regular_trade(context):
     
     app_data = context.job.data
     cfg, broker, strategy, tx_lock = app_data['cfg'], app_data['broker'], app_data['strategy'], app_data['tx_lock']
-    strategy_rev = app_data.get('strategy_rev')
-    queue_ledger = app_data.get('queue_ledger')
     
     if tx_lock is None:
         logging.warning("⚠️ [regular_trade] tx_lock 미초기화. 이번 사이클 스킵.")
@@ -70,20 +119,14 @@ async def scheduled_regular_trade(context):
             
             safe_holdings = holdings if isinstance(holdings, dict) else {}
 
-            # MODIFIED: [맹점 2 수술] 파이썬 인자 평가 순서 함정으로 인한 동기 블로킹 방어
             active_tickers_list = await asyncio.to_thread(cfg.get_active_tickers)
-            
-            # 🚨 [비동기 래핑] get_budget_allocation 내부 파일 I/O 데드락 방어
             sorted_tickers, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, active_tickers_list, cfg)
             
             plans = {}
             msgs = {t: "" for t in sorted_tickers}
-            
             all_success_map = {t: True for t in sorted_tickers}
-            v_rev_tickers = [] 
 
             for t in sorted_tickers:
-                # 🚨 [비동기 래핑] 파일 I/O 데드락 방어
                 is_locked = await asyncio.to_thread(cfg.check_lock, t, "REG")
                 if is_locked:
                     skip_msg = (
@@ -98,189 +141,80 @@ async def scheduled_regular_trade(context):
                 safe_avg = float(h.get('avg') or 0.0)
                 safe_qty = int(float(h.get('qty') or 0))
 
-                # 🚨 [비동기 래핑] 파일 I/O 데드락 방어 및 스코프 전진 배치 (V-REV 데이터 기아 방어용)
-                version = await asyncio.to_thread(cfg.get_version, t)
-                is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
-
                 curr_p = 0.0
                 prev_c = 0.0
                 for _api_retry in range(3):
                     try:
                         curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=10.0)
                         curr_p = float(curr_p_val or 0.0)
-                    except asyncio.TimeoutError:
-                        logging.warning(f"⚠️ [{t}] 현재가 조회 타임아웃. 0.0 폴백.")
-                        curr_p = 0.0
                     except Exception:
                         curr_p = 0.0
-                         
+                        
                     try:
                         prev_c_val = await asyncio.wait_for(asyncio.to_thread(broker.get_previous_close, t), timeout=10.0)
                         prev_c = float(prev_c_val or 0.0)
-                    except asyncio.TimeoutError:
-                        logging.warning(f"⚠️ [{t}] 전일종가 조회 타임아웃. 0.0 폴백.")
-                        prev_c = 0.0
                     except Exception:
                         prev_c = 0.0
-                         
+                        
                     if curr_p > 0 and prev_c > 0:
                         break
                     await asyncio.sleep(2.0)
 
                 if curr_p <= 0 or prev_c <= 0:
-                    # 🚨 MODIFIED: [V-REV 데이터 기아 방어] 가격 결측 시 조기 탈출 무시 및 깡통 스냅샷 강제 박제
-                    if version == "V_REV":
-                        msgs[t] += (
-                            f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
-                            f"▫️ 0.0 폴백 상태이나 V-REV 깡통 스냅샷(0.0) 박제를 위해 런타임을 강제 진행합니다.\n"
-                        )
-                    else:
-                        msgs[t] += (
-                            f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
-                            f"▫️ 매수 방어선을 장전하지 못하고 다음 종목으로 넘어갑니다(continue 바이패스).\n"
-                        )
-                        all_success_map[t] = False
-                        await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
-                        continue
+                    msgs[t] += (
+                        f"🚨 <b>[{t}] 전일 종가/현재가 API 3회 결측 감지!</b>\n"
+                        f"▫️ 0.0 폴백 상태이나 깡통 스냅샷(0.0) 박제를 위해 런타임을 강제 진행합니다.\n"
+                    )
 
-                if version == "V_REV" and is_manual_vwap:
-                    msgs[t] += f"🛡️ <b>[{t}] V-REV 수동 시그널 모드 가동 중</b>\n"
-                    msgs[t] += "▫️ 봇 자동 주문이 락다운되었습니다. V앱에서 장 마감 30분 전 세팅으로 수동 장전하십시오.\n"
-                    await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
-                    continue
-
-                if version == "V_REV" or (version == "V14" and is_manual_vwap):
-                    loc_orders = []
-                    
-                    if version == "V_REV":
-                        # 🚨 [비동기 래핑] 큐 장부 스레드 락 점유 원천 차단
-                        q_data = await asyncio.to_thread(queue_ledger.get_queue, t)
-                        v_rev_q_qty = sum(item.get("qty", 0) for item in q_data)
-                    
-                        msgs[t] += f"🛡️ <b>[{t}] V-REV 예방적 덫 장전 기능 전면 소각</b>\n"
-                        msgs[t] += "▫️ 자전거래(FDS) 의심을 회피하고 AVWAP 암살자가 자유롭게 타격하도록 예방 덫 기능을 영구 소각했습니다.\n"
-                        
-                        # 🚨 MODIFIED: [V54.02] 깡통 스냅샷 붕괴 방어. prev_c 및 is_zero_start 팩트 다이렉트 주입 락온
-                        plan_result = {
-                            "orders": [], 
-                            "trigger_loc": False, 
-                            "total_q": v_rev_q_qty,
-                            "prev_c": prev_c,
-                            "is_zero_start": (v_rev_q_qty == 0)
-                        }
-                        if hasattr(strategy_rev, 'save_daily_snapshot'):
-                            await asyncio.to_thread(strategy_rev.save_daily_snapshot, t, plan_result)
-
-                        await asyncio.to_thread(cfg.set_lock, t, "REG")
-                        all_success_map[t] = True
-                        v_rev_tickers.append((t, version))
-                        continue 
-
-                    elif version == "V14":
-                        try:
-                            ma_5day_val = await asyncio.wait_for(asyncio.to_thread(broker.get_5day_ma, t), timeout=10.0)
-                            ma_5day = float(ma_5day_val or 0.0)
-                        except asyncio.TimeoutError:
-                            logging.warning(f"⚠️ [{t}] 5MA 스캔 타임아웃. 0.0 폴백.")
-                            ma_5day = 0.0
-                        except Exception:
-                            ma_5day = 0.0
-                            
-                        v14_vwap_plugin = strategy.v14_vwap_plugin
-                        
-                        # 🚨 [비동기 래핑] 내부 스냅샷 저장 등 파일 I/O 방어
-                        v14_plan = await asyncio.to_thread(
-                            v14_vwap_plugin.get_plan,
-                            ticker=t, current_price=curr_p, avg_price=safe_avg, qty=safe_qty, 
-                            prev_close=prev_c, ma_5day=ma_5day, market_type="REG", 
-                            available_cash=allocated_cash.get(t, 0.0), is_simulation=False,
-                            is_snapshot_mode=True
-                        )
-                        loc_orders = v14_plan.get('core_orders', [])
-                        msgs[t] += f"🛡️ <b>[{t}] 무매4(VWAP) 예방적 LOC 덫 장전 완료</b>\n"
-
-                    sell_success_count = 0
-                    for o in loc_orders:
-                        res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
-                        is_success = res.get('rt_cd') == '0'
-                        if not is_success: all_success_map[t] = False
-                        if is_success and o['side'] == 'SELL':
-                            sell_success_count += 1
-                            
-                        err_msg = res.get('msg1', '오류')
-                        status_icon = '✅' if is_success else f'❌({err_msg})'
-                        msgs[t] += f"└ {o['desc']} {o['qty']}주 (${o['price']}): {status_icon}\n"
-                        await asyncio.sleep(0.2)
-                        
-                    if all_success_map[t] and len(loc_orders) > 0:
-                        await asyncio.to_thread(cfg.set_lock, t, "REG")
-                        msgs[t] += "\n🔒 <b>방어선 전송 완료 (매매 잠금 설정됨)</b>"
-                    elif sell_success_count > 0:
-                        await asyncio.to_thread(cfg.set_lock, t, "REG")
-                        msgs[t] += "\n⚠️ <b>일부 방어선 구축 실패 (반쪽짜리 잠금 설정됨)</b>"
-                    elif len(loc_orders) == 0:
-                        msgs[t] += "\n⚠️ <b>전송할 방어선(예산/수량)이 없습니다.</b>"
-                    else:
-                        msgs[t] += "\n⚠️ <b>일부 방어선 구축 실패 (잠금 보류)</b>"
-                        
-                    await context.bot.send_message(context.job.chat_id, msgs[t], parse_mode='HTML')
-                    v_rev_tickers.append((t, version))
-                    continue
-                
                 try:
                     ma_5day_val = await asyncio.wait_for(asyncio.to_thread(broker.get_5day_ma, t), timeout=10.0)
                     ma_5day = float(ma_5day_val or 0.0)
-                except asyncio.TimeoutError:
-                    logging.warning(f"⚠️ [{t}] 5MA 스캔 타임아웃. 0.0 폴백.")
-                    ma_5day = 0.0
                 except Exception:
                     ma_5day = 0.0
                 
-                # 🚨 [비동기 래핑] 내부 파일 I/O 및 로드 방어
+                # 🚨 MODIFIED: [KIS VWAP 알고리즘 대통합] V-REV 및 VWAP 수동/우회 처리 전면 소각 및 단일 통짜 플랜 로드 락온
                 plan = await asyncio.to_thread(
                     strategy.get_plan,
                     t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True
                 )
                 
-                if hasattr(strategy, 'v14_plugin') and hasattr(strategy.v14_plugin, 'save_daily_snapshot'):
-                    await asyncio.to_thread(strategy.v14_plugin.save_daily_snapshot, t, plan)
-                    
                 plans[t] = plan
                 if plan.get('core_orders', []) or plan.get('orders', []):
                     is_rev = plan.get('is_reverse', False)
-                    msgs[t] += f"🔄 <b>[{t}] 리버스 주문 실행</b>\n" if is_rev else f"💎 <b>[{t}] 정규장 주문 실행</b>\n"
-
-            for t, ver in v_rev_tickers:
-                mod_name = "V-REV" if ver == "V_REV" else "무매4(VWAP)"
-                if ver == "V_REV":
-                    msg = f"🎺 <b>[{t}] {mod_name} 예방적 방어망 전면 철거 완료</b>\n"
-                    msg += f"▫️ 프리장이 개장했습니다! 자전거래(FDS) 의심을 회피하고 <b>AVWAP 암살자</b>의 기동력을 극대화하기 위해 예방적 덫(물리/가상)을 전면 소각했습니다.\n"
-                    msg += f"▫️ <b>1회분 예산은 가상 에스크로에 100% 안전하게 격리 보존되며</b>, 암살자는 오직 잉여 현금만으로 자유롭게 타격합니다.\n"
-                    msg += f"▫️ 장 후반(15:27 EST) VWAP 엔진이 깨어나 보존된 1회분 예산으로 정밀 타격을 개시합니다! 편안한 밤 보내십시오! 🌙💤\n"
-                else:
-                    msg = f"🎺 <b>[{t}] {mod_name} 예방적 방어망 장전 완료</b>\n"
-                    msg += f"▫️ 프리장이 개장했습니다! 시스템 다운 등 최악의 블랙스완을 대비하여 <b>지층별 분리 종가(LOC) 덫</b>을 KIS 서버에 선제 전송했습니다.\n"
-                    msg += f"▫️ 서버가 무사하다면 장 후반(15:27 EST)에 스스로 깨어나 이 덫을 거두고 추세(60% 허들)를 스캔하여 새로운 최적 전술로 교체합니다! 편안한 밤 보내십시오! 🌙💤\n"
-                await context.bot.send_message(chat_id=context.job.chat_id, text=msg, parse_mode='HTML')
+                    msgs[t] += f"🔄 <b>[{t}] 리버스(VWAP) 예약 덫 장전 완료</b>\n" if is_rev else f"💎 <b>[{t}] 정규장(LOC/VWAP) 예약 덫 장전 완료</b>\n"
 
             for t in sorted_tickers:
                 if t not in plans: continue
                 target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
                 for o in target_orders:
                     res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
-                    if res.get('rt_cd') != '0': all_success_map[t] = False
+                    is_success = res.get('rt_cd') == '0'
+                    if not is_success: all_success_map[t] = False
                     
-                    err_msg = res.get('msg1', '오류')
-                    status_icon = '✅' if res.get('rt_cd') == '0' else f'❌({err_msg})'
-                    msgs[t] += f"└ 1차 필수: {o['desc']} {o['qty']}주: {status_icon}\n"
-                    await asyncio.sleep(0.2) 
+                    odno = res.get('odno', '') if isinstance(res, dict) else ''
+                    if is_success and odno:
+                        # 🚨 MODIFIED: [제13헌법 철거/재장전을 위한 락온] 예약 주문 번호 ODNO 로컬 캐시 영속화
+                        await asyncio.to_thread(_save_resv_odno_sync, t, odno, o['type'], o['side'])
 
+                    err_msg = res.get('msg1', '오류')
+                    status_icon = '✅' if is_success else f'❌({err_msg})'
+                    msgs[t] += f"└ 1차 필수: {o['desc']} {o['qty']}주 (${o['price']}): {status_icon}\n"
+                    await asyncio.sleep(0.2)
+                    
             for t in sorted_tickers:
                 if t not in plans: continue
                 target_bonus = plans[t].get('bonus_orders', [])
                 for o in target_bonus:
                     res = await asyncio.to_thread(broker.send_order, t, o['side'], o['qty'], o['price'], o['type'])
-                    msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주: {'✅' if res.get('rt_cd')=='0' else '❌(잔금패스)'}\n"
+                    is_success = res.get('rt_cd') == '0'
+                    
+                    odno = res.get('odno', '') if isinstance(res, dict) else ''
+                    if is_success and odno:
+                        await asyncio.to_thread(_save_resv_odno_sync, t, odno, o['type'], o['side'])
+
+                    err_msg = res.get('msg1', '잔금패스')
+                    status_icon = '✅' if is_success else f'❌({err_msg})'
+                    msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주 (${o['price']}): {status_icon}\n"
                     await asyncio.sleep(0.2) 
 
             for t in sorted_tickers:
@@ -291,15 +225,14 @@ async def scheduled_regular_trade(context):
                 
                 if all_success_map[t] and len(target_orders) > 0:
                     await asyncio.to_thread(cfg.set_lock, t, "REG")
-                    msgs[t] += "\n🔒 <b>필수 주문 정상 전송 완료 (잠금 설정됨)</b>"
+                    msgs[t] += "\n🔒 <b>필수 예약 덫 정상 전송 완료 (잠금 설정됨)</b>"
                 elif not all_success_map[t] and len(target_orders) > 0:
-                    msgs[t] += "\n⚠️ <b>일부 필수 주문 실패 (매매 잠금 보류)</b>"
+                    msgs[t] += "\n⚠️ <b>일부 예약 덫 장전 실패 (매매 잠금 보류)</b>"
                 elif len(target_bonus) > 0:
                     await asyncio.to_thread(cfg.set_lock, t, "REG")
-                    msgs[t] += "\n🔒 <b>보너스 주문만 전송 완료 (잠금 설정됨)</b>"
+                    msgs[t] += "\n🔒 <b>보너스 예약 덫만 전송 완료 (잠금 설정됨)</b>"
                     
-                if not any(tx[0] == t for tx in v_rev_tickers): 
-                    await context.bot.send_message(chat_id=context.job.chat_id, text=msgs[t], parse_mode='HTML')
+                await context.bot.send_message(chat_id=context.job.chat_id, text=msgs[t], parse_mode='HTML')
 
             return True, "SUCCESS"
 
@@ -308,10 +241,10 @@ async def scheduled_regular_trade(context):
             success, fail_reason = await asyncio.wait_for(_do_regular_trade(), timeout=300.0)
             if success:
                 if attempt > 1:
-                    await context.bot.send_message(chat_id=context.job.chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 전송을 완수했습니다!</b>", parse_mode='HTML')
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 예약 덫 장전을 완수했습니다!</b>", parse_mode='HTML')
                 return 
         except Exception as e:
-            logging.error(f"정규장 전송 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
+            logging.error(f"정규장 예약 덫 전송 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
             if attempt == 1:
                 await context.bot.send_message(
                     chat_id=context.job.chat_id, 
@@ -319,7 +252,7 @@ async def scheduled_regular_trade(context):
                     parse_mode='HTML'
                 )
         else:
-            logging.warning(f"정규장 조건 미충족 ({attempt}/{MAX_RETRIES}): {fail_reason}")
+            logging.warning(f"정규장 예약 덫 조건 미충족 ({attempt}/{MAX_RETRIES}): {fail_reason}")
             if attempt == 1:
                 await context.bot.send_message(
                     chat_id=context.job.chat_id, 
