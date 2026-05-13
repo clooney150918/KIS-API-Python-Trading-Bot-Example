@@ -25,10 +25,17 @@
 # 🚨 MODIFIED: [V54.01 VWAP 데이터 통합 롤백] vwap_data.py 외부 파일 임포트 소각 및 ConfigManager 수혈 락온
 # 🚨 MODIFIED: [V54.02 깡통 스냅샷 붕괴 방어] prev_c 다이렉트 추출 파이프라인 이식으로 데이터 기아(Data Starvation) 원천 차단
 # 🚨 NEW: [달력 API 결측 연쇄 기절 방어] 장마감시간 빈 값 반환 시 평일 16:00 EST 강제 폴백 락온 이식 완료.
-# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 전면 폐기 및 데드코드 소각]
-# 1분 타임 슬라이싱 루프 내부에서 갭 스위칭(Gap Hijack) 진입을 가로막던 omni_filter 호출 의존성을 완벽히 끊어내고 런타임 붕괴(AttributeError) 뇌관 해체.
+# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 데드코드 전면 폐기] 
+# 스나이퍼 격발 전 매수 방아쇠를 잠그기 위해 잔존하던 옴니 매트릭스 필터 데드코드를 전면 소각하여 런타임 뇌관 해체.
 # 🚨 MODIFIED: [V66.09 V-REV VWAP 런타임 엑스레이 이식]
 # 🚨 NEW: [KIS VWAP 알고리즘 권한 위임 수술] 1분마다 매수/매도 주문을 쏘던 자체 타임 슬라이싱 타격망 100% 영구 소각. KIS 예약 덫 체결 관망 및 갭 하이재킹(Gap Hijack) 섀도우 오버라이드망으로 롤 완벽 격상.
+# 🚨 NEW: [V71.10 섀도우 오버라이드 덫 파기 팩트 스캔] 갭 하이재킹 격발 시 로컬 캐시 조회 파기 로직 전면 소각 및 KIS 실원장(get_reservation_orders) 다이렉트 연동 아키텍처 이식.
+# 🚨 MODIFIED: [V71.14 지정가 VWAP 일반주문 역배선 팩트 락온 및 갭 하이재킹 기절 버그 수술]
+# 🚨 MODIFIED: [V72.08 갭 하이재킹 예산 연산 공식 디커플링 해체 및 SSOT 락온]
+# - 정규장 V-REV 매수 예산 산출 공식(V72.01 하드 마진 캡)과 갭 하이재킹의 예산 연산 로직이 
+#   서로 다르게 작동하던 치명적 수학적 디커플링 원천 차단.
+# - get_budget_allocation 파이프라인을 섀도우 오버라이드망에 다이렉트 결속시켜, 
+#   하이재킹 타격 시에도 "1일 할당량(15%) 초과 금지" 룰이 100% 팩트 연동되도록 아키텍처 대수술 완료.
 # ==========================================================
 import logging
 import datetime
@@ -42,7 +49,8 @@ import json
 import pandas_market_calendars as mcal
 import tempfile
 
-from scheduler_core import is_market_open
+# 🚨 MODIFIED: [V72.08] 하이재킹 예산 SSOT 락온을 위해 get_budget_allocation 수혈
+from scheduler_core import is_market_open, get_budget_allocation
 
 async def scheduled_vwap_init_and_cancel(context):
     if context.job.data.get('tx_lock') is None:
@@ -68,7 +76,6 @@ async def scheduled_vwap_init_and_cancel(context):
 
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
-        # MODIFIED: [달력 API 결측 연쇄 기절 방어] schedule.empty == True 여도 평일이면 무조건 Fail-Open(강제 마감 16:00) 락온
         if schedule.empty:
             logging.warning("⚠️ [vwap_init] 달력 API 빈 값 반환. 평일 강제 마감시간(16:00 EST) 폴백 가동.")
             if now_est.weekday() < 5:
@@ -114,17 +121,13 @@ async def scheduled_vwap_init_and_cancel(context):
                 version = await asyncio.to_thread(cfg.get_version, t)
                 is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
                 
-                if version == "V_REV" and is_manual_vwap:
-                    continue
-                
                 if version == "V_REV" or (version == "V14" and is_manual_vwap):
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
-                            # 🚨 MODIFIED: [KIS VWAP 알고리즘 대통합] 1분 타임 슬라이싱 덫 취소 로직 소각. KIS 예약 덫 관측 상태로 메시지 팩트 교정.
                             msg = f"🌅 <b>[{t}] KIS VWAP/LOC 예약 덫 관측 및 섀도우 오버라이드망 기상</b>\n"
                             msg += f"▫️ 장 마감 33분 전 진입을 확인하여 KIS 서버의 예약 덫 체결을 관망합니다.\n"
                             msg += f"▫️ 기초자산 갭 이탈 감지 시 즉각 개입(Gap Hijack)하는 섀도우 모드로 전환합니다. ⚔️"
-                            
+            
                             vwap_cache[f"REV_{t}_nuked"] = True
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML', disable_notification=True)
                             await asyncio.sleep(1.0)
@@ -135,7 +138,7 @@ async def scheduled_vwap_init_and_cancel(context):
     try:
         await asyncio.wait_for(_do_init(), timeout=45.0)
     except Exception as e:
-        logging.error(f"🚨 Fail-Safe 타임아웃 에러: {e}", exc_info=True)
+         logging.error(f"🚨 Fail-Safe 타임아웃 에러: {e}", exc_info=True)
 
 
 async def scheduled_vwap_trade(context):
@@ -162,7 +165,6 @@ async def scheduled_vwap_trade(context):
 
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
-        # MODIFIED: [달력 API 결측 연쇄 기절 방어] schedule.empty == True 여도 평일이면 무조건 Fail-Open(강제 마감 16:00) 락온
         if schedule.empty:
             logging.warning("⚠️ [vwap_trade] 달력 API 빈 값 반환. 평일 강제 마감시간(16:00 EST) 폴백 가동.")
             if now_est.weekday() < 5:
@@ -208,25 +210,21 @@ async def scheduled_vwap_trade(context):
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None: return
             
-            # 🚨 MODIFIED: [스코프 전진 배치] UnboundLocalError 런타임 즉사 방어
+            # 🚨 MODIFIED: [V72.08] 하이재킹 예산 SSOT 락온을 위한 전역 예산 할당 팩트 스캔
+            active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
+            _, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, active_tickers, cfg)
+            
             base_curr_p = 0.0
             ask_price = 0.0
             exec_price = 0.0
             buy_qty = 0
             nuked_count = 0
             
-            active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
             for t in active_tickers:
                 version = await asyncio.to_thread(cfg.get_version, t)
                 is_manual_vwap = await asyncio.to_thread(getattr(cfg, 'get_manual_vwap_mode', lambda x: False), t)
 
-                if version == "V_REV" and is_manual_vwap:
-                    continue
-
                 if version == "V_REV" or (version == "V14" and is_manual_vwap):
-                    
-                    # 🚨 MODIFIED: [KIS VWAP 알고리즘 대통합] 1분 슬라이싱 타격망 전면 소각
-                    # 오직 기초자산 갭 이탈(Gap Hijack) 감지 시 예약 덫 취소 및 스윕 타격만 섀도우 오버라이딩
                     if version == "V_REV":
                         if vwap_cache.get(f"REV_{t}_gap_hijack_fired"):
                             continue
@@ -259,33 +257,39 @@ async def scheduled_vwap_trade(context):
                                     if gap_pct <= gap_thresh:
                                         logging.info(f"⚡ [{t}] Gap Hijack Triggered! gap: {gap_pct:.2f}%, thresh: {gap_thresh}%")
                                         
-                                        cache_file = f"data/resv_odno_cache_{t}.json"
                                         nuked_count = 0
-                                        if os.path.exists(cache_file):
-                                            try:
-                                                with open(cache_file, 'r', encoding='utf-8') as f:
-                                                    c_data = json.load(f)
-                                                date_str = c_data.get('date', '').replace('-', '')
-                                                for req in c_data.get('orders', []):
+                                        try:
+                                            est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
+                                            d_str = est_now.strftime('%Y%m%d')
+                                            resv_orders = await asyncio.to_thread(broker.get_reservation_orders, t, d_str, d_str)
+                                            for req in resv_orders:
+                                                odno = req.get('odno')
+                                                ord_dt = req.get('ord_dt', d_str)
+                                                if odno:
                                                     try:
-                                                        await asyncio.to_thread(broker.cancel_reservation_order, date_str, req['odno'])
+                                                        await asyncio.to_thread(broker.cancel_reservation_order, ord_dt, odno)
                                                         nuked_count += 1
                                                     except Exception as e:
                                                         logging.error(f"🚨 [{t}] 예약 덫 취소 실패: {e}")
-                                                os.remove(cache_file)
-                                            except Exception as e:
-                                                logging.error(f"🚨 [{t}] 예약 덫 캐시 접근 에러: {e}")
+                                            logging.info(f"⚡ [{t}] KIS 실원장 스캔: 예약 덫 {nuked_count}건 팩트 파기 완료.")
+                                        except Exception as e:
+                                            logging.error(f"🚨 [{t}] KIS 실원장 예약 덫 스캔 에러: {e}")
                                         
                                         await asyncio.sleep(2.0)
                                         
+                                        # 🚨 MODIFIED: [V72.08 갭 하이재킹 예산 연산 공식 디커플링 해체 및 SSOT 락온]
+                                        # V-REV 코어에서 사용하는 정규장 예산 하드 마진 캡(Cap) 로직을 완벽히 동기화 이식.
                                         seed = await asyncio.to_thread(cfg.get_seed, t)
-                                        rev_daily_budget = float(seed or 0.0) * 0.15
+                                        daily_limit = float(seed or 0.0) * 0.15
+                                        
+                                        alloc_cash = allocated_cash.get(t, 0.0)
+                                        safe_alloc_cash = min(float(alloc_cash), daily_limit) if daily_limit > 0 else float(alloc_cash)
                                         
                                         total_spent = 0.0
                                         if hasattr(strategy, 'v_rev_plugin'):
                                             total_spent = float(strategy.v_rev_plugin.executed.get("BUY_BUDGET", {}).get(t, 0.0))
                                             
-                                        rem_budget = max(0.0, rev_daily_budget - total_spent)
+                                        rem_budget = max(0.0, safe_alloc_cash - total_spent)
                                         
                                         try:
                                             ask_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_ask_price, t), timeout=10.0)
@@ -303,22 +307,23 @@ async def scheduled_vwap_trade(context):
                                         buy_qty = int(math.floor(rem_budget / exec_price)) if exec_price > 0 else 0
                                         
                                         if buy_qty > 0:
+                                            # 💡 갭 하이재킹은 즉각적인 스윕(Sweep) 타격을 위해 지정가(LIMIT)를 사용함
                                             res = await asyncio.to_thread(broker.send_order, t, "BUY", buy_qty, exec_price, "LIMIT")
                                             odno = res.get('odno', '') if isinstance(res, dict) else ''
-                                            
+
                                             if res and res.get('rt_cd') == '0' and odno:
                                                 vwap_cache[f"REV_{t}_gap_hijack_fired"] = True
                                                 msg = f"⚡ <b>[{t}] 🤖 모멘텀 자율주행 (Gap Hijack) 섀도우 오버라이드 격발!</b>\n"
                                                 msg += f"▫️ 기초자산({base_tkr}) VWAP 이탈률(<b>{gap_pct:+.2f}%</b>)이 임계치(<b>{gap_thresh}%</b>)를 하향 돌파했습니다.\n"
-                                                msg += f"▫️ KIS 예약 덫({nuked_count}건)을 즉각 파기(Nuke)하고, 잔여 예산 100%를 매도 1호가로 전량 스윕(Sweep) 타격했습니다!\n"
+                                                msg += f"▫️ KIS 예약 덫({nuked_count}건)을 즉각 파기(Nuke)하고, 잔여 예산 100%를 매도 1호가로 일괄 스윕(Sweep) 타격했습니다!\n"
                                                 msg += f"▫️ 스윕 수량: <b>{buy_qty}주</b> (단가: ${exec_price:.2f})"
                                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                                                
+                                                 
                                                 if hasattr(strategy, 'v_rev_plugin'):
                                                     await asyncio.to_thread(strategy.v_rev_plugin.record_execution, t, "BUY", buy_qty, exec_price)
                                                 if queue_ledger:
                                                     await asyncio.to_thread(queue_ledger.add_lot, t, buy_qty, exec_price, "GAP_HIJACK_BUY")
-                                                
+                                
                         except Exception as e:
                             logging.error(f"🚨 갭 스위칭 스캔 에러: {e}")
 

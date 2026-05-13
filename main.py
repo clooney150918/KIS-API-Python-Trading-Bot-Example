@@ -11,6 +11,9 @@
 # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구 완료.
 # 🚨 MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온.
 # NEW: [V66.02 원격 로그 핀셋 추출 엔진 탑재] 텔레그램 CommandHandler 배열에 log 및 error 명령어 배선 결속 완료.
+# 🚨 MODIFIED: [V71.00 옴니 매트릭스 퀀트 엔진 락온]
+# - 17:05 KST 예방 덫 스케줄을 EST로 동적 래핑하여 서머타임 패러독스 원천 차단.
+# - vwap_init_and_cancel 기상 시각을 15:25 EST로 전진 배치하여 아키텍처 무결성 확보.
 # ==========================================================
 import os
 import logging
@@ -153,6 +156,7 @@ async def scheduled_volatility_scan(context):
                     )
                     raw_weight = weight_data.get('weight', 1.0) if isinstance(weight_data, dict) else weight_data
                     real_weight = float(raw_weight)
+                    
                     if not math.isfinite(real_weight):
                         raise ValueError(f"비정상 수학 수치 산출: {real_weight}")
                 except asyncio.TimeoutError:
@@ -186,13 +190,14 @@ async def post_init(application: Application):
 
 def main():
     est_zone = ZoneInfo('America/New_York')
+    kst_zone = ZoneInfo('Asia/Seoul')
     
     cfg = ConfigManager()
     latest_version = cfg.get_latest_version() 
     
     print("=" * 60)
     # MODIFIED: [V44.68 콜드 스타트 방어막 전진 배치 및 팩트 교정]
-    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V56.00 락온)")
+    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V71.00 락온)")
     print(f"⏰ 자동 동기화: 21:00 EST 확정 정산 엔진 락온 가동")
     # MODIFIED: [V44.56 타임라인 롤백] 10:20 EST 레거시 소각 및 10:00 EST 옴니 매트릭스 팩트 교정 완료
     print("🛡️ 1-Tier 자율주행 지표 스캔 대기 중... (매일 10:00 EST 격발)")
@@ -281,17 +286,24 @@ def main():
     # MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온
     jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    # 🚨 [EST 100% 락온] 정규장 통합 주문: 04:05 EST
-    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
+    # 🚨 [제3헌법] 17:05 KST를 EST로 동적 변환하여 서머타임 타임 패러독스 영구 소각
+    # 🚨 [AI 에이전트 절대 주의] 17:05 KST 예방적 주문 스케줄은 내부적으로 EST로 동적 래핑하여 주입할 것 (18계명 1조 준수)
+    dt_now_kst = datetime.datetime.now(kst_zone)
+    target_kst_dt = datetime.datetime.combine(dt_now_kst.date(), datetime.time(17, 5), tzinfo=kst_zone)
+    target_est_dt = target_kst_dt.astimezone(est_zone)
+    # Naive Time 환각 소각 및 EST 100% 락온 시간 생성
+    regular_trade_time = datetime.time(hour=target_est_dt.hour, minute=target_est_dt.minute, tzinfo=est_zone)
+
+    # 🚨 [EST 100% 락온] 정규장 통합 주문 (17:05 KST 동적 래핑 결과물)
     # MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온
-    jq.run_daily(scheduled_regular_trade, time=datetime.time(4, 5, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    jq.run_daily(scheduled_regular_trade, time=regular_trade_time, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 MODIFIED: [V44.65 엣지 타임라인 동기화 및 오프닝 휩소 원천 락다운]
     # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
-    # 🚨 [EST 100% 락온] VWAP 1분 타격 개시 전 Fail-Safe: 15:27 EST
+    # 🚨 [EST 100% 락온] VWAP 1분 타격 개시 전 Fail-Safe: 15:25 EST (V71.00 정밀 시프트)
     # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     # MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온
-    jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 27, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
+    jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 25, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
 
     # 매 1분 스나이퍼 및 VWAP 타격
     jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)

@@ -2,24 +2,35 @@
 # FILE: strategy_reversion.py
 # ==========================================================
 # 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술]
-# get_dynamic_plan 엔진이 60% 거래량 지배력을 감지하고 LOC 방어선으로 전환(trigger_loc)할 때, 
-# 상태 파일 저장을 누락한 채 루프를 탈출하여 봇이 영구 기절하던 치명적 맹점 원천 차단. 
-# return 직전에 self._save_state(ticker)를 강제 주입하여 팩트 박제 및 락온 완료.
-# MODIFIED: [V44.27 0주 스냅샷 환각 락온] 서버 재시작으로 인메모리 스냅샷이 소실되었을 때, VWAP이 장중 매수한 로트를 기보유 물량으로 오판하여 매도를 재개(하극상)하던 맹점 원천 차단. 큐 장부에서 당일 날짜(EST)의 로트를 100% 도려내고 오직 어제까지 이월된 순수 과거 물량만을 스캔하여 '0주 새출발' 상태를 완벽히 팩트 복구하는 타임머신 역산 엔진 이식 완료.
-# MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] Buy1이 Buy2의 미사용 예산을 훔쳐와 무한 타격(34주 체결 등)하는 차원 붕괴를 영구 소각.
-# MODIFIED: [V44.25 AVWAP 디커플링] VWAP 기상 전 스냅샷 2중 교차 검증(Fail-Safe) 및 암살자 물량(AVWAP) 100% 격리(Decoupling) 파이프라인 이식 완료.
-# MODIFIED: [V44.36 큐 장부 vs 브로커 실잔고 불일치 팩트 스캔] 페일세이프 스냅샷 복원 시 KIS 순수 본대 수량과 큐 장부 이월 수량 간의 팩트 불일치가 발생할 경우 명시적으로 경고를 타전하여 CALIB 보정을 유도하도록 감시망(EC-3) 이식 완료.
-# MODIFIED: [V44.48 런타임 붕괴 방어] 들여쓰기 붕괴(IndentationError) 완벽 교정.
-# NEW: [VWAP 잔차 증발 방어 롤백 엔진] 주문 거절/미체결 시 삭감된 예산을 버킷 식별자 기반으로 원상 복구(Refund)하는 환불 파이프라인 개통 완료.
-# NEW: [V46.01 팩트 교정] 소형 시드 1주 타격 영구 동결(Data Starvation) 및 분할 교착 맹점 원천 차단
-# 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: 잔차 파탄 완벽 해체] 소형 시드 분할 교착 방어 시 기저 버킷(bucket) 동기화 및 초기화 로직 100% 추가.
-# 🚨 MODIFIED: [V48.00 단일 바구니(Single Bucket) 롤백] Buy1과 Buy2 예산 스틸링(Stealing)을 허용하여 체결 우위 극대화 및 데이터 기아 원천 차단.
-# 🚨 MODIFIED: [V50.02 30분 압축 락온] 타임 윈도우 스캔 범위를 range(27, 60)에서 range(27, 57)로 정밀 교정하여 15:56 타격 종료 완벽 동기화.
-# 🚨 MODIFIED: [V50.03 분할 교착 및 예산 강제 축소 버그 완벽 수술] 기존 elif 구조로 인해 버려지던 가불 로직을 독립된 if문으로 분리하고, 이미 예산이 넉넉한 경우를 1주 가격(curr_p)으로 강제 축소해버리는 치명적 맹점 원천 차단.
-# 🚨 MODIFIED: [V51.00 몰빵 로직 전면 철거] 0주 진입 시에도 50:50 분할 예산 원칙을 100% 강제 락온하여 예산 효율성 복구 완료.
-# 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온] 예산이 1주 가격보다 작더라도 장막판 가불을 통해 무조건 1주 베이스캠프 확보 보장.
-# 🚨 MODIFIED: [V53.00 무한 재진입 락온] 0주 매수 금지(Daily Buy-Lock) 족쇄 전면 폐기 및 was_holding 데드코드 100% 소각. 전량 익절 후에도 당일 타점 도달 시 100% 재매수 강제 가동.
-# 🚨 NEW: [KIS VWAP 알고리즘 대통합 수술] 1분 단위 타임 슬라이싱 연산 및 잔차 버킷 파편화 궤적을 100% 영구 소각하고, 할당된 1회분 총 예산을 단일 KIS VWAP 덫 예약 주문 플랜으로 통짜 스냅샷 산출하여 반환하도록 아키텍처 대수술 완료.
+# MODIFIED: [V44.27 0주 스냅샷 환각 락온] 
+# MODIFIED: [V44.25 예산 탈취(Stealing) 런타임 붕괴 방어막 이식] 
+# MODIFIED: [V44.25 AVWAP 디커플링] 
+# MODIFIED: [V44.36 큐 장부 vs 브로커 실잔고 불일치 팩트 스캔] 
+# MODIFIED: [V44.48 런타임 붕괴 방어] 
+# NEW: [VWAP 잔차 증발 방어 롤백 엔진] 
+# NEW: [V46.01 팩트 교정] 소형 시드 1주 타격 영구 동결(Data Starvation) 방어
+# 🚨 MODIFIED: [V46.02 엣지 케이스 핫픽스: 잔차 파탄 완벽 해체] 
+# 🚨 MODIFIED: [V48.00 단일 바구니(Single Bucket) 롤백] 
+# 🚨 MODIFIED: [V50.02 30분 압축 락온] 
+# 🚨 MODIFIED: [V50.03 분할 교착 및 예산 강제 축소 버그 완벽 수술] 
+# 🚨 MODIFIED: [V51.00 몰빵 로직 전면 철거] 
+# 🚨 MODIFIED: [V51.01 소형 시드 1주 영끌 타격 락온] 
+# 🚨 MODIFIED: [V53.00 무한 재진입 락온] 
+# 🚨 NEW: [KIS VWAP 알고리즘 대통합 수술] 
+# 🚨 MODIFIED: [V71.05 KIS VWAP 30분 압축 타격 타임라인 락온]
+# 🚨 MODIFIED: [V71.13 런타임 붕괴 방어 및 타임라인 전진 배치 수술]
+# 🚨 NEW: [V71.14 예약 덫 무조건 장전 헌법 복구 및 족쇄 철거]
+# 🚨 MODIFIED: [V71.25 KST 타임라인 동적 래핑 수술]
+# 🚨 MODIFIED: [V71.27 런타임 붕괴 수술]
+# 🚨 MODIFIED: [V72.00 줍줍 전면 소각 및 VWAP 10주 제약 LOC 우회 락온]
+# 🚨 MODIFIED: [V72.01 V-REV 1회 예산(15%) 하드 마진 캡(Cap) 락온]
+# 🚨 MODIFIED: [V72.02 제20경고 준수: V-REV 매수 앵커 디커플링 및 하극상 역전 방어 락온]
+# 🚨 MODIFIED: [V72.11 V-REV 지층 융합 맹점 영구 소각 및 100% 독립 LIFO 덫 장전 락온]
+# 🚨 MODIFIED: [V72.13 V-REV 1층 독립 및 상위층 총평단가 연동 엑시트 전술 이식]
+# - 상위층(Upper) 매도 덫 타점(`trigger_upper`) 연산 시, 낡은 상위층 단독 평단가(`upper_avg`) 의존성을 영구 소각.
+# - 큐 장부 SSOT 기반 총 평단가(`avg_price`)를 절대 앵커로 삼아 `avg_price * 1.010` (+1% 수익) 팩트 교정 완료.
+# - 1층은 기존대로 1층 고유 타점(`l1_price * 1.006`)을 유지하여 가벼운 현금흐름 창출 궤도 100% 락온.
+# - UI 렌더링 텍스트를 '1층탈출', '총평단탈출', '통합탈출'로 직관적 팩트 렌더링 미러링 완료.
 # ==========================================================
 import math
 import os
@@ -32,7 +43,6 @@ from zoneinfo import ZoneInfo
 class ReversionStrategy:
     def __init__(self, config):
         self.cfg = config
-        # MODIFIED: [잔차 버킷 파편화 궤적 영구 소각] 1분 단위 슬라이싱용 잔차 버킷 철거 완료
         self.residual = {}
         self.executed = {"BUY_BUDGET": {}, "SELL_QTY": {}}
         self.state_loaded = {}
@@ -80,7 +90,7 @@ class ReversionStrategy:
         state_file = self._get_state_file(ticker)
         data = {
             "date": today_str,
-            "residual": {}, # MODIFIED: 잔차 버킷 소각에 따른 빈 딕셔너리 락온
+            "residual": {},
             "executed": {
                 "BUY_BUDGET": float(self.executed.get("BUY_BUDGET", {}).get(ticker, 0.0)),
                 "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
@@ -106,7 +116,6 @@ class ReversionStrategy:
                     pass
 
     def refund_residual(self, ticker, bucket, refund_value):
-        # MODIFIED: 잔차 버킷 소각에 따라 환불 로직 바이패스 락온
         pass
 
     def save_daily_snapshot(self, ticker, plan_data):
@@ -177,7 +186,6 @@ class ReversionStrategy:
         )
 
     def reset_residual(self, ticker):
-        # MODIFIED: 잔차 버킷 소각에 따라 리셋 로직 바이패스 락온
         pass
 
     def record_execution(self, ticker, side, qty, exec_price):
@@ -195,6 +203,7 @@ class ReversionStrategy:
     def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, vwap_status, min_idx, alloc_cash, q_data, is_snapshot_mode=False, market_type="REG"):
         self._load_state_if_needed(ticker)
 
+        # 🚨 [제20경고 팩트 검증] 큐(Queue) 장부의 순수 평단가 역산. KIS 평단가(actual_avg) 절대 참조 금지.
         valid_q_data = [item for item in q_data if float(item.get('price', 0.0)) > 0]
         total_q = sum(int(item.get("qty", 0)) for item in valid_q_data)
         total_inv = sum(float(item.get('qty', 0)) * float(item.get('price', 0.0)) for item in valid_q_data)
@@ -207,14 +216,13 @@ class ReversionStrategy:
             lots_1 = [item for item in valid_q_data if item.get('date') == dates_in_queue[0]]
             l1_qty = sum(int(item.get('qty', 0)) for item in lots_1)
             l1_price = sum(float(item.get('qty', 0)) * float(item.get('price', 0.0)) for item in lots_1) / l1_qty if l1_qty > 0 else 0.0
-        
+         
         upper_qty = total_q - l1_qty
-        upper_inv = total_inv - (l1_qty * l1_price)
-        upper_avg = upper_inv / upper_qty if upper_qty > 0 else 0.0
 
-        trigger_jackpot = round(avg_price * 1.010, 2)
+        # 🚨 MODIFIED: [V72.13 V-REV 1층 독립 및 상위층 총평단가 연동 엑시트 전술 이식]
+        # 상위층의 엑시트 앵커를 낡은 upper_avg에서 큐 장부의 진성 총 평단가(avg_price)로 교체하고 +1% 잭팟 타점 부여.
         trigger_l1 = round(l1_price * 1.006, 2)
-        trigger_upper = round(upper_avg * 1.005, 2) if upper_qty > 0 else 0.0
+        trigger_upper = round(avg_price * 1.010, 2) if upper_qty > 0 else 0.0
 
         cached_plan = self.load_daily_snapshot(ticker)
         
@@ -235,61 +243,78 @@ class ReversionStrategy:
             p2_trigger = round(prev_c * 0.999, 2)
         else:
             side = "SELL" if curr_p > prev_c else "BUY"
-            p1_trigger = round(prev_c * 0.995, 2)
-            p2_trigger = round(prev_c * 0.9725, 2)
-
-        if total_q > 0:
-            active_sell_targets = [t for t in [trigger_jackpot, trigger_l1, trigger_upper] if t > 0]
-            if active_sell_targets:
-                min_sell = min(active_sell_targets)
-                if p1_trigger >= min_sell:
-                    p1_trigger = max(0.01, round(min_sell - 0.01, 2))
-                if p2_trigger >= min_sell:
-                    p2_trigger = max(0.01, round(min_sell - 0.01, 2))
+            safe_anchor = l1_price if l1_price > 0.0 else prev_c
+            p1_trigger = round(safe_anchor * 0.995, 2)
+            p2_trigger = round(safe_anchor * 0.9725, 2)
 
         orders = []
 
-        # MODIFIED: [KIS VWAP 알고리즘 대통합 수술] 타임 슬라이싱 분할 블록 소각 및 통짜 플랜 락온
         total_spent = float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
-        rem_budget = max(0.0, float(alloc_cash) - total_spent)
+        
+        seed_val = float(self.cfg.get_seed(ticker) or 0.0)
+        daily_limit = seed_val * 0.15
+        
+        safe_alloc_cash = min(float(alloc_cash), daily_limit) if daily_limit > 0 else float(alloc_cash)
+        rem_budget = max(0.0, safe_alloc_cash - total_spent)
         
         if rem_budget > 0:
             b1_budget = rem_budget * 0.5
-            b2_budget = rem_budget - b1_budget
+            b2_budget = rem_budget * 0.5
             
             q1 = math.floor(b1_budget / p1_trigger) if p1_trigger > 0 else 0
             q2 = math.floor(b2_budget / p2_trigger) if p2_trigger > 0 else 0
             
-            if q1 > 0: orders.append({"side": "BUY", "qty": q1, "price": p1_trigger, "type": "VWAP"})
-            if q2 > 0: orders.append({"side": "BUY", "qty": q2, "price": p2_trigger, "type": "VWAP"})
+            est_tz_check = ZoneInfo('America/New_York')
+            is_dst_active = bool(datetime.now(est_tz_check).dst())
+            start_t = "042500" if is_dst_active else "052500"
+            end_t = "045500" if is_dst_active else "055500"
             
-            if total_q > 0:
-                max_n = 5
-                if curr_p > 0:
-                    required_n = math.ceil(b2_budget / curr_p) - q2
-                    if required_n > 5:
-                        max_n = min(required_n, 50)
-                
-                for n in range(1, max_n + 1):
-                    if (q2 + n) > 0:
-                        grid_p2 = round(b2_budget / (q2 + n), 2)
-                        if grid_p2 >= 0.01 and grid_p2 < p2_trigger:
-                            orders.append({"side": "BUY", "qty": 1, "price": grid_p2, "type": "VWAP"})
+            if q1 > 0:
+                ord_type = "VWAP" if q1 >= 10 else "LOC"
+                desc_str = "VWAP매수(Buy1)" if ord_type == "VWAP" else "LOC매수(Buy1)"
+                orders.append({"side": "BUY", "qty": q1, "price": p1_trigger, "type": ord_type, "start_time": start_t if ord_type == "VWAP" else None, "end_time": end_t if ord_type == "VWAP" else None, "desc": desc_str})
+            if q2 > 0:
+                ord_type = "VWAP" if q2 >= 10 else "LOC"
+                desc_str = "VWAP매수(Buy2)" if ord_type == "VWAP" else "LOC매수(Buy2)"
+                orders.append({"side": "BUY", "qty": q2, "price": p2_trigger, "type": ord_type, "start_time": start_t if ord_type == "VWAP" else None, "end_time": end_t if ord_type == "VWAP" else None, "desc": desc_str})
             
         rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
+        
         if rem_qty_total > 0:
-            if curr_p >= trigger_jackpot:
-                orders.append({"side": "SELL", "qty": rem_qty_total, "price": trigger_jackpot, "type": "VWAP"})
-            else:
-                available_l1 = min(l1_qty, rem_qty_total)
-                l1_queued = 0
-                if available_l1 > 0 and curr_p >= trigger_l1:
-                    orders.append({"side": "SELL", "qty": available_l1, "price": trigger_l1, "type": "VWAP"})
-                    l1_queued = available_l1
+            est_tz_check = ZoneInfo('America/New_York')
+            is_dst_active = bool(datetime.now(est_tz_check).dst())
+            start_t = "042500" if is_dst_active else "052500"
+            end_t = "045500" if is_dst_active else "055500"
+            
+            available_l1 = min(l1_qty, rem_qty_total)
+            available_upper = min(upper_qty, rem_qty_total - available_l1)
+            
+            sell_dict = {}
+            if available_l1 > 0 and trigger_l1 > 0:
+                sell_dict[trigger_l1] = sell_dict.get(trigger_l1, 0) + available_l1
+            if available_upper > 0 and trigger_upper > 0:
+                sell_dict[trigger_upper] = sell_dict.get(trigger_upper, 0) + available_upper
+                
+            for price in sorted(sell_dict.keys()):
+                s_qty = sell_dict[price]
+                ord_type = "VWAP" if s_qty >= 10 else "LOC"
+                
+                # 🚨 MODIFIED: [V72.13 UI 미러링 팩트 교정]
+                if price == trigger_l1 and price == trigger_upper:
+                    desc_str = "통합탈출"
+                elif price == trigger_l1:
+                    desc_str = "1층탈출"
+                elif price == trigger_upper:
+                    desc_str = "총평단탈출"
+                else:
+                    desc_str = "잔여탈출"
                     
-                available_upper = min(upper_qty, rem_qty_total - l1_queued)
-                if available_upper > 0 and trigger_upper > 0 and curr_p >= trigger_upper:
-                    orders.append({"side": "SELL", "qty": available_upper, "price": trigger_upper, "type": "VWAP"})
+                orders.append({
+                    "side": "SELL", "qty": s_qty, "price": price, "type": ord_type, 
+                    "start_time": start_t if ord_type == "VWAP" else None, 
+                    "end_time": end_t if ord_type == "VWAP" else None, 
+                    "desc": desc_str
+                })
         
         plan_result = {
             "orders": orders, 
@@ -306,4 +331,3 @@ class ReversionStrategy:
 
         self._save_state(ticker)
         return plan_result
-

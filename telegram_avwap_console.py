@@ -2,44 +2,18 @@
 # FILE: telegram_avwap_console.py
 # ==========================================================
 # 🚨 MODIFIED: [V53.11 시계열 체력 듀얼 대칭 락온] 
-# 숏(SOXS) 진입 시 상승 체력 차단 필터 UI 팩트 교정 및 판별 기준 텍스트 대칭화
 # 🚨 MODIFIED: [V53.09 관제탑 UI 횡보장 킬 스위치 시각적 렌더링 강제 바이패스]
-# MODIFIED: [V47.00 하이킨아시 듀얼 모멘텀 추세 시스템 락온]
-# - 04:00 EST 프리마켓 1분봉 파서 스캔 확장 및 데이터 기아 해체
-# - 하이킨아시 5min 리샘플링 기반 3대 진입 조건(원웨이, 모멘텀, 체력) 락온
-# - 15:00 EST 오버나이트 존버(Hold) 모드 이식 및 투트랙 엑시트 렌더링
-# - 10:00 EST 단판 승부 및 조기퇴근(단일 출장) 셧다운 로직 영구 소각 (무한 스캔 개방)
-# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-# NEW: [V47] 시계열 체력 필터 및 현재가 vs 실시간 VWAP 갭 조건 관제탑 렌더링 100% 통합
-# 🚨 MODIFIED: [관제탑 듀얼 세션 디커플링 (Time-Split Radar)] 
-# 프리마켓(04:00~09:29)과 정규장(09:30~16:00) 데이터를 100% 팩트 분리하여, 정규장 개장 시 프리장 노이즈를 완벽히 소각하고 0점 세팅 락온.
-# 🚨 MODIFIED: [V56.00 상태 기억형(Stateful Latching) 모멘텀 락온 엔진 UI 디커플링 수술]
-# 현재 캔들이 조건에 맞지더라도 영구 락온 상태라면 모멘텀 🟢 점등 유지 및 "음봉이지만 시계열 락온 유지" 직관적 텍스트 렌더링 동기화 완료.
-# 🚨 MODIFIED: [V59.00 AVWAP 암살자 예산 100% 수혈 및 15:25 전량 덤핑 팩트 교정]
-# 관제탑 렌더링 분기점을 15:00에서 15:25로 이동하여 시각적 디커플링 원천 차단
-# 🚨 MODIFIED: [V59.01 AVWAP 관제탑 '목표 익절' 텍스트 영구 소각]
-# 암살자 청산 로직이 15:25 EST 무조건 덤핑으로 대수술됨에 따라, 의미를 상실한 목표 수익률 연산 및 '목표 익절' 렌더링 블록을 시스템에서 100% 적출(소각) 완료.
-# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] 
-# 15:25 전량 덤핑 헌법에 따라 무의미해진 '목표가 익절 대기' 환각 텍스트를 '미체결 잔량 오버나이트 롤오버'로 팩트 교정 완료.
-# 🚨 MODIFIED: [V59.05 잔재 데드코드 영구 소각] 
-# 15:25 단판 승부 헌법에 따라 무의미해진 다중 출장(N회차 교전 완료) 및 무한 출장 렌더링 텍스트를 100% 영구 소각 완료.
 # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
-# 1) SOXS 종목 강제 주입 로직 영구 소각.
-# 2) 인버스 판별, 하락세, 음봉(Bearish) 전용 텍스트 및 상태 메모리 전면 철거.
-# 3) 오직 롱(SOXL) 단일 방향 팩트 시각화 및 조건 판별문 진공 압축 완료.
 # 🚨 NEW: [상대적 체력 연산 30.0% 셧다운 락온 및 UI 디커플링 수술]
-# 기존 절대 진폭 차감을 소각하고, 상대적 잔여 체력 비율(%)을 연산하여 UI 및 Latching 로직에 100% 팩트 동기화.
 # 🚨 NEW: [V65.00 AVWAP 동적 하드스탑 락온]
-# 암살자 상태 및 작전 텍스트에 ATR5 동적 하드스탑 감시 팩트를 다이내믹하게 인젝션하여 시각적 디커플링 해체 완료.
 # 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
-# 관제탑 렌더링 시 하드코딩된 15:25 덤핑 텍스트를 소각하고, 캐시에 저장된 지터 초를 반영한 동적 타임스탬프로 시각적 팩트 교정 완료.
-# NEW: [AVWAP 수동 개입 엣지 케이스 방어] 수동 매도 후 유령 물량을 0주로 강제 동기화하는 관제탑 전용 뷰포트 신설
 # 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결]
-# 텔레그램 관제탑이 자체 캐시로 하이킨아시 락온을 연산하던 레거시 로직 영구 소각.
-# 코어 엔진의 상태 파일(JSON)을 SSOT로 삼아 100% 팩트 미러링하도록 아키텍처 수술 완료.
-# 🚨 MODIFIED: [V71.02 관제탑 V-Turn 팩트 동기화(UI 디커플링 해체) 수술]
-# 코어 엔진에 이식된 V-Turn Intercept(찐바닥 예외 허용) 조건을 관제탑에도 100% 팩트 이식.
-# 진폭 50% 돌파 및 당일 미드포인트 회복 감지 시 '하락세' 텍스트를 'V자 반등(찐바닥 포착)'으로 동적 오버라이드.
+# 🚨 NEW: [3-Stage Apex Intercept (정점 요격) 전술 상태 렌더링 이식]
+# - JSON에서 추출한 APEX 팩트 상태를 기반으로 1, 2, 3단계 직관적 텍스트를 오버라이드하여 시각적 디커플링 완벽 해체.
+# 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 UI 연동]
+# - 관제탑 뷰포트 스캔 시 config의 스위치 상태를 실시간 참조하도록 팩트 결속
+# - 스위치 OFF 시 정점요격 렌더링 텍스트를 비활성 (수동 OFF 및 지터 덤핑 전용) 상태로 강제 오버라이드하여 시각적 환각 원천 차단
+# - get_decision 섀도 연산부 is_apex_on 파라미터 수혈 락온
 # ==========================================================
 import logging
 import datetime
@@ -63,7 +37,6 @@ class AvwapConsolePlugin:
         now_est = datetime.datetime.now(est)
         curr_time = now_est.time()
         
-        # 🚨 [Time-Split Radar] 세션 분리 스위치 락온
         time_0930 = datetime.time(9, 30)
         is_regular_session = curr_time >= time_0930
         
@@ -75,13 +48,11 @@ class AvwapConsolePlugin:
             hl_label = "정규장"
         
         active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
-        
-        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] SOXS 강제 주입 로직 영구 철거
         avwap_tickers = [t for t in active_tickers if t == "SOXL"]
             
         if not avwap_tickers:
             return "⚠️ <b>[AVWAP 암살자 오프라인]</b>\n▫️ AVWAP 지원 종목이 없습니다.", None
-         
+           
         active_avwap = avwap_tickers
         tracking_cache = app_data.get('sniper_tracking', {})
         
@@ -122,8 +93,7 @@ class AvwapConsolePlugin:
              
             if df_1m is not None and not df_1m.empty:
                 df = df_1m.copy()
-                 
-                # 🚨 [Time-Split Radar] 세션에 따른 데이터 슬라이싱 (노이즈 소각)
+                   
                 if 'time_est' in df.columns:
                     if is_regular_session:
                         df = df[(df['time_est'] >= '093000') & (df['time_est'] <= '155900')]
@@ -131,7 +101,6 @@ class AvwapConsolePlugin:
                         df = df[(df['time_est'] >= '040000') & (df['time_est'] <= '092959')]
                  
                 if not df.empty:
-                    # 세션별 순수 고/저가 스캔
                     base_day_high = float(df['high'].astype(float).max())
                     base_day_low = float(df['low'].astype(float).min())
                     base_reg_high = base_day_high
@@ -140,7 +109,7 @@ class AvwapConsolePlugin:
                     df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
                     df['vol'] = df['volume'].astype(float)
                     df['vol_tp'] = df['tp'] * df['vol']
-                    
+                     
                     cum_vol = df['vol'].sum()
                     if cum_vol > 0:
                         base_curr_vwap = df['vol_tp'].sum() / cum_vol
@@ -149,7 +118,7 @@ class AvwapConsolePlugin:
           
                     if base_curr_p == 0.0:
                         base_curr_p = float(df['close'].iloc[-1])
-                    
+                     
                     recent_5 = df.tail(5)
                     sum_vol_5 = recent_5['vol'].sum()
                     if sum_vol_5 > 0:
@@ -157,7 +126,6 @@ class AvwapConsolePlugin:
                     else:
                         avg_vwap_5m = base_curr_vwap
 
-                    # 🚨 [Time-Split Radar] 세션별 시계열 에너지 방향성 즉석 판독
                     t_high_idx = df['high'].astype(float).idxmax()
                     t_low_idx = df['low'].astype(float).idxmin()
                     if t_high_idx < t_low_idx:
@@ -165,7 +133,6 @@ class AvwapConsolePlugin:
                     elif t_low_idx < t_high_idx:
                         trend_sequence = "BULL"
 
-                    # 🚨 [Time-Split Radar] 하이킨아시 5min 리샘플링 및 예외 락온
                     try:
                         if is_regular_session and curr_time < datetime.time(9, 35):
                             ha_status_text = "⏳ 캔들 형성 대기 중"
@@ -186,12 +153,10 @@ class AvwapConsolePlugin:
                                         ha_open.append((float(df_5m['open'].iloc[i]) + float(df_5m['close'].iloc[i])) / 2.0)
                                     else:
                                         ha_open.append((ha_open[i-1] + float(df_5m['HA_Close'].iloc[i-1])) / 2.0)
-                                
+                                     
                                 df_5m['HA_Open'] = pd.Series(ha_open, index=df_5m.index)
                                 df_5m['HA_High'] = df_5m[['high', 'HA_Open', 'HA_Close']].max(axis=1)
                                 df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
-                                
-                                # 0.01$ 갭 필터링
                                 df_5m['No_Lower_Wick'] = (df_5m['HA_Open'] - df_5m['HA_Low']) <= 0.01
                                 df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
 
@@ -253,8 +218,13 @@ class AvwapConsolePlugin:
                         tracking_cache[f"AVWAP_AVG_{t}"] = saved_state.get('avg_price', 0.0)
                         tracking_cache[f"AVWAP_STRIKES_{t}"] = saved_state.get('strikes', 0)
                         tracking_cache[f"HA_LATCHED_BULL_{t}"] = saved_state.get('HA_LATCHED_BULL', False)
-                        # NEW: [V66.00 AVWAP 덤핑 지터 분산 타격 락온] 지터 캐시 로드
                         tracking_cache[f"AVWAP_DUMP_JITTER_{t}"] = saved_state.get('dump_jitter_sec', 0)
+                        
+                        # NEW: [3-Stage Apex Intercept 상태 팩트 캐싱]
+                        tracking_cache[f"APEX_STAGE_1_{t}"] = saved_state.get('APEX_STAGE_1', False)
+                        tracking_cache[f"APEX_STAGE_2_{t}"] = saved_state.get('APEX_STAGE_2', False)
+                        tracking_cache[f"APEX_PEAK_PRICE_{t}"] = saved_state.get('APEX_PEAK_PRICE', 0.0)
+                        
                         tracking_cache[f"AVWAP_INIT_{t}"] = True
                 except Exception as e:
                     logging.error(f"🚨 AVWAP 관제탑 상태 자가 복구 실패 ({t}): {e}")
@@ -262,7 +232,9 @@ class AvwapConsolePlugin:
             is_avwap_active = await asyncio.to_thread(getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False), t)
             active_str = "🟢 가동 중" if is_avwap_active else "⚪ 대기 중 (OFF)"
             
-            # 🚨 [Time-Split Radar] 타겟 티커의 세션별 순수 고/저가 스캔 락온
+            # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 상태 스캔]
+            is_apex_on = await asyncio.to_thread(getattr(self.cfg, 'get_avwap_apex_mode', lambda x: True), t)
+            
             curr_p, day_high, day_low = 0.0, 0.0, 0.0
             try:
                 prev_c = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, t), timeout=2.0)
@@ -296,7 +268,6 @@ class AvwapConsolePlugin:
             strikes = tracking_cache.get(f"AVWAP_STRIKES_{t}", 0)
             is_shutdown = tracking_cache.get(f"AVWAP_SHUTDOWN_{t}", False)
             
-            # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각] 롱 하드코딩 및 라벨 압축
             label = "롱"
             msg += f"\n🎯 <b>[ {t} ({label}) 작전반 - {active_str} ]</b>\n"
 
@@ -306,14 +277,13 @@ class AvwapConsolePlugin:
             cond1_met, cond2_met, cond3_met = False, False, False
             cond_seq = True
             
-            # 🚨 NEW: [상대적 체력 연산 30.0% 셧다운 락온 및 UI 디커플링 수술]
             rem_relative_pct = 0.0
             actual_gap_pct = 0.0
 
             if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
                 is_neg_gap_state = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
                 cond1_met = not is_neg_gap_state
-                    
+                
             if prev_c > 0 and day_high > 0 and day_low > 0:
                 actual_gap_dollar = day_high - day_low
                 actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0
@@ -321,23 +291,24 @@ class AvwapConsolePlugin:
                     rem_relative_pct = ((atr5 - actual_gap_pct) / atr5 * 100.0) if atr5 > 0 else 0.0
                     cond3_met = (rem_relative_pct >= 30.0)
                     
-            # 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결] 
-            # 독자적 모멘텀 판독 기능 영구 소각, JSON 파일의 HA_LATCHED_BULL 팩트만을 참조 (SSOT 단일화)
             try:
                 _saved_state = await asyncio.to_thread(self.strategy.v_avwap_plugin.load_state, t, now_est)
                 ha_latched_bull = _saved_state.get('HA_LATCHED_BULL', False)
                 tracking_cache[f"HA_LATCHED_BULL_{t}"] = ha_latched_bull
+                
+                # NEW: [3-Stage Apex Intercept 상태 팩트 캐싱]
+                tracking_cache[f"APEX_STAGE_1_{t}"] = _saved_state.get('APEX_STAGE_1', False)
+                tracking_cache[f"APEX_STAGE_2_{t}"] = _saved_state.get('APEX_STAGE_2', False)
+                tracking_cache[f"APEX_PEAK_PRICE_{t}"] = _saved_state.get('APEX_PEAK_PRICE', 0.0)
             except Exception as e:
-                logging.error(f"🚨 관제탑 HA_LATCHED_BULL 팩트 로드 에러: {e}")
+                logging.error(f"🚨 관제탑 상태 로드 에러: {e}")
                 ha_latched_bull = tracking_cache.get(f"HA_LATCHED_BULL_{t}", False)
 
             if base_curr_p > 0 and base_curr_vwap > 0:
                 cond2_met = (base_curr_p > base_curr_vwap) and ha_latched_bull
                 if cond2_met and not ha_2_bullish_no_lower:
-                     # 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결] JSON 상태와 100% 일치 렌더링
                      ha_status_text = f"{ha_status_text}이지만 시계열 락온 유지"
 
-            # 🚨 MODIFIED: [V71.02 관제탑 V-Turn 팩트 동기화(UI 디커플링 해체) 수술]
             seq_text = "상승/대기"
             if trend_sequence == "BEAR":
                 cond_seq = False
@@ -355,7 +326,6 @@ class AvwapConsolePlugin:
             c3_str = "🟢" if cond3_met else "🔴"
             c_seq_str = "🟢" if cond_seq else "🔴"
 
-            # 🚨 MODIFIED: [상대적 체력 연산 30.0% 셧다운 락온] 판별 기준 텍스트 압축 완료
             criteria = "H/L방향(+) &amp; 시계열상승 &amp; HA모멘텀(현재가&gt;VWAP) &amp; 상대체력(&gt;=30%)"
 
             if base_curr_p > 0 and base_curr_vwap > 0 and prev_c > 0 and atr5 > 0:
@@ -365,34 +335,39 @@ class AvwapConsolePlugin:
                 else:
                     trend_str = "🔴 <b>조건 미달 (실시간 추세 돌파 감시)</b>"
             else:
-                trend_str = "⚠️ 데이터 수집 대기 중"
+                 trend_str = "⚠️ 데이터 수집 대기 중"
 
             msg += f"▫️ 판별 기준: <code>{criteria}</code>\n"
             msg += f"▫️ <b>[ 하이킨아시 듀얼 모멘텀 조건 ]</b>\n"
             msg += f"   {c1_str} 고저가 방향 원웨이 일치\n"
-            
-            # 🚨 MODIFIED: [V71.02 관제탑 V-Turn 팩트 동기화(UI 디커플링 해체) 수술]
             msg += f"   {c_seq_str} 시계열 체력 통과 ({seq_text})\n"
-            
             msg += f"   {c2_str} HA 모멘텀 일치 (현재 5T: {ha_status_text})\n"
-            # 🚨 MODIFIED: [상대적 체력 연산 30.0% 셧다운 락온] 잔여 체력 브리핑 텍스트 팩트 수술
             msg += f"   {c3_str} 상대 잔여 체력 30% 이상 (현재: {rem_relative_pct:.1f}%)\n"
             msg += f"▫️ 타격 상태: {trend_str}\n"
 
-            # 🚨 MODIFIED: [V66.00 AVWAP 지터 분산 타격 락온] 동적 덤핑 시간 연산
+            # 🚨 MODIFIED: [V72.16 스위치 OFF 시 정점요격 렌더링 텍스트 강제 오버라이드]
+            if not is_apex_on:
+                apex_status_txt = "⚪ 비활성 (수동 OFF 및 지터 덤핑 전용)"
+            else:
+                apex_s1 = tracking_cache.get(f"APEX_STAGE_1_{t}", False)
+                apex_s2 = tracking_cache.get(f"APEX_STAGE_2_{t}", False)
+                
+                apex_status_txt = "⚪ 비활성 (조건 미달)"
+                if apex_s2: apex_status_txt = "🎯 [2단계] 투매 감지 (최종 격발 대기)"
+                elif apex_s1: apex_status_txt = "🎯 [1단계] 고점 돌파 (방아쇠 장전 중)"
+                
+            msg += f"▫️ 정점 요격(Apex Intercept): <b>{apex_status_txt}</b>\n"
+
             dump_jitter_sec = tracking_cache.get(f"AVWAP_DUMP_JITTER_{t}", 0)
-            base_dump_dt = datetime.datetime.combine(now_est.date(), datetime.time(15, 25)).replace(tzinfo=ZoneInfo('America/New_York'))
+            base_dump_dt = datetime.datetime.combine(now_est.date(), datetime.time(15, 20)).replace(tzinfo=ZoneInfo('America/New_York'))
             dynamic_dump_dt = base_dump_dt - datetime.timedelta(seconds=dump_jitter_sec)
             dynamic_dump_str = dynamic_dump_dt.strftime("%H:%M:%S")
 
-            # NEW: [V66.00 AVWAP 동적 하드스탑 락온 및 지터 분산 타격] 작전 브리핑 텍스트 팩트 교정
             strike_icon_txt = f"당일 단판 승부 ({dynamic_dump_str} 덤핑 & ATR5 하드스탑 락온)"
             msg += f"▫️ 작전: <b>{strike_icon_txt}</b>\n"
-
             msg += f"▫️ 독립 물량: {avwap_qty}주\n"
 
             exh_5 = 0.0
-
             if atr5 > 0 and prev_c > 0 and day_low > 0:
                 high_pct = ((day_high - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
                 low_pct = ((day_low - prev_c) / prev_c) * 100 if prev_c > 0 else 0.0
@@ -406,7 +381,6 @@ class AvwapConsolePlugin:
             
                 exh_5 = (high_rebound_pct / atr5 * 100) if atr5 > 0 else 0
                  
-                # 🚨 MODIFIED: [상대적 체력 연산 30.0% 셧다운 락온] 배터리 UI 텍스트 팩트 수술
                 rem_relative_battery = 100.0 - exh_5
                 rem_relative_str = f"상대 체력 {rem_relative_battery:.1f}% 잔여" if rem_relative_battery >= 0 else "체력 완전 고갈 (오버슈팅)"
 
@@ -429,30 +403,25 @@ class AvwapConsolePlugin:
                   
                 msg += f"🔋 <b>단기 체력 (ATR5 예상진폭: {atr5:.2f}%)</b>\n"
                 msg += f"▫️ 잔여 체력: <b>{rem_relative_str}</b>\n"
-                # 🚨 MODIFIED: [상대적 체력 연산 30.0% 셧다운 락온] 배터리 바 [100%] 팩트 수술
                 msg += f"   [0%] {make_bar(exh_5)} [100%]\n"
                 msg += f"               <b>({exh_5:.0f}% 소진 / 고가 기준)</b>\n"
 
             curr_time = now_est.time()
-            # 🚨 MODIFIED: [V66.00 AVWAP 동적 지터 분산 타격 락온] 타임 쉴드 전진 배치 변수 소각 및 동적 덤핑 타임 적용
             time_dynamic_dump = dynamic_dump_dt.time()
             
             status_txt = "👀 타점 스캔중"
             if not is_avwap_active:
                 status_txt = "⚪ 모드 비활성 (레이더 관측 중)"
             elif is_shutdown: 
-                # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] 15:25 전량 덤핑 후 물리적 잔량 발생 시 팩트 기반 렌더링으로 진공 압축
                 if avwap_qty > 0:
-                     status_txt = "🌙 미체결 잔량 오버나이트 롤오버"
+                    status_txt = "🌙 미체결 잔량 오버나이트 롤오버"
                 else:
                     status_txt = "🛑 당일 영구동결 (SHUTDOWN)"
             elif avwap_qty > 0: 
-                # NEW: [V66.00 AVWAP 동적 하드스탑 및 지터 분산 락온] 상태 텍스트 팩트 교정
                 status_txt = f"🎯 딥매수 완료 ({dynamic_dump_str} 덤핑 & ATR5 하드스탑 감시 중)"
             else:
                 try:
                     avwap_state_dict = {"strikes": strikes}
-                    
                     decision = self.strategy.v_avwap_plugin.get_decision(
                         base_ticker=base_tkr,
                         exec_ticker=t,
@@ -472,7 +441,8 @@ class AvwapConsolePlugin:
                         day_low=day_low,
                         atr5=atr5,
                         base_day_high=base_day_high,
-                        base_day_low=base_day_low
+                        base_day_low=base_day_low,
+                        is_apex_on=is_apex_on # 🚨 NEW: 섀도 연산부 is_apex_on 파라미터 수혈 락온
                     )
 
                     action = decision.get('action')
@@ -489,7 +459,6 @@ class AvwapConsolePlugin:
 
             msg += f"▫️ 상태: <b>{status_txt}</b>\n"
             
-            # NEW: [AVWAP 수동 개입 엣지 케이스 방어] 수동 매도 후 유령 물량을 0주로 강제 동기화하는 관제탑 전용 뷰포트 신설
             if avwap_qty > 0:
                 keyboard.append([InlineKeyboardButton(f"🧯 {t} 암살자 수동 청산 (0주 락온)", callback_data=f"AVWAP_SET:SYNC_ZERO:{t}")])
 

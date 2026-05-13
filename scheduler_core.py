@@ -9,6 +9,10 @@
 # NEW: [전역 타임아웃 이식] scheduled_force_reset 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
 # 🚨 NEW: [달력 API 결측 연쇄 기절 방어] is_market_open 평일 강제 개장(Fail-Open) 락온 이식 완료.
 # 🚨 MODIFIED: [V-REV SSOT 팩트 교정] scheduled_force_reset 내 낡은 is_active 의존성 영구 소각 및 version 락온.
+# 🚨 MODIFIED: [V72.01 V-REV 예산 뻥튀기(Double Spending) 맹점 100% 소각]
+# - 기존 spent를 파일 I/O로 파싱하여 이중 차감하고 free_cash를 더하던 데드코드를 영구 적출.
+# - 코어 엔진 내부에서 자체 잔차를 연산하므로, 오직 순수 1회 예산(15%)만 주입하여
+#   0.5회분씩 2건의 지정가 VWAP 주문이 정확히 분할 타격되도록 락온.
 # ==========================================================
 import os
 import logging
@@ -75,27 +79,11 @@ def get_budget_allocation(cash, tickers, cfg):
         
         if version == "V_REV":
             rev_daily_budget = float(cfg.get_seed(tx) or 0.0) * 0.15
-            spent = 0.0
-            try:
-                est = ZoneInfo('America/New_York')
-                _now_est = datetime.datetime.now(est)
-                
-                # MODIFIED: [04:05 EST 논리적 날짜 경계선 붕괴 방어] 04:04:59 조기 격발 오염 방지를 위해 4분으로 축소 교정
-                if _now_est.hour < 4 or (_now_est.hour == 4 and _now_est.minute < 4):
-                    _logical_date = _now_est - datetime.timedelta(days=1)
-                else:
-                    _logical_date = _now_est
-            
-                _logical_date_str = _logical_date.strftime('%Y-%m-%d')
-                state_file = f"data/vwap_state_REV_{_logical_date_str}_{tx}.json"
-                if os.path.exists(state_file):
-                    with open(state_file, 'r', encoding='utf-8') as f:
-                        v_state = json.load(f)
-                        spent = float(v_state.get("executed", {}).get("BUY_BUDGET", 0.0))
-            except Exception:
-                pass
-            rem_budget = max(0.0, rev_daily_budget - spent)
-            allocated[tx] = rem_budget + free_cash
+            # 🚨 MODIFIED: [V72.01 V-REV 예산 뻥튀기(Double Spending) 맹점 100% 소각]
+            # 기존 spent를 파일 I/O로 파싱하여 이중 차감하고 free_cash를 더하던 데드코드를 영구 적출.
+            # 코어 엔진 내부에서 자체 잔차를 연산하므로, 오직 순수 1회 예산(15%)만 주입하여
+            # 0.5회분씩 2건의 지정가 VWAP 주문이 정확히 분할 타격되도록 락온.
+            allocated[tx] = rev_daily_budget
         else:
             other_locked = dynamic_total_locked
             if is_rev:

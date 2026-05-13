@@ -2,14 +2,16 @@
 # FILE: config.py
 # ==========================================================
 # MODIFIED: [V54.01] VWAP 데이터 통합 롤백 완료
-# 🚨 MODIFIED: [V54.02] IndentationError 런타임 즉사 버그 완벽 수술 (들여쓰기 팩트 교정)
-# 🚨 MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
+# MODIFIED: [V54.02] IndentationError 런타임 즉사 버그 완벽 수술 (들여쓰기 팩트 교정)
+# MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
 # 다중 스레드(asyncio.to_thread) 환경에서 발생하는 JSON I/O 경합 조건(Race Condition) 
 # 및 스플릿 브레인(Split-Brain) 맹점을 원천 차단하기 위해 전역 RLock 탑재 및 모든 상태 변이(Setter) 함수에 락온 이식 완료.
-# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각]
+# MODIFIED: [V59.02 잔재 데드코드 영구 소각]
 # 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 목표 수익률 및 다중 출장 모드 설정 I/O 파이프라인 100% 소각 완료.
-# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
 # VWAP_PROFILES 딕셔너리 내 SOXS 30분 압축 프로파일 영구 소각 및 get_active_tickers 반환 팩트 교정 완료.
+# NEW: [V72.16 AVWAP 정점요격 스위치 탑재]
+# 정점요격(Apex Intercept) 가동 상태를 영속화하기 위한 파일 맵핑 및 뮤텍스 기반 락온 스위치 제어 메서드 이식 완료.
 # ==========================================================
 
 import json
@@ -72,7 +74,9 @@ class ConfigManager:
             "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
             "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
             "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",       
-            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json"        
+            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json",
+            # NEW: [V72.16 AVWAP 정점요격 스위치 탑재] 파일 맵핑 신설
+            "APEX_MODE_CFG": "data/avwap_apex_mode.json"
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -85,7 +89,7 @@ class ConfigManager:
         
         self._escrow_cache = {}
         self._locks_mutex = threading.Lock()
-        # NEW: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
+        # MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
         # 설정 파일 및 장부에 대한 다중 스레드 I/O 경합 조건(Race Condition)을 원천 차단합니다.
         self._io_lock = threading.RLock()
 
@@ -135,12 +139,12 @@ class ConfigManager:
             dir_name = os.path.dirname(filename) or '.'
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name, exist_ok=True)
-                 
+                
             fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 fd = None
                 json.dump(data, f, ensure_ascii=False, indent=2)
-                f.flush()       
+                f.flush()  
                 os.fsync(f.fileno()) 
                 
             os.replace(temp_path, filename)
@@ -371,7 +375,7 @@ class ConfigManager:
                     new_row["desc"] = rec["desc"]
                     
                 updated_ticker_recs.append(new_row)
-                
+                 
             remaining.extend(updated_ticker_recs)
             self._save_json(self.FILES["LEDGER"], remaining)
 
@@ -450,7 +454,7 @@ class ConfigManager:
                         if abs(r['price'] - actual_sell_price) >= 0.01:
                             r['price'] = actual_sell_price
                             changed_count += 1
-                            
+                             
             if changed_count > 0:
                 self._save_json(self.FILES["LEDGER"], ledger)
             
@@ -561,8 +565,8 @@ class ConfigManager:
                     if holdings > 0:
                         avg_price = total_invested / holdings
                         total_invested -= (qty * avg_price)
-                    holdings -= qty
-                    rem_cash += amt
+                holdings -= qty
+                rem_cash += amt
                     
         avg_price = total_invested / holdings if holdings > 0 else 0.0
         t_val = (holdings * avg_price) / base_portion if base_portion > 0 else 0.0
@@ -733,7 +737,7 @@ class ConfigManager:
 
     def get_avwap_hybrid_mode(self, ticker): 
         return self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {}).get(ticker, False)
-        
+    
     def set_avwap_hybrid_mode(self, ticker, v):
         with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
             d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
@@ -775,6 +779,16 @@ class ConfigManager:
             d = self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["SNIPER_SELL_LOCKED"], d)
+
+    # NEW: [V72.16 AVWAP 정점요격 스위치 탑재] 정점요격 가동 상태 영속화 입출력
+    def get_avwap_apex_mode(self, ticker): 
+        return self._load_json(self.FILES["APEX_MODE_CFG"], {}).get(ticker, True)
+        
+    def set_avwap_apex_mode(self, ticker, v):
+        with self._io_lock:
+            d = self._load_json(self.FILES["APEX_MODE_CFG"], {})
+            d[ticker] = bool(v)
+            self._save_json(self.FILES["APEX_MODE_CFG"], d)
 
     def get_secret_mode(self): 
         return self._load_file(self.FILES["SECRET_MODE"]) == 'True'
