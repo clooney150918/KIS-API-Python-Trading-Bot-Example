@@ -13,6 +13,9 @@
 # 🚨 MODIFIED: [V71.14 지정가 VWAP 일반주문(Regular Order) 100% 팩트 락온]
 # - KIS 명세에 따라 VWAP(36)은 일반주문 API(TTTT1002U)로만 전송되어야 하므로, 
 #   예약주문 API로 쏘아 Reject 당하던 하극상 맹점을 원천 차단하고 분기 라우팅을 100% 역배선 완료.
+# 🚨 NEW: [V73.00 본진 통합 지시서 덫 장전 디커플링 및 자전거래 원천 차단]
+# - 17:05 KST 스케줄을 실제 주문 전송 없이 스냅샷만 박제하고 모의 장전 메시지를 렌더링하는 전용 코루틴(scheduled_snapshot_only)으로 분할 캡슐화.
+# - 15:26 EST 기상하여 박제된 스냅샷을 로드 후 실원장에 투하하는 실전 장전 코루틴(scheduled_regular_trade_delayed) 신설 락온.
 # ==========================================================
 import logging
 import datetime
@@ -22,7 +25,8 @@ import random
 
 from scheduler_core import is_market_open, get_budget_allocation
 
-async def scheduled_regular_trade(context):
+# 🚨 [V73.00 디커플링 락온] 정규장 스냅샷 박제 전용 코루틴
+async def scheduled_snapshot_only(context):
     try:
         is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
     except asyncio.TimeoutError:
@@ -37,34 +41,29 @@ async def scheduled_regular_trade(context):
     cfg, broker, strategy, tx_lock = app_data['cfg'], app_data['broker'], app_data['strategy'], app_data['tx_lock']
     
     if tx_lock is None:
-        logging.warning("⚠️ [regular_trade] tx_lock 미초기화. 이번 사이클 스킵.")
-        await context.bot.send_message(chat_id=context.job.chat_id, text="⚠️ <b>[시스템 경고]</b> tx_lock 미초기화로 정규장 주문을 1회 스킵합니다.", parse_mode='HTML')
+        logging.warning("⚠️ [snapshot_only] tx_lock 미초기화. 이번 사이클 스킵.")
+        await context.bot.send_message(chat_id=context.job.chat_id, text="⚠️ <b>[시스템 경고]</b> tx_lock 미초기화로 스냅샷 박제를 1회 스킵합니다.", parse_mode='HTML')
         return
-    
-    jitter_seconds = random.randint(0, 180)
 
     await context.bot.send_message(
         chat_id=context.job.chat_id, 
-        text=f"🌃 <b>[04:05 EST] 통합 주문 장전 및 스냅샷 박제!</b>\n"
-             f"🛡️ 서버 접속 부하 방지를 위해 <b>{jitter_seconds}초</b> 대기 후 안전하게 주문 전송을 시도합니다.", 
+        text=f"🌃 <b>[17:05 KST] 본진 덫 모의 장전 및 스냅샷 박제!</b>\n"
+             f"🛡️ 자전거래 방어를 위해 실제 KIS 서버 전송은 <b>15:26 EST</b>에 지연 집행됩니다.", 
         parse_mode='HTML'
     )
 
-    await asyncio.sleep(jitter_seconds)
+    MAX_RETRIES = 5
+    RETRY_DELAY = 10
 
-    MAX_RETRIES = 15
-    RETRY_DELAY = 60
-
-    async def _do_regular_trade():
+    async def _do_snapshot():
         est = ZoneInfo('America/New_York')
         _now_est = datetime.datetime.now(est)
-        today_str_est = _now_est.strftime("%Y-%m-%d")
         
         async with tx_lock:
             try:
                 cash, holdings = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=10.0)
             except asyncio.TimeoutError:
-                logging.warning("⚠️ [regular_trade] 잔고 조회 타임아웃 (10초).")
+                logging.warning("⚠️ [snapshot_only] 잔고 조회 타임아웃 (10초).")
                 return False, "잔고 조회 타임아웃"
             except Exception as e:
                 return False, f"잔고 조회 오류: {e}"
@@ -79,14 +78,13 @@ async def scheduled_regular_trade(context):
             
             plans = {}
             msgs = {t: "" for t in sorted_tickers}
-            all_success_map = {t: True for t in sorted_tickers}
 
             for t in sorted_tickers:
                 is_locked = await asyncio.to_thread(cfg.check_lock, t, "REG")
                 if is_locked:
                     skip_msg = (
-                        f"⚠️ <b>[{t}] REG 잠금 미해제 — 주문 스킵</b>\n"
-                        f"▫️ 전날 REG 잠금이 자정 초기화 시 해제되지 않아 오늘 04:05 EST 주문 루프에서 제외되었습니다.\n"
+                        f"⚠️ <b>[{t}] REG 잠금 미해제 — 모의 장전 스킵</b>\n"
+                        f"▫️ 전날 REG 잠금이 자정 초기화 시 해제되지 않아 오늘 17:05 KST 스냅샷 루프에서 제외되었습니다.\n"
                         f"▫️ 수동으로 잠금 해제 후 상태를 확인하십시오."
                     )
                     await context.bot.send_message(context.job.chat_id, skip_msg, parse_mode='HTML')
@@ -127,7 +125,7 @@ async def scheduled_regular_trade(context):
                 except Exception:
                     ma_5day = 0.0
                 
-                # 🚨 MODIFIED: [KIS VWAP 알고리즘 대통합] V-REV 및 VWAP 수동/우회 처리 전면 소각 및 단일 통짜 플랜 로드 락온
+                # 🚨 팩트: is_snapshot_mode=True 로 호출하여 파일 기록
                 plan = await asyncio.to_thread(
                     strategy.get_plan,
                     t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True
@@ -136,10 +134,128 @@ async def scheduled_regular_trade(context):
                 plans[t] = plan
                 if plan.get('core_orders', []) or plan.get('orders', []):
                     is_rev = plan.get('is_reverse', False)
-                    msgs[t] += f"🔄 <b>[{t}] 리버스(VWAP) 예약 덫 장전 완료</b>\n" if is_rev else f"💎 <b>[{t}] 정규장(LOC/VWAP) 덫 장전 완료</b>\n"
+                    msgs[t] += f"🔄 <b>[{t}] 리버스(VWAP) 예방적 덫 모의 장전 완료</b>\n" if is_rev else f"💎 <b>[{t}] 정규장(LOC/VWAP) 덫 모의 장전 완료</b>\n"
+
+            for t in sorted_tickers:
+                if t not in plans: continue
+                target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
+                for o in target_orders:
+                    msgs[t] += f"└ 모의 1차 필수: {o['desc']} {o['qty']}주 (${o['price']})\n"
+                
+                target_bonus = plans[t].get('bonus_orders', [])
+                for o in target_bonus:
+                    msgs[t] += f"└ 모의 2차 보너스: {o['desc']} {o['qty']}주 (${o['price']})\n"
+                
+                if target_orders or target_bonus:
+                    msgs[t] += "\n📸 <b>당일 스냅샷 팩트 박제 완료 (15:26 EST KIS 투하 대기)</b>"
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=msgs[t], parse_mode='HTML')
+
+        return True, "SUCCESS"
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            success, fail_reason = await asyncio.wait_for(_do_snapshot(), timeout=300.0)
+            if success:
+                if attempt > 1:
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 모의 장전을 완수했습니다!</b>", parse_mode='HTML')
+                return 
+        except Exception as e:
+            logging.error(f"스냅샷 덫 모의 장전 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
+            if attempt == 1:
+                await context.bot.send_message(
+                    chat_id=context.job.chat_id, 
+                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 모의 장전을 재시도합니다! 🛡️\n<code>사유: {type(e).__name__}: {e}</code>", 
+                    parse_mode='HTML'
+                )
+        else:
+            logging.warning(f"스냅샷 모의 장전 조건 미충족 ({attempt}/{MAX_RETRIES}): {fail_reason}")
+            if attempt == 1:
+                 await context.bot.send_message(
+                    chat_id=context.job.chat_id, 
+                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 모의 장전을 재시도합니다! 🛡️\n<code>사유: {fail_reason}</code>", 
+                    parse_mode='HTML'
+                 )
+
+        if attempt < MAX_RETRIES:
+            if attempt != 1 and attempt % 5 == 0:
+                await context.bot.send_message(chat_id=context.job.chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️", parse_mode='HTML')
+            await asyncio.sleep(RETRY_DELAY)
+
+    await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급 에러] 스냅샷 모의 장전 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')
+
+
+# 🚨 [V73.00 제13경고 준수] 15:26 EST 본진 덫 실전 장전 코루틴 (자전거래 원천 차단)
+async def scheduled_regular_trade_delayed(context):
+    try:
+        is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+    except asyncio.TimeoutError:
+        logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
+        est = ZoneInfo('America/New_York')
+        is_open = datetime.datetime.now(est).weekday() < 5
+
+    if not is_open:
+        return
+    
+    app_data = context.job.data
+    cfg, broker, strategy, tx_lock = app_data['cfg'], app_data['broker'], app_data['strategy'], app_data['tx_lock']
+    
+    if tx_lock is None:
+        logging.warning("⚠️ [delayed_trade] tx_lock 미초기화. 이번 사이클 스킵.")
+        await context.bot.send_message(chat_id=context.job.chat_id, text="⚠️ <b>[시스템 경고]</b> tx_lock 미초기화로 지연 덫 장전을 1회 스킵합니다.", parse_mode='HTML')
+        return
+    
+    jitter_seconds = random.randint(0, 180)
+
+    await context.bot.send_message(
+        chat_id=context.job.chat_id, 
+        text=f"🌃 <b>[15:26 EST] 본진 덫 KIS 실원장 투하 개시!</b>\n"
+             f"🛡️ 서버 접속 부하 방지를 위해 <b>{jitter_seconds}초</b> 대기 후 안전하게 주문 전송을 시도합니다.", 
+        parse_mode='HTML'
+    )
+
+    await asyncio.sleep(jitter_seconds)
+
+    MAX_RETRIES = 15
+    RETRY_DELAY = 60
+
+    async def _do_delayed_trade():
+        async with tx_lock:
+            active_tickers_list = await asyncio.to_thread(cfg.get_active_tickers)
+            
+            plans = {}
+            msgs = {t: "" for t in active_tickers_list}
+            all_success_map = {t: True for t in active_tickers_list}
+
+            for t in active_tickers_list:
+                is_locked = await asyncio.to_thread(cfg.check_lock, t, "REG")
+                if is_locked:
+                    skip_msg = (
+                        f"⚠️ <b>[{t}] REG 잠금 미해제 — 지연 주문 스킵</b>\n"
+                        f"▫️ 전날 REG 잠금이 자정 초기화 시 해제되지 않아 오늘 15:26 EST 주문 루프에서 제외되었습니다.\n"
+                        f"▫️ 수동으로 잠금 해제 후 상태를 확인하십시오."
+                    )
+                    await context.bot.send_message(context.job.chat_id, skip_msg, parse_mode='HTML')
+                    continue
+                
+                # 🚨 팩트: is_snapshot_mode=False 로 호출하여 캐싱된 스냅샷 100% 로드
+                plan = await asyncio.to_thread(
+                    strategy.get_plan,
+                    t, 0.0, 0.0, 0, 0.0, ma_5day=0.0, market_type="REG", available_cash=0.0, is_snapshot_mode=False
+                )
+                
+                if not plan:
+                    logging.error(f"🚨 [{t}] 지연 장전 스냅샷 로드 실패. 스킵.")
+                    msgs[t] += f"🚨 <b>[{t}] 스냅샷 유실! KIS 전송 불가.</b>\n"
+                    all_success_map[t] = False
+                    continue
+
+                plans[t] = plan
+                if plan.get('core_orders', []) or plan.get('orders', []):
+                    is_rev = plan.get('is_reverse', False)
+                    msgs[t] += f"🔄 <b>[{t}] 리버스(VWAP) 예약 덫 실전 장전 완료</b>\n" if is_rev else f"💎 <b>[{t}] 정규장(LOC/VWAP) 실전 덫 장전 완료</b>\n"
 
             # 🚨 MODIFIED: [V71.14 일반주문 배선 복구] VWAP은 예약이 아닌 일반주문으로 직결
-            for t in sorted_tickers:
+            for t in active_tickers_list:
                 if t not in plans: continue
                 target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
                 for o in target_orders:
@@ -164,7 +280,7 @@ async def scheduled_regular_trade(context):
                     msgs[t] += f"└ 1차 필수: {o['desc']} {o['qty']}주 (${o['price']}): {status_icon}\n"
                     await asyncio.sleep(0.2)
                     
-            for t in sorted_tickers:
+            for t in active_tickers_list:
                 if t not in plans: continue
                 target_bonus = plans[t].get('bonus_orders', [])
                 for o in target_bonus:
@@ -189,7 +305,7 @@ async def scheduled_regular_trade(context):
                     msgs[t] += f"└ 2차 보너스: {o['desc']} {o['qty']}주 (${o['price']}): {status_icon}\n"
                     await asyncio.sleep(0.2) 
 
-            for t in sorted_tickers:
+            for t in active_tickers_list:
                 if t not in plans: continue
                 target_orders = plans[t].get('core_orders', plans[t].get('orders', []))
                 target_bonus = plans[t].get('bonus_orders', [])
@@ -197,7 +313,7 @@ async def scheduled_regular_trade(context):
                 
                 if all_success_map[t] and len(target_orders) > 0:
                     await asyncio.to_thread(cfg.set_lock, t, "REG")
-                    msgs[t] += "\n🔒 <b>필수 덫 정상 전송 완료 (잠금 설정됨)</b>"
+                    msgs[t] += "\n🔒 <b>필수 덫 KIS 실원장 전송 완료 (잠금 설정됨)</b>"
                 elif not all_success_map[t] and len(target_orders) > 0:
                     msgs[t] += "\n⚠️ <b>일부 덫 장전 실패 (매매 잠금 보류)</b>"
                 elif len(target_bonus) > 0:
@@ -206,29 +322,29 @@ async def scheduled_regular_trade(context):
                     
                 await context.bot.send_message(chat_id=context.job.chat_id, text=msgs[t], parse_mode='HTML')
 
-            return True, "SUCCESS"
+        return True, "SUCCESS"
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            success, fail_reason = await asyncio.wait_for(_do_regular_trade(), timeout=300.0)
+            success, fail_reason = await asyncio.wait_for(_do_delayed_trade(), timeout=300.0)
             if success:
                 if attempt > 1:
-                    await context.bot.send_message(chat_id=context.job.chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 덫 장전을 완수했습니다!</b>", parse_mode='HTML')
+                    await context.bot.send_message(chat_id=context.job.chat_id, text=f"✅ <b>[통신 복구] {attempt}번째 재시도 끝에 지연 덫 실전 장전을 완수했습니다!</b>", parse_mode='HTML')
                 return 
         except Exception as e:
-            logging.error(f"정규장 덫 전송 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
+            logging.error(f"정규장 덫 실전 전송 에러 ({attempt}/{MAX_RETRIES}): {e}", exc_info=True)
             if attempt == 1:
                 await context.bot.send_message(
                     chat_id=context.job.chat_id, 
-                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️\n<code>사유: {type(e).__name__}: {e}</code>", 
+                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 실전 장전을 재시도합니다! 🛡️\n<code>사유: {type(e).__name__}: {e}</code>", 
                     parse_mode='HTML'
                 )
         else:
-            logging.warning(f"정규장 덫 조건 미충족 ({attempt}/{MAX_RETRIES}): {fail_reason}")
+            logging.warning(f"지연 덫 실전 장전 조건 미충족 ({attempt}/{MAX_RETRIES}): {fail_reason}")
             if attempt == 1:
                  await context.bot.send_message(
                     chat_id=context.job.chat_id, 
-                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️\n<code>사유: {fail_reason}</code>", 
+                    text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 실전 장전을 재시도합니다! 🛡️\n<code>사유: {fail_reason}</code>", 
                     parse_mode='HTML'
                  )
 
@@ -237,4 +353,4 @@ async def scheduled_regular_trade(context):
                 await context.bot.send_message(chat_id=context.job.chat_id, text=f"⚠️ <b>[API 통신 지연 감지]</b>\n한투 서버 불안정. 1분 뒤 재시도합니다! 🛡️", parse_mode='HTML')
             await asyncio.sleep(RETRY_DELAY)
 
-    await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급 에러] 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')
+    await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급 에러] 지연 덫 실전 전송 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')

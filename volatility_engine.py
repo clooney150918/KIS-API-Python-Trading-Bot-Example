@@ -14,6 +14,7 @@
 # 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] determine_market_regime 독스트링 내 SOXS 환각 텍스트 100% 영구 적출 완료.
 # 🚨 MODIFIED: [V61.03 데드코드 소각] 시스템 전역에서 호출되지 않는 레거시 함수 get_tqqq_target_drop, get_soxl_target_drop 영구 적출 완료.
 # 🚨 MODIFIED: [V61.04 들여쓰기 붕괴 방어] 런타임 즉사(IndentationError)를 유발하던 스페이스 오차 100% 팩트 교정 완료.
+# 🚨 MODIFIED: [제4경고 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
 # ==========================================================
 import yfinance as yf
 import pandas as pd
@@ -77,7 +78,7 @@ def _save_cache(key, value):
     dir_name = os.path.dirname(CACHE_FILE)
     if dir_name and not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)
-        
+         
     # 🚨 [수술 완료] 에러 시 임시 파일 찌꺼기(Disk Leak) 영구 소각 방어막 이식
     fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
     try:
@@ -148,7 +149,7 @@ def get_tqqq_target_drop_full():
         if valid_closes_1y.empty:
             fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
             return 0.0, 1.0, fallback_amp, fallback_amp
-            
+             
         current_vxn = float(valid_closes_1y.iloc[-1])
         
         try:
@@ -199,7 +200,7 @@ def get_soxl_target_drop_full():
             return 0.0, 1.0, fallback_amp, fallback_amp
             
         latest_hv = float(valid_hvs_1y.iloc[-1])
-        
+         
         try:
             mean_hv = float(valid_hvs_1y.mean())
             if pd.isna(mean_hv) or mean_hv <= 0:
@@ -207,7 +208,7 @@ def get_soxl_target_drop_full():
             _save_cache("SOXX_HV_MEAN", mean_hv)
         except Exception:
             mean_hv = _load_cache("SOXX_HV_MEAN", 25.0)
-        
+         
         # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온
         if mean_hv <= 0:
             weight = 1.0
@@ -271,7 +272,7 @@ def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
             regime = "BULL"
             target_ticker = "SOXL"
             msg_desc = "상승장 (VWAP 상승 & 양봉)"
-            
+             
         # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각]
         # 1. 당일 VWAP이 전일 VWAP보다 하락 (기관이 어제보다 싸게 롱을 던짐)
         # 2. 당일 현재가가 시가보다 낮음 (음봉: 단타 자금도 매도에 쏠림)
@@ -283,7 +284,8 @@ def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
         # 수급과 캔들의 방향이 불일치하는 구간 (기관의 눈치 싸움 및 휩소 구간)
         else:
             regime = "SIDEWAYS"
-            target_ticker = "NONE"
+            # MODIFIED: [제4경고 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
+            target_ticker = "SOXL"
             msg_desc = "횡보장 (VWAP과 캔들 방향 충돌)"
             
         return {

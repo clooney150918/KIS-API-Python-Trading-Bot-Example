@@ -96,11 +96,10 @@ class KoreaInvestmentBroker:
                     os.makedirs(dir_name, exist_ok=True)
    
                 fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
-               
                 try:
                     with os.fdopen(fd, 'w', encoding='utf-8') as f:
                         json.dump({'token': self.token, 'expire': expire_str}, f)
-                        f.flush()
+                    f.flush()
                     os.fsync(f.fileno())
                     shutil.move(temp_path, self.token_file)
                 finally:
@@ -134,7 +133,7 @@ class KoreaInvestmentBroker:
                     res = requests.get(url, headers=headers, params=params, timeout=10)
                 else:
                     res = requests.post(url, headers=headers, data=json.dumps(data) if data else None, timeout=10)
-                
+                 
                 resp_json = res.json()
          
                 if resp_json.get('rt_cd') != '0':
@@ -206,7 +205,7 @@ class KoreaInvestmentBroker:
                         dynamic_success = True
                         break
         except Exception as e:
-            print(f"⚠️ [Broker] 거래소 동 동적 획득 실패: {ticker} - {e}")
+            print(f"⚠️ [Broker] 거래소 동적 획득 실패: {ticker} - {e}")
 
         if not dynamic_success:
             if ticker == "SOXL": price_cd, order_cd = "AMS", "AMEX"
@@ -220,7 +219,7 @@ class KoreaInvestmentBroker:
         cash = 0.0
         holdings = {}
         api_success = False 
-        
+  
         params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00"}
         res = self._call_api("CTRP6504R", "/uapi/overseas-stock/v1/trading/inquire-present-balance", "GET", params=params)
    
@@ -302,6 +301,7 @@ class KoreaInvestmentBroker:
             if regular_market.empty: return 0.0, 0.0
             regular_market['Typical_Price'] = (regular_market['High'] + regular_market['Low'] + regular_market['Close']) / 3.0
             regular_market['Vol_x_Price'] = regular_market['Typical_Price'] * regular_market['Volume']
+    
             regular_market['Date'] = regular_market.index.date
             daily_stats = regular_market.groupby('Date').agg(Total_Vol_Price=('Vol_x_Price', 'sum'), Total_Vol=('Volume', 'sum'))
             daily_stats['VWAP'] = np.where(daily_stats['Total_Vol'] > 0, daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'], np.nan)
@@ -590,12 +590,16 @@ class KoreaInvestmentBroker:
             # 🚨 36: VWAP 추가 및 32: LOO 강제 매핑
             ord_dvsn = {"LOC": "34", "MOC": "33", "LOO": "32", "MOO": "31", "VWAP": "36"}.get(order_type, "00")
             final_price = 0 if order_type in ["MOC", "MOO"] else self._ceil_2(price)
+         
             if order_type not in ["MOC", "MOO"] and final_price <= 0.0: return {'rt_cd': '999', 'msg1': f'가격 오류: {price}'}
+            
+            # 🚨 MODIFIED: [V72.24 KIS 명세 반영 SLL_TYPE 누수 방어 이식]
+            sll_type = "00" if side == "SELL" else ""
             
             body = {
                 "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, 
                 "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(final_price), 
-                "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn
+                "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn, "SLL_TYPE": sll_type
             }
             
             # 🚨 NEW: [V71.23 KIS API 알고리즘 타임 파라미터 유령 Key 소각 및 팩트 교정]
@@ -604,7 +608,7 @@ class KoreaInvestmentBroker:
                 if start_time and end_time:
                     body["ALGO_ORD_TMD_DVSN_CD"] = "00"
                     body["START_TIME"] = start_time  # 🚨 KIS 명세 팩트 복구
-                    body["END_TIME"] = end_time      # 🚨 KIS 명세 팩트 복구
+                    body["END_TIME"] = end_time     # 🚨 KIS 명세 팩트 복구
                 else:
                     body["ALGO_ORD_TMD_DVSN_CD"] = "02"
 

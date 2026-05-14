@@ -27,10 +27,20 @@
 # 🚨 MODIFIED: [V72.02 제20경고 준수: V-REV 매수 앵커 디커플링 및 하극상 역전 방어 락온]
 # 🚨 MODIFIED: [V72.11 V-REV 지층 융합 맹점 영구 소각 및 100% 독립 LIFO 덫 장전 락온]
 # 🚨 MODIFIED: [V72.13 V-REV 1층 독립 및 상위층 총평단가 연동 엑시트 전술 이식]
-# - 상위층(Upper) 매도 덫 타점(`trigger_upper`) 연산 시, 낡은 상위층 단독 평단가(`upper_avg`) 의존성을 영구 소각.
-# - 큐 장부 SSOT 기반 총 평단가(`avg_price`)를 절대 앵커로 삼아 `avg_price * 1.010` (+1% 수익) 팩트 교정 완료.
-# - 1층은 기존대로 1층 고유 타점(`l1_price * 1.006`)을 유지하여 가벼운 현금흐름 창출 궤도 100% 락온.
-# - UI 렌더링 텍스트를 '1층탈출', '총평단탈출', '통합탈출'로 직관적 팩트 렌더링 미러링 완료.
+# 🚨 MODIFIED: [V72.17 제20경고 준수: V-REV 매수 데드존 구축 및 앵커 최저가 락온]
+# - 기보유 상태(0주 초과) 진입 시, 낡은 단일 앵커(l1_price) 의존성을 전면 소각.
+# - min(prev_c, l1_price) 공식으로 앵커를 강제 락온하여 갭상승 시 고점 추격 매수를 원천 차단.
+# - Buy1, Buy2 타점이 절대적으로 팩트 최저가를 기준으로 산출되도록 아키텍처 대수술 완료.
+# 🚨 MODIFIED: [V72.19 V-REV 스냅샷 데이터 기아 방어 전진 배치 및 EST 절대 락온]
+# - get_dynamic_plan 최상단에 is_snapshot_mode False 시 cached_plan 즉시 반환 쉴드 장착
+# - start_t, end_t 산출 시 KST 역산 데드코드를 전면 소각하고 KIS 서버 요구 스펙인 152500/155500 EST 락온
+# 🚨 MODIFIED: [V72.24 자전거래(Wash Sale) 락온 방어막 복구]
+# - 매수 타점 연산 직후 매도 최소가를 스캔하여 자전거래 의심 주문을 차단하는 캡핑 로직 100% 원복 수술 완료.
+# 🚨 MODIFIED: [V72.25 KST 타임라인 동적 래핑 수술]
+# - KIS 서버 리젝 방어를 위해 EST 기반 팩트 타겟을 런타임에 KST로 동적 변환하여 주입하도록 아키텍처 수술 완료.
+# 🚨 NEW: [V73.00 KIS VWAP 덫 장전 타임라인 디커플링 및 자전거래 원천 차단]
+# - KIS 서버로 전송되는 VWAP 시간 파라미터의 타겟 시각을 15:26:00 및 15:56:00 EST로 팩트 교정 완료.
+# - 암살자 전량 덤핑이 완료된 이후에 덫을 투하하여 자전거래를 수학적으로 영구 차단하는 디커플링 락온.
 # ==========================================================
 import math
 import os
@@ -80,7 +90,7 @@ class ReversionStrategy:
                     return
             except Exception:
                 pass
-                
+                  
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
@@ -203,6 +213,13 @@ class ReversionStrategy:
     def get_dynamic_plan(self, ticker, curr_p, prev_c, current_weight, vwap_status, min_idx, alloc_cash, q_data, is_snapshot_mode=False, market_type="REG"):
         self._load_state_if_needed(ticker)
 
+        cached_plan = self.load_daily_snapshot(ticker)
+        
+        # 🚨 MODIFIED: [V72.19 V-REV 덫 복원 시 스냅샷 데이터 기아 방어 전진 배치]
+        # is_snapshot_mode가 False일 때 캐싱된 스냅샷이 존재하면 즉시 반환하여 예산 부족($0.0)으로 코어가 연산되어 매수 덫이 증발하는 현상을 원천 차단
+        if not is_snapshot_mode and cached_plan:
+            return cached_plan
+
         # 🚨 [제20경고 팩트 검증] 큐(Queue) 장부의 순수 평단가 역산. KIS 평단가(actual_avg) 절대 참조 금지.
         valid_q_data = [item for item in q_data if float(item.get('price', 0.0)) > 0]
         total_q = sum(int(item.get("qty", 0)) for item in valid_q_data)
@@ -216,7 +233,7 @@ class ReversionStrategy:
             lots_1 = [item for item in valid_q_data if item.get('date') == dates_in_queue[0]]
             l1_qty = sum(int(item.get('qty', 0)) for item in lots_1)
             l1_price = sum(float(item.get('qty', 0)) * float(item.get('price', 0.0)) for item in lots_1) / l1_qty if l1_qty > 0 else 0.0
-         
+        
         upper_qty = total_q - l1_qty
 
         # 🚨 MODIFIED: [V72.13 V-REV 1층 독립 및 상위층 총평단가 연동 엑시트 전술 이식]
@@ -224,8 +241,6 @@ class ReversionStrategy:
         trigger_l1 = round(l1_price * 1.006, 2)
         trigger_upper = round(avg_price * 1.010, 2) if upper_qty > 0 else 0.0
 
-        cached_plan = self.load_daily_snapshot(ticker)
-        
         if is_snapshot_mode:
             is_zero_start_session = (total_q == 0)
         else:
@@ -243,9 +258,30 @@ class ReversionStrategy:
             p2_trigger = round(prev_c * 0.999, 2)
         else:
             side = "SELL" if curr_p > prev_c else "BUY"
-            safe_anchor = l1_price if l1_price > 0.0 else prev_c
+            # 🚨 MODIFIED: [V72.17 제20경고 준수: V-REV 매수 데드존 구축 및 앵커 최저가 락온]
+            safe_anchor = min(prev_c, l1_price) if l1_price > 0.0 else prev_c
             p1_trigger = round(safe_anchor * 0.995, 2)
             p2_trigger = round(safe_anchor * 0.9725, 2)
+
+        # 🚨 MODIFIED: [V72.24 자전거래(Wash Sale) 락온 방어막 복구]
+        # p1_trigger와 p2_trigger 결정 직후 최소 매도가(min_sell)를 도출하여 자전거래 원천 차단
+        rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
+        available_l1 = min(l1_qty, rem_qty_total) if rem_qty_total > 0 else 0
+        available_upper = min(upper_qty, rem_qty_total - available_l1) if rem_qty_total > 0 else 0
+        
+        if rem_qty_total > 0:
+            active_sells = []
+            if available_l1 > 0 and trigger_l1 > 0:
+                active_sells.append(trigger_l1)
+            if available_upper > 0 and trigger_upper > 0:
+                active_sells.append(trigger_upper)
+                
+            if active_sells:
+                min_sell = min(active_sells)
+                if p1_trigger >= min_sell:
+                    p1_trigger = max(0.01, round(min_sell - 0.01, 2))
+                if p2_trigger >= min_sell:
+                    p2_trigger = max(0.01, round(min_sell - 0.01, 2))
 
         orders = []
 
@@ -264,10 +300,16 @@ class ReversionStrategy:
             q1 = math.floor(b1_budget / p1_trigger) if p1_trigger > 0 else 0
             q2 = math.floor(b2_budget / p2_trigger) if p2_trigger > 0 else 0
             
-            est_tz_check = ZoneInfo('America/New_York')
-            is_dst_active = bool(datetime.now(est_tz_check).dst())
-            start_t = "042500" if is_dst_active else "052500"
-            end_t = "045500" if is_dst_active else "055500"
+            # 🚨 MODIFIED: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
+            est_zone = ZoneInfo('America/New_York')
+            kst_zone = ZoneInfo('Asia/Seoul')
+            now_est = datetime.now(est_zone)
+            
+            start_dt_kst = now_est.replace(hour=15, minute=26, second=0).astimezone(kst_zone)
+            end_dt_kst = now_est.replace(hour=15, minute=56, second=0).astimezone(kst_zone)
+            
+            start_t = start_dt_kst.strftime("%H%M%S")
+            end_t = end_dt_kst.strftime("%H%M%S")
             
             if q1 > 0:
                 ord_type = "VWAP" if q1 >= 10 else "LOC"
@@ -277,24 +319,25 @@ class ReversionStrategy:
                 ord_type = "VWAP" if q2 >= 10 else "LOC"
                 desc_str = "VWAP매수(Buy2)" if ord_type == "VWAP" else "LOC매수(Buy2)"
                 orders.append({"side": "BUY", "qty": q2, "price": p2_trigger, "type": ord_type, "start_time": start_t if ord_type == "VWAP" else None, "end_time": end_t if ord_type == "VWAP" else None, "desc": desc_str})
-            
-        rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
         
         if rem_qty_total > 0:
-            est_tz_check = ZoneInfo('America/New_York')
-            is_dst_active = bool(datetime.now(est_tz_check).dst())
-            start_t = "042500" if is_dst_active else "052500"
-            end_t = "045500" if is_dst_active else "055500"
+            # 🚨 MODIFIED: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
+            est_zone = ZoneInfo('America/New_York')
+            kst_zone = ZoneInfo('Asia/Seoul')
+            now_est = datetime.now(est_zone)
             
-            available_l1 = min(l1_qty, rem_qty_total)
-            available_upper = min(upper_qty, rem_qty_total - available_l1)
+            start_dt_kst = now_est.replace(hour=15, minute=26, second=0).astimezone(kst_zone)
+            end_dt_kst = now_est.replace(hour=15, minute=56, second=0).astimezone(kst_zone)
+            
+            start_t = start_dt_kst.strftime("%H%M%S")
+            end_t = end_dt_kst.strftime("%H%M%S")
             
             sell_dict = {}
             if available_l1 > 0 and trigger_l1 > 0:
                 sell_dict[trigger_l1] = sell_dict.get(trigger_l1, 0) + available_l1
             if available_upper > 0 and trigger_upper > 0:
                 sell_dict[trigger_upper] = sell_dict.get(trigger_upper, 0) + available_upper
-                
+                 
             for price in sorted(sell_dict.keys()):
                 s_qty = sell_dict[price]
                 ord_type = "VWAP" if s_qty >= 10 else "LOC"

@@ -1,11 +1,18 @@
 # ==========================================================
 # FILE: strategy_v14_vwap.py
 # ==========================================================
-# (상단 주석 생략...)
 # 🚨 MODIFIED: [V72.04 후반전 별값 매수 예산 통합 락온]
 # - 후반전(T >= 분할/2) 진입 시 동일한 가격(별값)임에도 50:50으로 예산을 쪼개어
 #   VWAP 최소 수량(10주) 요건을 스스로 박탈하던 기계적 분할 맹점 원천 차단.
 # - 단일 가격 타격 시에는 예산을 100% 단일 버킷으로 통합하여 VWAP 격발 확률을 극대화함.
+# 🚨 MODIFIED: [V72.19 VWAP 알고리즘 타임라인 EST 절대 락온]
+# - get_plan 내부의 start_t, end_t 산출 시 서머타임 분기 연산(KST 역산)을 전면 적출하고
+#   KIS 서버 요구 스펙에 맞춰 152500과 155500으로 EST 절대 락온
+# 🚨 MODIFIED: [V72.25 KST 타임라인 동적 래핑 수술]
+# - KIS 서버 리젝 방어를 위해 EST 기반 팩트 타겟을 런타임에 KST로 동적 변환하여 주입하도록 아키텍처 수술 완료.
+# 🚨 NEW: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
+# - KIS 서버로 전송되는 VWAP 시간 파라미터의 타겟 시각을 15:26:00 및 15:56:00 EST로 팩트 교정 완료.
+# - 암살자 전량 덤핑이 완료된 이후에 덫을 투하하여 자전거래를 수학적으로 영구 차단하는 디커플링 락온.
 # ==========================================================
 import math
 import logging
@@ -22,7 +29,6 @@ class V14VwapStrategy:
         self.executed = {"BUY_BUDGET": {}, "SELL_QTY": {}}
         self.state_loaded = {}
 
-    # (...중략: _get_logical_date_str ~ record_execution 유지...)
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
         if now_est.hour < 4 or (now_est.hour == 4 and now_est.minute < 4):
@@ -56,7 +62,7 @@ class V14VwapStrategy:
                     return
             except Exception:
                 pass
-                 
+                  
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
@@ -202,10 +208,17 @@ class V14VwapStrategy:
         process_status = "예방적방어선"
         is_zero_start_fact = False
         
-        est_tz_check = ZoneInfo('America/New_York')
-        is_dst_active = bool(datetime.now(est_tz_check).dst())
-        start_t = "042500" if is_dst_active else "052500"
-        end_t = "045500" if is_dst_active else "055500"
+        # 🚨 MODIFIED: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
+        # - KIS 서버 리젝 방어를 위해 EST 기반 팩트 타겟을 런타임에 KST로 동적 변환하여 주입하도록 아키텍처 수술 완료.
+        est_zone = ZoneInfo('America/New_York')
+        kst_zone = ZoneInfo('Asia/Seoul')
+        now_est = datetime.now(est_zone)
+        
+        start_dt_kst = now_est.replace(hour=15, minute=26, second=0).astimezone(kst_zone)
+        end_dt_kst = now_est.replace(hour=15, minute=56, second=0).astimezone(kst_zone)
+        
+        start_t = start_dt_kst.strftime("%H%M%S")
+        end_t = end_dt_kst.strftime("%H%M%S")
 
         if qty == 0:
             is_zero_start_fact = True
@@ -233,7 +246,7 @@ class V14VwapStrategy:
                 b2_budget = dynamic_budget * 0.5
                 q_avg = math.floor(b1_budget / p_avg) if p_avg > 0 else 0
                 q_star = math.floor(b2_budget / buy_star_price) if buy_star_price > 0 else 0
-                
+                 
                 if q_avg > 0: 
                     o_type = "VWAP" if q_avg >= 10 else "LOC"
                     desc = f"⚓평단매수({o_type})"
@@ -259,7 +272,7 @@ class V14VwapStrategy:
                 core_orders.append({"side": "SELL", "price": target_price, "qty": qty - q_sell, "type": "LIMIT", "desc": "🎯목표매도(V)"})
 
         if is_zero_start_fact and market_type != "AFTER":
-             core_orders = [o for o in core_orders if o.get("side") != "SELL"]
+            core_orders = [o for o in core_orders if o.get("side") != "SELL"]
 
         plan_result = {
             'core_orders': core_orders, 'bonus_orders': [], 'orders': core_orders,

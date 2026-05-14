@@ -7,12 +7,17 @@
 # MODIFIED: [V44.47 KST 타임 패러독스 영구 소각] 서머타임 분기 함수 통합 및 EST 절대 시간 기반으로 100% 디커플링 락온 완료.
 # NEW: [콜드 스타트 런타임 붕괴 방어] scheduled_auto_sync 내부 tx_lock None 가드 이식.
 # NEW: [전역 타임아웃 이식] scheduled_force_reset 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
-# 🚨 NEW: [달력 API 결측 연쇄 기절 방어] is_market_open 평일 강제 개장(Fail-Open) 락온 이식 완료.
+# 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈(Fail-Open) 팩트 교정]
+# - 달력 API가 정상적으로 빈 데이터를 반환한 것은 휴장일이므로 페일 오픈을 쏘지 않고 정상적으로 False(휴장)를 반환하도록 로직 전면 수술 완료.
+# - 통신 예외(Exception) 발생 시에만 평일 강제 개장으로 폴백하도록 방어막 정상화.
 # 🚨 MODIFIED: [V-REV SSOT 팩트 교정] scheduled_force_reset 내 낡은 is_active 의존성 영구 소각 및 version 락온.
 # 🚨 MODIFIED: [V72.01 V-REV 예산 뻥튀기(Double Spending) 맹점 100% 소각]
 # - 기존 spent를 파일 I/O로 파싱하여 이중 차감하고 free_cash를 더하던 데드코드를 영구 적출.
 # - 코어 엔진 내부에서 자체 잔차를 연산하므로, 오직 순수 1회 예산(15%)만 주입하여
 #   0.5회분씩 2건의 지정가 VWAP 주문이 정확히 분할 타격되도록 락온.
+# 🚨 MODIFIED: [V73.10 확정 정산 16:05 EST 전진 배치 및 시각적 디커플링 해체]
+# - scheduled_auto_sync 코루틴 내부의 시스템 로깅 및 텔레그램 상태 알림 메시지에 
+#   하드코딩된 21:00 EST 텍스트를 16:05 EST로 일괄 오버라이드 완료.
 # ==========================================================
 import os
 import logging
@@ -40,14 +45,14 @@ def is_market_open():
         nyse = mcal.get_calendar('NYSE')
         schedule = nyse.schedule(start_date=today.date(), end_date=today.date())
         
-        # 🚨 MODIFIED: [달력 API 결측 연쇄 기절 방어] schedule.empty == True 여도 평일이면 무조건 Fail-Open(강제 개장) 반환 락온
+        # 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈(Fail-Open) 팩트 교정]
         if not schedule.empty:
             return True
         else:
-            logging.warning("⚠️ [is_market_open] 달력 API가 빈 값을 반환했으나 평일(월~금)이므로 Fail-Open(강제 개장) 방어막을 가동합니다.")
-            return True
+            logging.info("💤 [is_market_open] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
+            return False
     except Exception as e:
-        logging.error(f"⚠️ 달력 라이브러리 에러 발생. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다: {e}")
+        logging.error(f"⚠️ 달력 라이브러 에러 발생. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다: {e}")
         est = ZoneInfo('America/New_York')
         return datetime.datetime.now(est).weekday() < 5
 
@@ -80,9 +85,6 @@ def get_budget_allocation(cash, tickers, cfg):
         if version == "V_REV":
             rev_daily_budget = float(cfg.get_seed(tx) or 0.0) * 0.15
             # 🚨 MODIFIED: [V72.01 V-REV 예산 뻥튀기(Double Spending) 맹점 100% 소각]
-            # 기존 spent를 파일 I/O로 파싱하여 이중 차감하고 free_cash를 더하던 데드코드를 영구 적출.
-            # 코어 엔진 내부에서 자체 잔차를 연산하므로, 오직 순수 1회 예산(15%)만 주입하여
-            # 0.5회분씩 2건의 지정가 VWAP 주문이 정확히 분할 타격되도록 락온.
             allocated[tx] = rev_daily_budget
         else:
             other_locked = dynamic_total_locked
@@ -147,13 +149,13 @@ def perform_self_cleaning():
             if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
                 try: os.remove(f)
                 except: pass
-    
+   
         for prefix in ["daily_snapshot_*", "vwap_state_*"]:
             for f in glob.glob(f"data/{prefix}.json"):
                 if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
                     try: os.remove(f)
                     except: pass
-        
+   
         for directory in ["data", "logs"]:
             for f in glob.glob(f"{directory}/tmp*"):
                 if os.path.isfile(f) and os.stat(f).st_mtime < now - one_day:
@@ -198,15 +200,12 @@ async def scheduled_force_reset(context):
             app_data = context.job.data
             cfg = app_data['cfg']
             
-            # MODIFIED: [초기화 누수 및 락온 해제] tx_lock 미초기화 시 스킵되더라도 매매 잠금은 무조건 해제되도록 전진 배치하여 멱등성 확보
             await asyncio.to_thread(cfg.reset_locks)
             
             broker = app_data['broker']
             tx_lock = app_data['tx_lock']
             chat_id = context.job.chat_id
              
-            # 🚨 MODIFIED: [V44.65 KST 17:00 런타임 붕괴 및 이벤트 루프 교착 방어]
-            # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
             if tx_lock is None:
                 logging.warning("⚠️ [force_reset] tx_lock 미초기화. 이번 사이클 스킵.")
                 try:
@@ -215,8 +214,6 @@ async def scheduled_force_reset(context):
                     pass
                 return
              
-            # MODIFIED: [버그 2 수술] force_reset tx_lock 점유율 압축 및 병목 해체
-            # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] 이곳의 tx_lock 점유 구간은 이미 V44.66에서 극한 압축되었다. 락 대기 병목을 핑계로 로직을 확장하는 오버 엔지니어링을 절대 금지한다.
             async with tx_lock:
                 _, holdings = await asyncio.to_thread(broker.get_account_balance)
                 
@@ -227,19 +224,16 @@ async def scheduled_force_reset(context):
             
             active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
             for t in active_tickers:
-                # 🚨 MODIFIED: [V-REV SSOT 팩트 교정] 낡은 is_active 의존성 전면 소각 및 version 락온
                 version = await asyncio.to_thread(cfg.get_version, t)
                 rev_state = await asyncio.to_thread(cfg.get_reverse_state, t)
                 
                 if version == "V_REV":
                     actual_avg = float(holdings.get(t, {'avg': 0})['avg'])
                     
-                    # 🚨 MODIFIED: [V44.65 KST 17:00 런타임 붕괴 및 이벤트 루프 교착 방어]
-                    # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
                     try:
                         curr_p_val = await asyncio.wait_for(
-                            asyncio.to_thread(broker.get_current_price, t),
-                            timeout=10.0
+                             asyncio.to_thread(broker.get_current_price, t),
+                             timeout=10.0
                         )
                         curr_p = float(curr_p_val or 0.0)
                     except asyncio.TimeoutError:
@@ -254,7 +248,6 @@ async def scheduled_force_reset(context):
                         exit_target = rev_state.get("exit_target", 0.0)
                         
                         if curr_ret >= exit_target:
-                            # 🚨 MODIFIED: [V54.04] V_REV 모드라면 is_active를 False로 끄지 않고 True로 보존하여 '0주 새출발' 상태 팩트 락온 (SSOT 무결성 유지)
                             await asyncio.to_thread(cfg.set_reverse_state, t, True, 0, 0.0)
                             await asyncio.to_thread(cfg.clear_escrow_cash, t)
                             
@@ -270,8 +263,6 @@ async def scheduled_force_reset(context):
                             msg_addons += f"\n🌤️ <b>[{t}] 리버스 목표 달성({curr_ret:.2f}%)!</b> 격리 병동 졸업 및 Escrow 해제 완료!"
                         else:
                             await asyncio.to_thread(cfg.increment_reverse_day, t)
-                    else:
-                        await asyncio.to_thread(cfg.increment_reverse_day, t)
                 else:
                     await asyncio.to_thread(cfg.increment_reverse_day, t)
                     
@@ -281,17 +272,15 @@ async def scheduled_force_reset(context):
         except Exception as e:
             await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> {e}", parse_mode='HTML')
 
-    # NEW: [전역 타임아웃 이식] 메인 로직 전체 180초 타임아웃 족쇄 체결
     try:
         await asyncio.wait_for(_do_force_reset(), timeout=180.0)
     except Exception as e:
          logging.error(f"🚨 [force_reset] 전역 타임아웃(180초) 또는 런타임 붕괴 발생: {e}")
 
-# 🚨 [KST 분기 함수 통합] 21:00 EST 스케줄 단일화
+# 🚨 [V73.10 확정 정산 16:05 EST 전진 배치 팩트 교정]
 async def scheduled_auto_sync(context):
-    logging.info("✅ [확정 정산] 21:00 EST 팩트 기반 확정 정산 엔진 다이렉트 가동")
+    logging.info("✅ [확정 정산] 16:05 EST 팩트 기반 확정 정산 엔진 다이렉트 가동")
 
-    # MODIFIED: [V44.68 콜드 스타트 방어막 전진 배치 및 팩트 교정]
     if context.job.data.get('tx_lock') is None:
         logging.warning("⚠️ [auto_sync] tx_lock 미초기화. 장부 표시 스킵.")
         return
@@ -328,12 +317,12 @@ async def scheduled_auto_sync(context):
     can_run, today_est = await asyncio.to_thread(_check_and_set_lock)
     
     if not can_run:
-        logging.info(f"⏳ [정산 멱등성 락온] 오늘({today_est} EST)의 21:00 확정 정산이 이미 완료되었습니다. 중복 실행 및 다중 렌더링을 100% 차단합니다.")
+        logging.info(f"⏳ [정산 멱등성 락온] 오늘({today_est} EST)의 16:05 확정 정산이 이미 완료되었습니다. 중복 실행 및 다중 렌더링을 100% 차단합니다.")
         return
 
     chat_id = context.job.chat_id
     bot = context.job.data['bot']
-    status_msg = await context.bot.send_message(chat_id=chat_id, text=f"📝 <b>[21:00 EST] 장부 자동 동기화(무결성 검증)를 시작합니다.</b>", parse_mode='HTML')
+    status_msg = await context.bot.send_message(chat_id=chat_id, text=f"📝 <b>[16:05 EST] 장부 자동 동기화(무결성 검증)를 시작합니다.</b>", parse_mode='HTML')
     
     success_tickers = []
     active_tickers = await asyncio.to_thread(context.job.data['cfg'].get_active_tickers)
@@ -349,4 +338,4 @@ async def scheduled_auto_sync(context):
         # MODIFIED: [제2헌법 라우팅 누수 런타임 붕괴 방어] sync_engine 호출로 팩트 교정
         await bot.sync_engine._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
     else:
-        await status_msg.edit_text(f"📝 <b>[21:00 EST] 장부 동기화 완료</b> (표시할 진행 중인 장부가 없습니다)", parse_mode='HTML')
+        await status_msg.edit_text(f"📝 <b>[16:05 EST] 장부 동기화 완료</b> (표시할 진행 중인 장부가 없습니다)", parse_mode='HTML')

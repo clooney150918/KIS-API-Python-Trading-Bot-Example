@@ -18,6 +18,8 @@
 # - get_decision 내부 3단계 정점요격 연산 블록 최상단에 바이패스 쉴드 이식 완료.
 # - 스위치 OFF 시 정점 갱신 및 투매 판별 연산을 전면 무시하고 상태를 초기화.
 # - 런타임 붕괴를 유발하던 들여쓰기(Indentation) 오차 3곳 100% 팩트 교정 완료.
+# 🚨 MODIFIED: [V72.20 프리마켓 오프닝 휩소 방어 데드코드 영구 소각]
+# - time_0410 변수 선언과 curr_time 이 time_0410 보다 작을 때 대기하는 낡은 락다운 블록 전면 적출.
 # ==========================================================
 import logging
 import datetime
@@ -207,7 +209,7 @@ class VAvwapHybridPlugin:
         avwap_state = avwap_state or {}
         curr_time = now_est.time()
 
-        time_0410 = datetime.time(4, 10)
+        # MODIFIED: [V72.20 프리마켓 오프닝 휩소 방어 데드코드 영구 소각]
         time_0930 = datetime.time(9, 30)
         
         dump_jitter_sec = avwap_state.get('dump_jitter_sec', 0)
@@ -391,8 +393,7 @@ class VAvwapHybridPlugin:
         if avwap_state.get('shutdown', False) or persistent_state.get('shutdown', False):
              return _build_res('WAIT', '당일영구동결_상태(신규진입금지)')
 
-        if curr_time < time_0410:
-            return _build_res('WAIT', '04:10_이전_오프닝_휩소_방어(10분_안전마진_대기)')
+        # MODIFIED: [V72.20 프리마켓 오프닝 휩소 방어 데드코드 영구 소각]
 
         if not is_regular_session:
             return _build_res('WAIT', '프리마켓_노이즈_원천차단_정규장_개장_대기')

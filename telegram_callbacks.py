@@ -55,6 +55,9 @@
 # - 과거 대수술 시 통째로 유실되었던 MODE 액션 라우터와 AVWAP_SET 라우터 100% 원상 복구 완료.
 # - APEX_ON / APEX_OFF 분기망을 신설하여 텔레그램 수신 즉시 비동기 래핑으로 config 상태를 팩트 제어.
 # - 제자리 메뉴 새로고침(cmd_settlement) 배선 개통으로 시각적 디커플링 원천 차단.
+# 🚨 NEW: [V73.00 UI 렌더링 디커플링 해체]
+# - 텔레그램 시작 화면 및 통합 지시서에 잔존하는 17:05 KST 예약 장전 레거시 텍스트를 15:26 EST 지연 장전으로 팩트 교정하여 시각적 환각을 100퍼센트 해체합니다. (telegram_view 연동)
+# - 수동 주문(EXEC) 시 생성되는 스냅샷 기반 덫 장전 프로세스 무결점 유지.
 # ==========================================================
 import logging
 import datetime
@@ -235,7 +238,7 @@ class TelegramCallbacks:
             try:
                 if action == "DEL_Q":
                     if getattr(self, 'queue_ledger', None):
-                        await asyncio.to_thread(self.queue_ledger.delete_lot, ticker, target_date)
+                         await asyncio.to_thread(self.queue_ledger.delete_lot, ticker, target_date)
                      
                     await query.answer("✅ 지층 삭제 완료. KIS 원장과 동기화합니다.", show_alert=False)
                
@@ -331,7 +334,7 @@ class TelegramCallbacks:
             await query.answer()
             if sub == "VIEW": 
                 async with self.tx_lock:
-                    _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+                     _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
                 await self.sync_engine._display_ledger(data[2], chat_id, context, query=query, pre_fetched_holdings=holdings)
             elif sub == "SYNC": 
                 ticker = data[2]
@@ -723,7 +726,7 @@ class TelegramCallbacks:
             elif sub == "COMPOUND":
                 ko_name = "자동 복리율(%)"
             elif sub == "STOCK_SPLIT":
-                ko_name = "액면 분할/병합 비율 (예: 10분할은 10, 10병합은 0.1)"
+                 ko_name = "액면 분할/병합 비율 (예: 10분할은 10, 10병합은 0.1)"
             elif sub == "FEE":
                 ko_name = "증권사 수수료율(%)"
             else:
@@ -731,3 +734,4 @@ class TelegramCallbacks:
             
             desc = "숫자만 입력하세요.\n(예: 액면분할 시 1주가 10주가 되었다면 10 입력, 10주가 1주로 병합되었다면 0.1 입력)" if sub == "STOCK_SPLIT" else "숫자만 입력하세요."
             await context.bot.send_message(chat_id, f"✏️ <b>[{ticker}] {ko_name}</b>를 설정합니다.\n{desc}", parse_mode='HTML')
+

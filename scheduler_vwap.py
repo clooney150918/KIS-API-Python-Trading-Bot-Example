@@ -32,10 +32,14 @@
 # 🚨 NEW: [V71.10 섀도우 오버라이드 덫 파기 팩트 스캔] 갭 하이재킹 격발 시 로컬 캐시 조회 파기 로직 전면 소각 및 KIS 실원장(get_reservation_orders) 다이렉트 연동 아키텍처 이식.
 # 🚨 MODIFIED: [V71.14 지정가 VWAP 일반주문 역배선 팩트 락온 및 갭 하이재킹 기절 버그 수술]
 # 🚨 MODIFIED: [V72.08 갭 하이재킹 예산 연산 공식 디커플링 해체 및 SSOT 락온]
-# - 정규장 V-REV 매수 예산 산출 공식(V72.01 하드 마진 캡)과 갭 하이재킹의 예산 연산 로직이 
-#   서로 다르게 작동하던 치명적 수학적 디커플링 원천 차단.
-# - get_budget_allocation 파이프라인을 섀도우 오버라이드망에 다이렉트 결속시켜, 
-#   하이재킹 타격 시에도 "1일 할당량(15%) 초과 금지" 룰이 100% 팩트 연동되도록 아키텍처 대수술 완료.
+# - 정규장 V-REV 매수 예산 산출 공식(V72.01 하드 마진 캡)과 갭 하이재킹의 예산 연산 로직이 서로 다르게 작동하던 치명적 수학적 디커플링 원천 차단.
+# - get_budget_allocation 파이프라인을 섀도우 오버라이드망에 다이렉트 결속시켜, 하이재킹 타격 시에도 "1일 할당량(15%) 초과 금지" 룰이 100% 팩트 연동되도록 아키텍처 대수술 완료.
+# 🚨 NEW: [V72.18 갭 하이재킹 예약 원장 맵핑 누수 및 일반 미체결 이중 방화벽 락온]
+# 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈(Fail-Open) 팩트 교정]
+# - 달력 API 정상 빈 데이터 반환 시 휴장일로 명확히 간주하고 안전 종료(Return)하도록 수술.
+# 🚨 NEW: [V73.00 섀도우 오버라이드망 타임 윈도우 시프트 및 디커플링 락온]
+# - 본진 덫 장전 시각(15:26 EST)에 맞춰 갭 하이재킹 모니터링 타임 윈도우를 장 마감 36분 전에서 34분 전으로 정밀 동기화.
+# - 렌더링 텍스트를 '장 마감 34분 전'으로 팩트 교정하여 시각적 디커플링 해체 완료.
 # ==========================================================
 import logging
 import datetime
@@ -49,7 +53,6 @@ import json
 import pandas_market_calendars as mcal
 import tempfile
 
-# 🚨 MODIFIED: [V72.08] 하이재킹 예산 SSOT 락온을 위해 get_budget_allocation 수혈
 from scheduler_core import is_market_open, get_budget_allocation
 
 async def scheduled_vwap_init_and_cancel(context):
@@ -77,11 +80,9 @@ async def scheduled_vwap_init_and_cancel(context):
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
         if schedule.empty:
-            logging.warning("⚠️ [vwap_init] 달력 API 빈 값 반환. 평일 강제 마감시간(16:00 EST) 폴백 가동.")
-            if now_est.weekday() < 5:
-                market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
-            else:
-                return
+            # 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈 팩트 교정]
+            logging.info("💤 [vwap_init] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
+            return
         else:
             market_close = schedule.iloc[0]['market_close'].astimezone(est)
     except asyncio.TimeoutError:
@@ -97,7 +98,9 @@ async def scheduled_vwap_init_and_cancel(context):
         else:
             return
         
-    vwap_start_time = market_close - datetime.timedelta(minutes=33, seconds=15)
+    # 🚨 MODIFIED: [V73.00 섀도우 오버라이드망 기상 시간 디커플링 수술]
+    # 본진 덫 장전(15:26 EST)에 맞춰 타임 윈도우를 장 마감 34분 전으로 정밀 동기화
+    vwap_start_time = market_close - datetime.timedelta(minutes=34, seconds=0)
     vwap_end_time = market_close 
     
     if not (vwap_start_time <= now_est <= vwap_end_time):
@@ -125,7 +128,7 @@ async def scheduled_vwap_init_and_cancel(context):
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
                             msg = f"🌅 <b>[{t}] KIS VWAP/LOC 예약 덫 관측 및 섀도우 오버라이드망 기상</b>\n"
-                            msg += f"▫️ 장 마감 33분 전 진입을 확인하여 KIS 서버의 예약 덫 체결을 관망합니다.\n"
+                            msg += f"▫️ 장 마감 34분 전 진입을 확인하여 KIS 서버의 예약 덫 체결을 관망합니다.\n"
                             msg += f"▫️ 기초자산 갭 이탈 감지 시 즉각 개입(Gap Hijack)하는 섀도우 모드로 전환합니다. ⚔️"
             
                             vwap_cache[f"REV_{t}_nuked"] = True
@@ -138,7 +141,7 @@ async def scheduled_vwap_init_and_cancel(context):
     try:
         await asyncio.wait_for(_do_init(), timeout=45.0)
     except Exception as e:
-         logging.error(f"🚨 Fail-Safe 타임아웃 에러: {e}", exc_info=True)
+        logging.error(f"🚨 Fail-Safe 타임아웃 에러: {e}", exc_info=True)
 
 
 async def scheduled_vwap_trade(context):
@@ -166,11 +169,9 @@ async def scheduled_vwap_trade(context):
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
         if schedule.empty:
-            logging.warning("⚠️ [vwap_trade] 달력 API 빈 값 반환. 평일 강제 마감시간(16:00 EST) 폴백 가동.")
-            if now_est.weekday() < 5:
-                market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
-            else:
-                return
+            # 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈 팩트 교정]
+            logging.info("💤 [vwap_trade] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
+            return
         else:
             market_close = schedule.iloc[0]['market_close'].astimezone(est)
     except asyncio.TimeoutError:
@@ -185,8 +186,10 @@ async def scheduled_vwap_trade(context):
             market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
         else:
             return
-        
-    vwap_start_time = market_close - datetime.timedelta(minutes=33, seconds=15)
+         
+    # 🚨 MODIFIED: [V73.00 섀도우 오버라이드망 기상 시간 디커플링 수술]
+    # 본진 덫 장전(15:26 EST)에 맞춰 타임 윈도우를 장 마감 34분 전으로 정밀 동기화
+    vwap_start_time = market_close - datetime.timedelta(minutes=34, seconds=0)
     vwap_end_time = market_close 
     
     if not (vwap_start_time <= now_est <= vwap_end_time):
@@ -210,7 +213,6 @@ async def scheduled_vwap_trade(context):
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None: return
             
-            # 🚨 MODIFIED: [V72.08] 하이재킹 예산 SSOT 락온을 위한 전역 예산 할당 팩트 스캔
             active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
             _, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, active_tickers, cfg)
             
@@ -228,32 +230,33 @@ async def scheduled_vwap_trade(context):
                     if version == "V_REV":
                         if vwap_cache.get(f"REV_{t}_gap_hijack_fired"):
                             continue
-                            
+                          
                         base_tkr = base_map.get(t, 'SOXX')
+                    
                         try:
                             base_curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, base_tkr), timeout=10.0)
                             base_curr_p = float(base_curr_p_val or 0.0)
                         except Exception:
                             base_curr_p = 0.0
-                            
+                              
                         try:
                             df_1min_base = await asyncio.wait_for(asyncio.to_thread(broker.get_1min_candles_df, base_tkr), timeout=10.0)
                             if df_1min_base is not None and not df_1min_base.empty:
                                 df_b = df_1min_base.copy()
                                 if 'time_est' in df_b.columns:
                                     df_b = df_b[(df_b['time_est'] >= '093000') & (df_b['time_est'] <= '155900')]
-                                
+                                 
                                 if not df_b.empty:
                                     df_b['tp'] = (df_b['high'].astype(float) + df_b['low'].astype(float) + df_b['close'].astype(float)) / 3.0
                                     df_b['vol'] = df_b['volume'].astype(float)
                                     df_b['vol_tp'] = df_b['tp'] * df_b['vol']
-                                    
+                                   
                                     c_vol = df_b['vol'].sum()
                                     base_vwap = df_b['vol_tp'].sum() / c_vol if c_vol > 0 else base_curr_p
-                                    
+            
                                     gap_pct = ((base_curr_p - base_vwap) / base_vwap * 100.0) if base_vwap > 0 else 0.0
                                     gap_thresh = await asyncio.to_thread(getattr(cfg, 'get_vrev_gap_threshold', lambda x: -0.67), t)
-                                    
+                                     
                                     if gap_pct <= gap_thresh:
                                         logging.info(f"⚡ [{t}] Gap Hijack Triggered! gap: {gap_pct:.2f}%, thresh: {gap_thresh}%")
                                         
@@ -262,35 +265,48 @@ async def scheduled_vwap_trade(context):
                                             est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
                                             d_str = est_now.strftime('%Y%m%d')
                                             resv_orders = await asyncio.to_thread(broker.get_reservation_orders, t, d_str, d_str)
+                                            # 🚨 NEW: [V72.18 갭 하이재킹 예약 원장 맵핑 누수 및 일반 미체결 이중 방화벽 락온]
                                             for req in resv_orders:
-                                                odno = req.get('odno')
-                                                ord_dt = req.get('ord_dt', d_str)
+                                                odno = req.get('ovrs_rsvn_odno') or req.get('odno')
+                                                ord_dt = req.get('rsvn_ord_rcit_dt') or req.get('ord_dt', d_str)
                                                 if odno:
                                                     try:
                                                         await asyncio.to_thread(broker.cancel_reservation_order, ord_dt, odno)
                                                         nuked_count += 1
                                                     except Exception as e:
                                                         logging.error(f"🚨 [{t}] 예약 덫 취소 실패: {e}")
-                                            logging.info(f"⚡ [{t}] KIS 실원장 스캔: 예약 덫 {nuked_count}건 팩트 파기 완료.")
+                                             
+                                            unfilled = await asyncio.to_thread(broker.get_unfilled_orders_detail, t)
+                                            if isinstance(unfilled, list):
+                                                for uo in unfilled:
+                                                    dvsn = str(uo.get('ord_dvsn_cd') or uo.get('ord_dvsn') or '').strip().zfill(2)
+                                                    if dvsn in ['36', '00']:
+                                                        u_odno = uo.get('odno')
+                                                        if u_odno:
+                                                            try:
+                                                                await asyncio.to_thread(broker.cancel_order, t, u_odno)
+                                                                nuked_count += 1
+                                                            except Exception as e:
+                                                                logging.error(f"🚨 [{t}] 일반 덫(VWAP/LOC) 취소 실패: {e}")
+                                            
+                                            logging.info(f"⚡ [{t}] KIS 실원장 스캔: 예약 및 일반 덫 {nuked_count}건 팩트 파기 완료.")
                                         except Exception as e:
-                                            logging.error(f"🚨 [{t}] KIS 실원장 예약 덫 스캔 에러: {e}")
+                                            logging.error(f"🚨 [{t}] KIS 실원장 덫 스캔 에러: {e}")
                                         
                                         await asyncio.sleep(2.0)
                                         
-                                        # 🚨 MODIFIED: [V72.08 갭 하이재킹 예산 연산 공식 디커플링 해체 및 SSOT 락온]
-                                        # V-REV 코어에서 사용하는 정규장 예산 하드 마진 캡(Cap) 로직을 완벽히 동기화 이식.
                                         seed = await asyncio.to_thread(cfg.get_seed, t)
                                         daily_limit = float(seed or 0.0) * 0.15
                                         
                                         alloc_cash = allocated_cash.get(t, 0.0)
                                         safe_alloc_cash = min(float(alloc_cash), daily_limit) if daily_limit > 0 else float(alloc_cash)
-                                        
+                                     
                                         total_spent = 0.0
                                         if hasattr(strategy, 'v_rev_plugin'):
                                             total_spent = float(strategy.v_rev_plugin.executed.get("BUY_BUDGET", {}).get(t, 0.0))
-                                            
+                                      
                                         rem_budget = max(0.0, safe_alloc_cash - total_spent)
-                                        
+                                         
                                         try:
                                             ask_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_ask_price, t), timeout=10.0)
                                             ask_price = float(ask_price_val or 0.0)
@@ -307,7 +323,6 @@ async def scheduled_vwap_trade(context):
                                         buy_qty = int(math.floor(rem_budget / exec_price)) if exec_price > 0 else 0
                                         
                                         if buy_qty > 0:
-                                            # 💡 갭 하이재킹은 즉각적인 스윕(Sweep) 타격을 위해 지정가(LIMIT)를 사용함
                                             res = await asyncio.to_thread(broker.send_order, t, "BUY", buy_qty, exec_price, "LIMIT")
                                             odno = res.get('odno', '') if isinstance(res, dict) else ''
 
@@ -318,12 +333,12 @@ async def scheduled_vwap_trade(context):
                                                 msg += f"▫️ KIS 예약 덫({nuked_count}건)을 즉각 파기(Nuke)하고, 잔여 예산 100%를 매도 1호가로 일괄 스윕(Sweep) 타격했습니다!\n"
                                                 msg += f"▫️ 스윕 수량: <b>{buy_qty}주</b> (단가: ${exec_price:.2f})"
                                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
-                                                 
+                                                
                                                 if hasattr(strategy, 'v_rev_plugin'):
                                                     await asyncio.to_thread(strategy.v_rev_plugin.record_execution, t, "BUY", buy_qty, exec_price)
                                                 if queue_ledger:
                                                     await asyncio.to_thread(queue_ledger.add_lot, t, buy_qty, exec_price, "GAP_HIJACK_BUY")
-                                
+                                      
                         except Exception as e:
                             logging.error(f"🚨 갭 스위칭 스캔 에러: {e}")
 
