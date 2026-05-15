@@ -2,24 +2,23 @@
 # FILE: strategy_v_avwap.py
 # ==========================================================
 # 🚨 MODIFIED: [V59.00 AVWAP 암살자 예산 100% 수혈 및 15:25 전량 덤핑 팩트 교정]
-# 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각]
-# 🚨 MODIFIED: [V59.04 프리마켓 락다운 쉴드 이식]
 # 🚨 MODIFIED: [V60.00 옴니 매트릭스 진입 차단망 전면 폐기 및 데드코드 소각]
 # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
-# 🚨 NEW: [상대적 체력 연산 30.0% 셧다운 락온]
 # 🚨 NEW: [V65.00 AVWAP 동적 하드스탑 락온]
 # 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
-# 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결]
-# 🚨 NEW: [V71.01 시계열 체력 예외 허용 엔진(V-Turn Intercept) 이식]
-# 🚨 MODIFIED: [V71.08 AVWAP 암살자 덤핑 타임라인 전진 배치 팩트 교정]
 # 🚨 NEW: [V72.09 3-Stage Apex Intercept (정점 요격) 전술 탑재]
-# 🚨 MODIFIED: [V72.10 3단계 격발 차원 붕괴(버그) 완벽 수술] 
 # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재 및 IndentationError 팩트 수술]
-# - get_decision 내부 3단계 정점요격 연산 블록 최상단에 바이패스 쉴드 이식 완료.
-# - 스위치 OFF 시 정점 갱신 및 투매 판별 연산을 전면 무시하고 상태를 초기화.
-# - 런타임 붕괴를 유발하던 들여쓰기(Indentation) 오차 3곳 100% 팩트 교정 완료.
-# 🚨 MODIFIED: [V72.20 프리마켓 오프닝 휩소 방어 데드코드 영구 소각]
-# - time_0410 변수 선언과 curr_time 이 time_0410 보다 작을 때 대기하는 낡은 락다운 블록 전면 적출.
+# 🚨 NEW: [V74.00 Operation HA V-Turn Intercept (정밀 요격) 전술 탑재]
+# 🚨 MODIFIED: [V74.02 HA V-Turn 정밀 꼬리(Wick) 파서 및 1양봉 격발 엔진 이식]
+# 🚨 NEW: [V74.04 심해 고도 필터(Deep-Sea Altitude Filter) 락온 및 스코프 전진 배치]
+# 🚨 MODIFIED: [V74.05 찐바닥 체력 30% 락다운 바이패스 소각 및 절대 락온 원상 복구]
+# - V-Turn 시그널이 포착되더라도 잔여 체력이 30% 미만으로 고갈되었을 때는 반등 캔들에 
+#   속지 않고 무조건 당일 영구 동결(SHUTDOWN)을 격발하도록 팩트 교정 완료.
+# - V-Turn 시그널은 체력이 30% 이상일 때만 시계열 하락세(BEAR)를 바이패스하여 타격함.
+# 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
+# - UI 렌더링을 위한 섀도우 연산 시 실제 파일 상태가 덮어씌워지는 맹점 수술.
+# 🚨 MODIFIED: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술]
+# - save_state 시 기존 JSON 상태를 읽어와 병합(Merge)함으로써 상태 증발 맹점 원천 차단.
 # ==========================================================
 import logging
 import datetime
@@ -95,9 +94,25 @@ class VAvwapHybridPlugin:
             "APEX_STAGE_1": False, "APEX_STAGE_2": False, "APEX_PEAK_PRICE": 0.0
         }
 
+    # 🚨 MODIFIED: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술] 
+    # 기존 파일 데이터를 로드하여 병합(Merge)함으로써 상태 증발 맹점 원천 차단
     def save_state(self, ticker, now_est, state_data):
         file_path = self._get_state_file(ticker, now_est)
-        state_data['date'] = self._get_logical_date_str(now_est)
+        today_str = self._get_logical_date_str(now_est)
+
+        merged_data = {}
+        if os.path.exists(file_path):
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    merged_data = json.load(f)
+            except Exception:
+                pass
+
+        if merged_data.get('date') != today_str:
+            merged_data = {}
+
+        merged_data.update(state_data)
+        merged_data['date'] = today_str
 
         try:
             dir_name = os.path.dirname(file_path)
@@ -106,7 +121,7 @@ class VAvwapHybridPlugin:
 
             fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(state_data, f, ensure_ascii=False, indent=4)
+                json.dump(merged_data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, file_path)
@@ -184,7 +199,7 @@ class VAvwapHybridPlugin:
             logging.error(f"🚨 [V_AVWAP] YF 기초자산 매크로 컨텍스트 추출 실패 ({base_ticker}): {e}")
             return None
 
-    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, is_apex_on=True, **kwargs):
+    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, is_apex_on=True, is_simulation=False, **kwargs):
         df_1min_base = df_1min_base if df_1min_base is not None else kwargs.get('base_df')
         avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
 
@@ -209,7 +224,6 @@ class VAvwapHybridPlugin:
         avwap_state = avwap_state or {}
         curr_time = now_est.time()
 
-        # MODIFIED: [V72.20 프리마켓 오프닝 휩소 방어 데드코드 영구 소각]
         time_0930 = datetime.time(9, 30)
         
         dump_jitter_sec = avwap_state.get('dump_jitter_sec', 0)
@@ -222,11 +236,16 @@ class VAvwapHybridPlugin:
         base_vwap = base_curr_p
         vwap_success = False 
 
+        # 🚨 [V74.04 제16경고 스코프 전진 배치 및 심해 필터 변수 락온]
         ha_2_bullish_no_lower = False
+        ha_v_turn_detected = False
         trend_sequence = "PENDING"
         
         is_pure_5m_2_bearish = False
         current_5m_is_bearish = False
+        
+        day_amplitude = 0.0
+        deep_sea_threshold = 0.0
 
         if df_1min_base is not None and not df_1min_base.empty:
             try:
@@ -257,6 +276,7 @@ class VAvwapHybridPlugin:
 
                     if is_regular_session and curr_time < datetime.time(9, 35):
                         ha_2_bullish_no_lower = False
+                        ha_v_turn_detected = False
                     else:
                         df['datetime'] = pd.to_datetime(df.index)
                         df.set_index('datetime', inplace=True)
@@ -285,12 +305,36 @@ class VAvwapHybridPlugin:
                             df_5m['HA_High'] = df_5m[['high', 'HA_Open', 'HA_Close']].max(axis=1)
                             df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
 
-                            df_5m['No_Lower_Wick'] = (df_5m['HA_Open'] - df_5m['HA_Low']) <= 0.01
+                            df_5m['No_Lower_Wick'] = (df_5m[['HA_Open', 'HA_Close']].min(axis=1) - df_5m['HA_Low']) <= 0.01
+                            df_5m['No_Upper_Wick'] = (df_5m['HA_High'] - df_5m[['HA_Open', 'HA_Close']].max(axis=1)) <= 0.01
+                            df_5m['Has_Lower_Wick'] = (df_5m[['HA_Open', 'HA_Close']].min(axis=1) - df_5m['HA_Low']) > 0.01
+                            df_5m['Has_Upper_Wick'] = (df_5m['HA_High'] - df_5m[['HA_Open', 'HA_Close']].max(axis=1)) > 0.01
+
                             df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
+                            df_5m['Is_Bearish'] = df_5m['HA_Close'] < df_5m['HA_Open']
 
                             if len(df_5m) >= 2:
                                 last_2 = df_5m.tail(2)
                                 ha_2_bullish_no_lower = last_2['Is_Bullish'].all() and last_2['No_Lower_Wick'].all()
+
+                            if len(df_5m) >= 3:
+                                last_idx = len(df_5m) - 1
+                                bull_cond = df_5m['Is_Bullish'].iloc[last_idx] and df_5m['No_Lower_Wick'].iloc[last_idx] and df_5m['Has_Upper_Wick'].iloc[last_idx]
+                                if bull_cond:
+                                    bear_count = 0
+                                    for i in range(last_idx - 1, -1, -1):
+                                        if df_5m['Is_Bearish'].iloc[i] and df_5m['No_Upper_Wick'].iloc[i] and df_5m['Has_Lower_Wick'].iloc[i]:
+                                            bear_count += 1
+                                        else:
+                                            break
+                                    if bear_count >= 2:
+                                        day_amplitude = day_high - day_low
+                                        if day_amplitude > 0:
+                                            deep_sea_threshold = day_low + (day_amplitude * 0.3)
+                                            if exec_curr_p <= deep_sea_threshold:
+                                                ha_v_turn_detected = True
+                                            else:
+                                                logging.debug(f"🚨 [V_AVWAP] HA V-Turn 포착되었으나, 현재가({exec_curr_p})가 심해 임계선({deep_sea_threshold}) 초과로 기각(Bypass).")
 
             except Exception as e:
                 logging.error(f"🚨 [V_AVWAP] 기초자산 HA 및 5분봉 연산 실패: {e}")
@@ -323,7 +367,7 @@ class VAvwapHybridPlugin:
         actual_gap_dollar_apex = day_high - day_low
         actual_gap_pct_apex = (actual_gap_dollar_apex / prev_c) * 100.0 if prev_c > 0 else 0.0
 
-        if is_apex_on: # 🚨 NEW: 정점요격 스위치 바이패스 쉴드 이식
+        if is_apex_on: 
             if day_high > apex_peak_price:
                 apex_peak_price = day_high
                 apex_changed = True
@@ -341,7 +385,6 @@ class VAvwapHybridPlugin:
                     apex_stage_2 = True
                     apex_changed = True
         else:
-            # 스위치 OFF 시 상태 초기화 및 바이패스
             if apex_stage_1 or apex_stage_2 or apex_peak_price > 0.0:
                 apex_stage_1 = False
                 apex_stage_2 = False
@@ -352,7 +395,8 @@ class VAvwapHybridPlugin:
             persistent_state['APEX_STAGE_1'] = apex_stage_1
             persistent_state['APEX_STAGE_2'] = apex_stage_2
             persistent_state['APEX_PEAK_PRICE'] = apex_peak_price
-            self.save_state(exec_ticker, now_est, persistent_state)
+            if not is_simulation:
+                self.save_state(exec_ticker, now_est, persistent_state)
 
         # ---------------------------------------------------------
         # 1. 매도 (보유 중일 때) 로직 - 동적 지터(15:17~15:20) 무조건 덤핑 락온
@@ -363,15 +407,16 @@ class VAvwapHybridPlugin:
             if safe_avg <= 0:
                 return _build_res('SELL', 'CORRUPT_PRICE_EMERGENCY_DUMP', qty=safe_qty, target_price=exec_curr_p)
 
-            # [3-Stage Apex Intercept (정점 요격) 3단계 격발]
-            if is_apex_on and apex_stage_2 and current_5m_is_bearish: # 🚨 NEW: 정점요격 스위치 결속 락온
+            if is_apex_on and apex_stage_2 and current_5m_is_bearish: 
                 persistent_state['shutdown'] = True
-                self.save_state(exec_ticker, now_est, persistent_state)
+                if not is_simulation:
+                    self.save_state(exec_ticker, now_est, persistent_state)
                 return _build_res('SELL', '🎯 정점 요격(Apex Intercept) 팩트 타격 완료', qty=safe_qty, target_price=exec_curr_p)
 
             if curr_time >= time_dynamic_dump:
                 persistent_state["shutdown"] = True
-                self.save_state(exec_ticker, now_est, persistent_state)
+                if not is_simulation:
+                    self.save_state(exec_ticker, now_est, persistent_state)
                 reason_str = f'{time_dynamic_dump.strftime("%H:%M:%S")}_도달_당일교전종료_무조건덤핑'
                 return _build_res('SELL', reason_str, qty=safe_qty, target_price=exec_curr_p)
 
@@ -379,7 +424,8 @@ class VAvwapHybridPlugin:
                 loss_pct = ((safe_avg - exec_curr_p) / safe_avg) * 100.0
                 if loss_pct >= atr5:
                     persistent_state["shutdown"] = True
-                    self.save_state(exec_ticker, now_est, persistent_state)
+                    if not is_simulation:
+                        self.save_state(exec_ticker, now_est, persistent_state)
                     return _build_res('SELL', f'ATR5_동적_하드스탑_피격(-{loss_pct:.2f}%)_당일영구동결', qty=safe_qty, target_price=exec_curr_p)
 
             return _build_res('HOLD', '보유중_관망(동적_지터_덤핑_대기)')
@@ -393,14 +439,13 @@ class VAvwapHybridPlugin:
         if avwap_state.get('shutdown', False) or persistent_state.get('shutdown', False):
              return _build_res('WAIT', '당일영구동결_상태(신규진입금지)')
 
-        # MODIFIED: [V72.20 프리마켓 오프닝 휩소 방어 데드코드 영구 소각]
-
         if not is_regular_session:
             return _build_res('WAIT', '프리마켓_노이즈_원천차단_정규장_개장_대기')
 
         if curr_time >= time_dynamic_dump:
             persistent_state["shutdown"] = True
-            self.save_state(exec_ticker, now_est, persistent_state)
+            if not is_simulation:
+                self.save_state(exec_ticker, now_est, persistent_state)
             reason_str = f'{time_dynamic_dump.strftime("%H:%M:%S")}_도달_신규진입_영구동결'
             return _build_res('SHUTDOWN', reason_str)
 
@@ -415,9 +460,12 @@ class VAvwapHybridPlugin:
         
         rem_relative_pct = ((atr5 - actual_gap_pct) / atr5 * 100.0) if atr5 > 0 else 0.0
 
+        # 🚨 MODIFIED: [V74.05 찐바닥 체력 30% 락다운 절대 방어막 원상 복구]
+        # 어떠한 시그널이 나오더라도 체력이 30% 미만이면 무조건 당일 영구 동결
         if rem_relative_pct < 30.0:
             persistent_state["shutdown"] = True
-            self.save_state(exec_ticker, now_est, persistent_state)
+            if not is_simulation:
+                self.save_state(exec_ticker, now_est, persistent_state)
             return _build_res('SHUTDOWN', 'ATR5_상대체력_30%미만_고갈_당일신규진입_영구동결')
 
         base_day_high = float(kwargs.get('base_day_high', 0.0))
@@ -432,30 +480,33 @@ class VAvwapHybridPlugin:
         ha_latched_bull = persistent_state.get('HA_LATCHED_BULL', False)
         latch_changed = False
 
-        if ha_2_bullish_no_lower:
+        if ha_2_bullish_no_lower or ha_v_turn_detected:
             if not ha_latched_bull:
                 ha_latched_bull = True
                 latch_changed = True
                 
-        if trend_sequence == "BEAR" or rem_relative_pct < 30.0:
+        # 🚨 MODIFIED: [V74.05 시계열 하락 시 래치 해제 방어 (V-Turn은 바이패스)]
+        if (trend_sequence == "BEAR" and not ha_v_turn_detected):
             if ha_latched_bull:
                 ha_latched_bull = False
                 latch_changed = True
 
         if latch_changed:
             persistent_state['HA_LATCHED_BULL'] = ha_latched_bull
-            self.save_state(exec_ticker, now_est, persistent_state)
+            if not is_simulation:
+                self.save_state(exec_ticker, now_est, persistent_state)
 
-        cond2_met = (base_curr_p > base_vwap) and ha_latched_bull
-        cond3_met = True
+        # 🚨 V-Turn 타점 정밀 교정 시 VWAP 락다운 해방 바이패스 락온 유지 (체력 30% 이상일 때만 도달 가능)
+        cond2_met = ((base_curr_p > base_vwap) and ha_latched_bull) or ha_v_turn_detected
+        
+        # 🚨 MODIFIED: [V74.05 체력 30% 조건 원상 복구 (바이패스 불가)]
+        cond3_met = (rem_relative_pct >= 30.0)
 
         cond_seq = True
         if trend_sequence == "BEAR":
             cond_seq = False
-            mid_point = 0.0
-            if day_high > 0 and day_low > 0:
-                mid_point = (day_high + day_low) / 2.0
-            if atr5 > 0 and actual_gap_pct >= (atr5 * 0.5) and exec_curr_p >= mid_point:
+            # 🚨 시계열 하락장은 V-Turn 포착 시 바이패스 허용
+            if ha_v_turn_detected:
                 cond_seq = True
 
         if cond1_met and cond2_met and cond3_met and cond_seq:
@@ -463,7 +514,7 @@ class VAvwapHybridPlugin:
                 safe_budget = avwap_alloc_cash * 0.95
                 buy_qty = int(math.floor(safe_budget / exec_curr_p))
                 if buy_qty > 0:
-                    return _build_res('BUY', 'V47_하이킨아시_배타적갭필터_통과_타격개시', qty=buy_qty, target_price=exec_curr_p)
+                    return _build_res('BUY', 'V자 반등(HA 찐바닥 포착)' if ha_v_turn_detected else '하이킨아시_배타적갭필터_통과_타격개시', qty=buy_qty, target_price=exec_curr_p)
             return _build_res('WAIT', '가용예산부족_대기')
         else:
             fail_reasons = []

@@ -1,16 +1,80 @@
 # ==========================================================
 # FILE: telegram_bot.py
 # ==========================================================
-# (상단 주석 생략...)
-# 🚨 MODIFIED: [V72.06 V-REV 최저가순 매도 타점 통합 및 잭팟 렌더링 대수술]
-# 🚨 MODIFIED: [V72.12 UI 렌더링 팩트 교정 및 LIFO 독립 탈출 미러링]
-# 🚨 MODIFIED: [V72.13 V-REV 1층 독립 및 상위층 총평단가 연동 엑시트 전술 이식]
-# 🚨 MODIFIED: [V72.17 제20경고 준수: V-REV 매수 데드존 구축 및 앵커 최저가 락온]
-# 🚨 MODIFIED: [V72.18 수동 VWAP 경고문 영구 소각 및 UI 팩트 교정]
-# 🚨 MODIFIED: [V72.25 관제탑 새로고침 덮어쓰기(Edit) 단일 뷰포트 락온]
-# 🚨 MODIFIED: [V72.27 0주 새출발 줍줍 생략 레거시 UI 영구 소각]
-# - 0주 새출발 시 1층 확보에 예산을 100% 집중한다는 거짓 텍스트를 영구 소각.
-# - VWAP 50:50 분할 장전 팩트와 UI가 완벽히 일치하도록 시각적 디커플링 해체 완료.
+# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
+# MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 다이렉트 파일 I/O 및 config/ledger 접근 메서 전면 비동기 래핑 완료.
+# MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보] 큐 장부에 존재하지 않는 _load 메서 호출 찌꺼기 100% 소각.
+# MODIFIED: [V54.04 런타임 붕괴(Split-Brain) 근본 원인 팩트 수술]
+# 삼위일체 소각(/reset) 시 V_REV 모드라면 is_active를 False로 끄지 않고 True로 보존하여 '0주 새출발' 상태를 100% 팩트 락온.
+# 모드 스위칭(SET_VER_CONFIRM) 시에도 version과 is_active 플래그가 완벽히 동기화되도록 디커플링 배선 정밀 교정 완료.
+# MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
+# DEL_Q(삭제), CLEAR_Q(초기화), RESET(삼위일체 소각) 격발 시 존재하던 지저분한 다이렉트 파일 I/O(open, json, tempfile) 찌꺼기를 100% 영구 소각하고,
+# QueueLedger의 스레드 세이프(Thread-safe) 코어 메서드(delete_lot, clear_queue)로 직결(Lock-on) 완료.
+# MODIFIED: [V56.00 차세대 AVWAP 실전 암살자 전면 재가동 락온]
+# - Phantom Radar 암살자 제어 메뉴 영구 봉인 락다운 전면 해체.
+# - MODE 라우터 내 AVWAP_WARN, AVWAP_ON, AVWAP_OFF 팩트 제어 로직 100% 복구 완료.
+# MODIFIED: [V59.02 잔재 데드코드 영구 소각] 
+# 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP_SET 라우터 내 TARGET_MANUAL, TARGET_AUTO, EARLY, MULTI 제어 콜백 파이프라인(데드코드)을 전면 철거하고 REFRESH 기능만 보존 완료.
+# MODIFIED: [V59.03 관제탑 진입 배선 복구] 
+# settlement 메뉴에서 '관제탑' 버튼 클릭 시 cmd_avwap을 정상 호출하도록 AVWAP:MENU 라우팅 배선 복구 완료.
+# NEW: [V59.06] VWAP 런타임 엑스레이(Dry-Run) 진단 엔진 라우터 이식 완료 (순수 Read-Only 섀도 연산)
+# MODIFIED: [V60.00 옴니 매트릭스 락다운 데드코드 전면 폐기]
+# XRAY 진단 엔진 내부에서 매수 방아쇠를 강제로 잠그던 옴니 매트릭스 스캔 블록 및 시각적 브리핑 요소를 영구 소각함.
+# MODIFIED: [V61.00 숏(SOXS) 전면 작전 지시서 적용]
+# 1) SET_VER 및 SET_VER_CONFIRM 콜백 내 SOXS 락다운 방어막 텍스트를 시스템 영구 폐기 경고로 오버라이드 완료.
+# 2) TICKER 액션 내 SOXS 경고문 교정 및 '듀얼 모멘텀' 텍스트를 '싱글 모멘텀'으로 팩트 교정 완료.
+# NEW: [AVWAP 수동 개입 엣지 케이스 방어] 수동 매도 후 유령 물량을 0주로 강제 동기화하는 SYNC_ZERO 라우터 신설
+# MODIFIED: [V61.06 런타임 붕괴 방어] MODE 및 INPUT 라우터 내 IndentationError(들여쓰기) 팩트 완벽 교정
+# MODIFIED: [V66.07 오퍼레이션 SSOT - 엑스레이 환각 소각 및 VWAP 최초 명중 타전망 이식]
+# 엑스레이 진단 시 무조건 낡은 인메모리 상태를 강제 폐기(None)하고 최신 JSON 팩트 파일을 로드하도록 배선 교정 완료.
+# NEW: [KIS VWAP 알고리즘 대통합 수술] 수동 VWAP 설정(AUTO/MANUAL) 텔레그램 콜백 라우팅을 전면 소각하고 단일 KIS VWAP 예약 장전 모드로 팩트 락온 완료.
+# MODIFIED: [런타임 즉사 방어] SYNC_ZERO 콜백 라우터 내 IndentationError 팩트 무결점 4배수 교정 완료.
+# MODIFIED: [V71.02 XRAY 엔진 라우팅 영구 소각]
+# KIS 자체 VWAP 알고리즘 위임에 따라 1분 단위 시뮬레이션의 의미가 상실된 런타임 엑스레이(Dry-Run) 진단 콜백 라우터를 전면 적출 완료.
+# MODIFIED: [V71.14 지정가 VWAP 일반주문 역배선 팩트 락온]
+# MODIFIED: [V71.15 V-REV 수동 격발 렌더링 증발(Silent Skip) 버그 수술]
+# MODIFIED: [V71.24 일반주문 VWAP 팩트 롤백 대수술]
+# - KST 기반 지연 격발 엔진, 1시간 단위 타임 시프트(Time-Shift), 타임존 변환 데드코드를 전면 소각 완료.
+# - 코어 엔진이 지시서에 주입해준 EST 시간(152500, 155500)을 일반주문망으로 즉시 직결(Direct Pass)하는 팩트 락온 진공 압축.
+# MODIFIED: [V71.26 KST 타임라인 동적 래핑 수술]
+# - 수동 주문(EXEC) 라우터 내에 폴백(Fallback)으로 방치되어 있던 '152500' 등 EST 하드코딩 찌꺼기를 100% 영구 소각.
+# - 퀀트 엔진이 서머타임을 판독하여 주입한 KST 팩트 시간만을 다이렉트 패스하도록 무결점 역배선 개통 완료.
+# NEW: [V71.28 수동 주문(EXEC) 최신 예산 팩트 스냅샷 강제 갱신 엔진 탑재]
+# MODIFIED: [V71.29 수동 주문 예산 기아(Data Starvation) 맹점 수술]
+# - EXEC 격발 시 텔레그램 내부의 낡은 예산 할당 함수(_calculate_budget_allocation)가 V-REV 예산을 $0.0으로 
+#   강제 오판하여 매수 지시서가 공중 증발하던 치명적 하극상 맹점 원천 차단.
+# - 코어 엔진(scheduler_core)의 get_budget_allocation으로 다이렉트 배선을 교체하여 매수 타점 100% 장전 락온.
+# MODIFIED: [V72.01 V-REV 수동 주문(EXEC) 시각적 디커플링 해체]
+# - 수동 주문 실행 시 V-REV 모드임에도 V14 고유의 '💎' 아이콘이 하드코딩되어 
+#   표출되던 시각적 환각(UI 디커플링) 현상을 모드별 맞춤 아이콘('⚖️' / '💎')으로 100% 팩트 교정 완료.
+# MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
+# - V59/V61 대수술 중 누락되었던 SET_VER, SET_VER_CONFIRM, AVWAP 라우터를 100% 팩트 복구.
+# - 0주 상태에서만 코어 스위칭이 가능하도록 0주 락온(Lock-on) 방어막 완벽 이식.
+# 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 및 유실된 라우터 전면 복구]
+# - 과거 대수술 시 통째로 유실되었던 MODE 액션 라우터와 AVWAP_SET 라우터 100% 원상 복구 완료.
+# - APEX_ON / APEX_OFF 분기망 신설하여 텔레그램 수신 즉시 비동기 래핑으로 config 상태 팩트 제어.
+# - 제자리 메뉴 새로고침(cmd_settlement) 배선 개통으로 시각적 디커플링 원천 차단.
+# 🚨 NEW: [V73.00 UI 렌더링 디커플링 해체]
+# - 텔레그램 시작 화면 및 통합 지시서에 잔존하는 17:05 KST 예약 장전 레거시 텍스트를 15:26 EST 지연 장전으로 팩트 교정하여 시각적 환각을 100퍼센트 해체합니다. (telegram_view 연동)
+# - 수동 주문(EXEC) 시 생성되는 스냅샷 기반 덫 장전 프로세스 무결점 유지.
+# 🚨 NEW: [통합 지시서 수동 매매 취소 버튼 탑재 및 KIS 다이렉트 팩트 취소 라우팅 개통]
+# - CANCEL_EXEC 콜백 라우터를 신설하여 수동 매매 취소 기능을 개통. 
+# - KIS 예약 원장과 일반 미체결 원장을 비동기로 이중 스캔하고 팩트로 파기하여 제1헌법, 제19경고를 100% 완벽하게 준수.
+# 🚨 MODIFIED: [통합 지시서 수동 제어(EXEC/CANCEL) 완벽 스위칭 작전]
+# - CANCEL_EXEC 덫 파기 완료 시(nuked_count > 0), 당일 매매 잠금(REG Lock)을 강제로 해제하도록
+#   cfg.reset_lock_for_ticker를 비동기로 호출하는 무결성 락온 파이프라인 개통 완료.
+# 🚨 MODIFIED: [V75.02 원격 로그 추출 엔진 팩트 교정 및 데이터 증발 수술]
+# - cmd_log 내 Traceback 데이터 증발 방어를 위한 꼬리 캡처(_grep_tail_logs) 무결성 락온
+# 🚨 MODIFIED: [V75.03 관찰자 효과 및 시각적 환각 원천 수술]
+# - get_decision 비동기 래핑 및 is_simulation=True 강제 주입 (제1헌법 준수 및 런타임 오염 차단)
+# - 낡은 10시/15시 텍스트 소각 및 09:30~09:34 캔들 대기 / 지터 덤핑 타임라인 팩트 교정
+# 🚨 MODIFIED: [V75.06 런타임 즉사 방어] 들여쓰기(IndentationError) 팩트 완벽 교정
+# - cmd_sync 내 AVWAP 레이더 스캔 블록의 찌그러진 들여쓰기를 전면 교정하여 런타임 크래시 영구 소각
+# 🚨 MODIFIED: [V75.08 관제탑 새로고침 시각적 깜빡임(Flickering) 영구 소각]
+# - 사용자의 지시에 따라, 새로고침 시 메시지가 로딩 텍스트로 줄어들었다가 다시 팽창하는 깜빡임 현상을 원천 차단.
+# - 중간 렌더링 과정을 생략하고 최신 레이더 텍스트만 제자리에 1회 덮어쓰기(Edit)하는 다이렉트 락온 적용 완료.
+# 🚨 MODIFIED: [V75.05 제20경고 절대 헌법 준수: V-REV 매수 타점 1층 평단가 앵커 락온 및 타점 배수 팩트 교정]
 # ==========================================================
 import logging
 import datetime
@@ -40,10 +104,8 @@ class TelegramController:
         self.strategy = strategy
         self.view = TelegramView()
         self.user_states = {} 
- 
         self.admin_id = self.cfg.get_chat_id()
         self.sync_locks = {} 
-   
         self.tx_lock = tx_lock or asyncio.Lock()
         
         self.queue_ledger = queue_ledger
@@ -146,7 +208,7 @@ class TelegramController:
         
         application.add_handler(CommandHandler("reset", self.cmd_reset))
         application.add_handler(CommandHandler("update", self.cmd_update))
-        
+    
         application.add_handler(CommandHandler("avwap", self.cmd_avwap))
         application.add_handler(CommandHandler("log", self.cmd_log))
         application.add_handler(CommandHandler("error", self.cmd_log))
@@ -177,7 +239,7 @@ class TelegramController:
         elif "스나이퍼" in text:
             return await self.cmd_mode(update, context)
         elif "명예의 전당" in text or "졸업" in text:
-            return await self.cmd_history(update, context)
+             return await self.cmd_history(update, context)
         elif "암살자" in text or "조기" in text or "avwap" in text.lower():
             return await self.cmd_avwap(update, context)
         elif "로그" in text or "에러" in text:
@@ -185,19 +247,19 @@ class TelegramController:
             
         await self.states_handler.handle_message(update, context, self)
 
-    # MODIFIED: [V72.25 관제탑 새로고침 덮어쓰기(Edit) 단일 뷰포트 락온]
     async def cmd_avwap(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._is_admin(update): return
         
         loading_text = "⏳ <b>[AVWAP 듀얼 모멘텀 관제탑]</b>\n레이더망을 가동하여 시장 데이터를 스캔 중..."
         
+        status_msg = None
         if update.callback_query:
+            # 🚨 MODIFIED: [V75.08 시각적 깜빡임 영구 소각]
+            # 새로고침(콜백 쿼리) 시 메시지가 로딩 텍스트로 축소되었다가 다시 확장되는 깜빡임을 막기 위해,
+            # 중간 렌더링 과정을 생략하고 기존 메시지를 유지한 상태에서 팩트 데이터만 수집합니다.
             status_msg = update.callback_query.message
-            try:
-                await status_msg.edit_text(loading_text, parse_mode='HTML')
-            except Exception:
-                pass
         else:
+            # 신규 명령어(/avwap 등)로 진입 시에만 로딩 텍스트 표출
             status_msg = await update.message.reply_text(loading_text, parse_mode='HTML')
             
         try:
@@ -211,7 +273,17 @@ class TelegramController:
                 except Exception: app_data = {}
  
             msg, markup = await asyncio.wait_for(plugin.get_console_message(app_data), timeout=10.0)
-            await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
+            
+            try:
+                # 🚨 MODIFIED: [V75.08 다이렉트 1회 덮어쓰기 락온]
+                # 수집된 최신 팩트 데이터로 메시지를 단 한 번만 다이렉트 교체합니다.
+                await status_msg.edit_text(msg, reply_markup=markup, parse_mode='HTML')
+            except Exception as edit_e:
+                # 시장 데이터가 1초 전과 완전히 동일하여 텍스트가 변하지 않았을 때 
+                # 텔레그램 API가 뱉어내는 Message is not modified 에러를 무시(Bypass)합니다.
+                if "Message is not modified" not in str(edit_e):
+                    raise edit_e
+                    
         except asyncio.TimeoutError:
             logging.error("🚨 AVWAP 관제탑 호출 타임아웃 (네트워크 지연)")
             await status_msg.edit_text("❌ <b>[네트워크 지연 발생]</b>\n야후 파이낸스 또는 증권사 서버 응답이 지연되어 스캔을 강제 종료했습니다. 잠시 후 다시 시도해 주세요.", parse_mode='HTML')
@@ -228,15 +300,15 @@ class TelegramController:
             log_path = f"logs/bot_app_{today_str}.log"
             if not os.path.exists(log_path):
                 return await status_msg.edit_text("📭 <b>[진단 결과]</b> 오늘자 로그 파일이 생성되지 않았습니다.", parse_mode='HTML')
+                
+            # MODIFIED: [V75.02 원격 로그 추출 엔진 팩트 교정 및 데이터 증발 수술]
+            # 파이썬 Traceback의 멀티라인 구조가 훼손되지 않도록 파일의 끝(Tail)에서 100% 추출하여 반환
             def _grep_tail_logs(path, limit=50):
-                keywords = ["ERROR", "CRITICAL", "Traceback", "🚨", "❌", "⚠️"]
-                matched_lines = []
                 with open(path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
-                for line in reversed(lines):
-                        if any(k in line for k in keywords): matched_lines.append(line.strip())
-                        if len(matched_lines) >= limit: break
-                return matched_lines
+                tail_lines = lines[-limit:]
+                return [line.strip() for line in reversed(tail_lines)]
+                
             error_logs = await asyncio.to_thread(_grep_tail_logs, log_path)
             if not error_logs:
                 return await status_msg.edit_text("✅ <b>[진단 결과]</b> 최근 감지된 시스템 결함이 없습니다. 무결점 순항 중!", parse_mode='HTML')
@@ -521,13 +593,13 @@ class TelegramController:
                 half_portion_cash = one_portion_cash * 0.5
             
                 tag = "VWAP" if is_manual_vwap else "LOC"
-                 
+                
                 snap_sells_for_ui = [o for o in cached_snap.get("orders", []) if o.get('side') == 'SELL'] if cached_snap else []
                 if cached_snap and snap_sells_for_ui and logic_qty > 0:
-                    for o in snap_sells_for_ui:
+                     for o in snap_sells_for_ui:
                          desc_label = o.get('desc', '매도').split('(')[0]
                          v_rev_guidance += f" 🔵 {desc_label} ${o['price']:.2f} <b>{o['qty']}주</b> ({tag})\n"
-                        
+                         
                 elif q_list and logic_qty > 0:
                     trigger_l1 = round(l1_price * 1.006, 2)
                     
@@ -545,9 +617,9 @@ class TelegramController:
                     
                     sell_dict = {}
                     if available_l1 > 0 and trigger_l1 > 0:
-                        sell_dict[trigger_l1] = sell_dict.get(trigger_l1, 0) + available_l1
+                         sell_dict[trigger_l1] = sell_dict.get(trigger_l1, 0) + available_l1
                     if available_upper > 0 and trigger_upper > 0:
-                        sell_dict[trigger_upper] = sell_dict.get(trigger_upper, 0) + available_upper
+                         sell_dict[trigger_upper] = sell_dict.get(trigger_upper, 0) + available_upper
                     
                     for price in sorted(sell_dict.keys()):
                         s_qty = sell_dict[price]
@@ -557,18 +629,18 @@ class TelegramController:
                         elif price == trigger_l1:
                             desc_str = "1층탈출"
                         elif price == trigger_upper:
-                            desc_str = "총평단탈출"
+                             desc_str = "총평단탈출"
                         else:
                             desc_str = "잔여탈출"
                         v_rev_guidance += f" 🔵 {desc_str} ${price:.2f} <b>{s_qty}주</b> ({tag})\n"
                 else:
                     v_rev_guidance += " 🔵 매도: 대기 물량 없음 (관망)\n"
                
-                # 🚨 MODIFIED: [V72.17 제20경고 준수: V-REV 매수 데드존 구축 및 앵커 최저가 락온]
-                safe_anchor = min(safe_prev_close, l1_price) if l1_price > 0.0 else safe_prev_close
+                # 🚨 MODIFIED: [V75.05 제20경고 절대 헌법 준수: V-REV 매수 타점 1층 평단가 앵커 락온 및 타점 배수 팩트 교정]
+                safe_anchor = l1_price if l1_price > 0.0 else safe_prev_close
                 if safe_anchor > 0:
-                    b1_price = round(safe_prev_close * 1.15 if is_zero_start_fact else safe_anchor * 0.995, 2)
-                    b2_price = round(safe_prev_close * 0.999 if is_zero_start_fact else safe_anchor * 0.9725, 2)
+                    b1_price = round(safe_prev_close * 1.15 if is_zero_start_fact else safe_anchor * 0.9976, 2)
+                    b2_price = round(safe_prev_close * 0.999 if is_zero_start_fact else safe_anchor * 0.9887, 2)
                     
                     b1_qty = math.floor(half_portion_cash / b1_price) if b1_price > 0 else 0
                     b2_qty = math.floor(half_portion_cash / b2_price) if b2_price > 0 else 0
@@ -616,41 +688,55 @@ class TelegramController:
 
                 if status_code in ["PRE", "REG"] and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
                     try:
-                         df_1min_base = await asyncio.wait_for(asyncio.to_thread(self.broker.get_1min_candles_df, avwap_base_ticker), timeout=3.0)
-                         base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, avwap_base_ticker), timeout=3.0) or 0.0)
-              
-                         if hasattr(self.strategy, 'v_avwap_plugin'):
-                             avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0), "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)}
+                        df_1min_base = await asyncio.wait_for(asyncio.to_thread(self.broker.get_1min_candles_df, avwap_base_ticker), timeout=3.0)
+                        base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, avwap_base_ticker), timeout=3.0) or 0.0)
+                        
+                        if hasattr(self.strategy, 'v_avwap_plugin'):
+                            avwap_state_dict = {"strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0), "cooldown_active": tracking_cache.get(f"AVWAP_COOLDOWN_{t}", False)}
+                            
+                            # 🚨 MODIFIED: [V75.03 관찰자 효과 및 시각적 환각 원천 수술] 비동기 래핑 및 is_simulation=True 주입
+                            is_apex_on = await asyncio.to_thread(getattr(self.cfg, 'get_avwap_apex_mode', lambda x: True), t)
+                            decision = await asyncio.wait_for(
+                                asyncio.to_thread(
+                                    self.strategy.v_avwap_plugin.get_decision,
+                                    base_ticker=avwap_base_ticker, exec_ticker=t,
+                                    base_curr_p=base_curr_p, exec_curr_p=curr,
+                                    df_1min_base=df_1min_base, avwap_qty=avwap_qty,
+                                    now_est=now_est, avwap_state=avwap_state_dict,
+                                    context_data=avwap_ctx,
+                                    is_apex_on=is_apex_on,
+                                    is_simulation=True
+                                ),
+                                timeout=10.0
+                            )
                              
-                             decision = await asyncio.to_thread(
-                                 self.strategy.v_avwap_plugin.get_decision,
-                                 base_ticker=avwap_base_ticker, exec_ticker=t,
-                                 base_curr_p=base_curr_p, exec_curr_p=curr,
-                                 df_1min_base=df_1min_base, avwap_qty=avwap_qty,
-                                 now_est=now_est, avwap_state=avwap_state_dict,
-                                 context_data=avwap_ctx
-                             )
-                              
-                             avwap_base_price = decision.get('base_curr_p', base_curr_p)
-                             avwap_base_vwap = decision.get('vwap', 0.0)
-                             avwap_prev_vwap = decision.get('prev_vwap', 0.0)
-                             avwap_rolling_tp = decision.get('rolling_tp', 0.0)
-                             avwap_gap_pct = decision.get('gap_pct', 0.0)
-                             
-                             if "대기" in avwap_status_txt:
-                                 reason = decision.get('reason', '타점 계산중')
-                                 avwap_status_txt = f"⏳ 대기 ({reason})"
+                            avwap_base_price = decision.get('base_curr_p', base_curr_p)
+                            avwap_base_vwap = decision.get('vwap', 0.0)
+                            avwap_prev_vwap = decision.get('prev_vwap', 0.0)
+                            avwap_rolling_tp = decision.get('rolling_tp', 0.0)
+                            avwap_gap_pct = decision.get('gap_pct', 0.0)
+                            
+                            if "대기" in avwap_status_txt:
+                                reason = decision.get('reason', '타점 계산중')
+                                avwap_status_txt = f"⏳ 대기 ({reason})"
                     except Exception as e:
-                         logging.error(f"🚨 [{t}] AVWAP 실시간 레이더 스캔 타임아웃/에러: {e}")
+                        logging.error(f"🚨 [{t}] AVWAP 실시간 레이더 스캔 타임아웃/에러: {e}")
 
                 if not tracking_cache.get(f"AVWAP_BOUGHT_{t}") and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
                     curr_time = now_est.time()
-                    time_1000 = datetime.time(10, 0)
-                    time_1500 = datetime.time(15, 0)
+                    time_0930 = datetime.time(9, 30)
+                    time_0934 = datetime.time(9, 34, 59)
+                    
+                    dump_jitter_sec = tracking_cache.get(f"AVWAP_DUMP_JITTER_{t}", 0)
+                    base_dump_dt = datetime.datetime.combine(now_est.date(), datetime.time(15, 20)).replace(tzinfo=ZoneInfo('America/New_York'))
+                    dynamic_dump_dt = base_dump_dt - datetime.timedelta(seconds=dump_jitter_sec)
+                    time_dynamic_dump = dynamic_dump_dt.time()
          
-                    if curr_time < time_1000:
-                        avwap_status_txt = "⏳ 10시 장초반 노이즈 대기"
-                    elif curr_time >= time_1500:
+                    if curr_time < time_0930:
+                        avwap_status_txt = "⏳ 프리장 관측 중 (정규장 대기)"
+                    elif time_0930 <= curr_time <= time_0934:
+                        avwap_status_txt = "⏳ 캔들 형성 대기 중"
+                    elif curr_time >= time_dynamic_dump:
                         avwap_status_txt = "⛔ 금일 감시 종료"
 
             upward_sniper_mode_on = await asyncio.to_thread(self.cfg.get_upward_sniper_mode, t)
@@ -737,7 +823,7 @@ class TelegramController:
             if res == "SUCCESS": success_tickers.append(t)
         if success_tickers: 
             async with self.tx_lock:
-                 _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+                _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
             await self.sync_engine._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
         else:
             await status_msg.edit_text("✅ <b>동기화 완료</b> (표시할 진행 중인 장부가 없거나 에러 대기 중입니다)", parse_mode='HTML')

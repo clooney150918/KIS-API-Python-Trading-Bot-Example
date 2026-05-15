@@ -26,6 +26,7 @@
 # 🚨 MODIFIED: [V73.10 확정 정산 16:05 EST 전진 배치 및 10시 락다운 영구 소각]
 # - V-REV 및 V14 코어에서 0주 감지 시 10:00 KST를 기다리지 않고 즉시 스윕 정산 및 
 #   수익금 복리를 집행하도록 now_kst.hour < 10 락다운 분기문을 전면 영구 소각.
+# 🚨 MODIFIED: [V75.05 제20경고 절대 헌법 준수: V-REV 매수 타점 1층 평단가 앵커 락온 및 타점 배수 팩트 교정]
 # ==========================================================
 import logging
 import datetime
@@ -98,10 +99,10 @@ class TelegramSyncEngine:
                     logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 액면분할 조회 타임아웃 (10초 초과), 이번 싱크에서 스킵")
                 
                 if split_ratio > 0.0 and split_date != "":
-                     await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
-                     await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
-                     split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
-                     await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
+                    await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
+                    await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
+                    split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
+                    await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
                  
                 kst = ZoneInfo('Asia/Seoul')
                 now_kst = datetime.datetime.now(kst)
@@ -475,7 +476,7 @@ class TelegramSyncEngine:
                                                 iq = int(float(item.get("qty", 0)))
                                                 q_today_qty += iq
                                                 q_today_amt += iq * float(item.get("price", 0))
-                                              
+                                                
                                         pure_manual_q = b_tot_q - q_today_qty
                                         pure_manual_amt = b_tot_amt - q_today_amt
                                         if pure_manual_q >= missing_qty and pure_manual_q > 0 and pure_manual_amt > 0:
@@ -489,7 +490,7 @@ class TelegramSyncEngine:
                                     "qty": missing_qty,
                                     "price": missing_price,
                                     "exec_id": "MANUAL_SYNC"
-                               })
+                                })
                                 vrev_ledger_qty = tot_q
                                 
                                 try:
@@ -625,7 +626,7 @@ class TelegramSyncEngine:
                                     b_tot_q = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in buy_execs)
                                     if b_tot_q > 0:
                                         real_buy_price = round(b_tot_amt / b_tot_q, 4)
-                                     
+                                        
                                     if real_buy_price == actual_avg:
                                         search_start_dt = (now_kst - datetime.timedelta(days=4)).strftime('%Y%m%d')
                                         past_raw = await asyncio.to_thread(self.broker.get_execution_history, ticker, search_start_dt, query_end_dt)
@@ -638,7 +639,7 @@ class TelegramSyncEngine:
                                                 if b_tot_q > 0:
                                                     real_buy_price = round(b_tot_amt / b_tot_q, 4)
                             except Exception as e:
-                                 logging.error(f"🚨 수동매수 실제 체결단가 역산 중 예외 발생 (기존 평단가 fallback): {e}")
+                                logging.error(f"🚨 수동매수 실제 체결단가 역산 중 예외 발생 (기존 평단가 fallback): {e}")
 
                             if real_buy_price == actual_avg:
                                 old_invested = sum(float(item.get("qty", 0)) * float(item.get("price", 0)) for item in q_data_before)
@@ -686,7 +687,7 @@ class TelegramSyncEngine:
                         except asyncio.TimeoutError:
                             prev_c = 0.0
                             logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 전일 종가 조회 타임아웃 (10초). 0.0으로 대체")
-                 
+                
                         try:
                             new_hist, added_seed = await asyncio.to_thread(self.cfg.archive_graduation, ticker, today_est_str, prev_c)
 

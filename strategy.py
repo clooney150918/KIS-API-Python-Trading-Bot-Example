@@ -23,6 +23,9 @@
 # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재]
 # get_avwap_decision 호출 규격에 is_apex_on 파라미터를 추가하여,
 # 전투 사령부에서 추출한 스위치 상태를 암살자 코어(strategy_v_avwap)로 다이렉트 수혈 배선 개통 완료.
+# 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
+# - get_avwap_decision 호출 규격에 is_simulation 파라미터를 추가하여, 
+#   관제탑 UI 렌더링 시 암살자 코어의 상태(JSON)가 덮어씌워지는 맹점을 원천 차단하는 릴레이 배선 개통.
 # ==========================================================
 import logging
 import pandas as pd
@@ -66,7 +69,7 @@ class InfiniteStrategy:
                 return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
                 
             vwap_price = vol_x_price.sum() / total_vol
-      
+            
             df_temp = pd.DataFrame()
             df_temp['volume'] = df['volume'].astype(float)
             df_temp['vol_x_price'] = vol_x_price
@@ -164,7 +167,7 @@ class InfiniteStrategy:
                 available_cash=available_cash, is_simulation=is_simulation, vwap_status=vwap_status,
                 is_snapshot_mode=is_snapshot_mode
             )
-                
+            
         return plan
 
     def capture_vrev_snapshot(self, ticker, clear_price, avg_price, qty):
@@ -203,10 +206,11 @@ class InfiniteStrategy:
         return self.v_avwap_plugin.fetch_macro_context(base_ticker)
 
     # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재] is_apex_on 파라미터 수혈
-    def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, is_apex_on=True, **kwargs):
+    # 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단] is_simulation 파라미터 릴레이 배선 개통
+    def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, is_apex_on=True, is_simulation=False, **kwargs):
         # MODIFIED: [V60.00] AVWAP 옴니 매트릭스 락다운 필터 100% 영구 소각 완료.
         return self.v_avwap_plugin.get_decision(
             base_ticker=base_ticker, exec_ticker=exec_ticker, base_curr_p=base_curr_p, exec_curr_p=exec_curr_p, 
             base_day_open=base_day_open, avwap_avg_price=avg_price, avwap_qty=qty, avwap_alloc_cash=alloc_cash,
-            context_data=context_data, df_1min_base=df_1min_base, now_est=now_est, avwap_state=avwap_state, is_apex_on=is_apex_on, **kwargs
+            context_data=context_data, df_1min_base=df_1min_base, now_est=now_est, avwap_state=avwap_state, is_apex_on=is_apex_on, is_simulation=is_simulation, **kwargs
         )

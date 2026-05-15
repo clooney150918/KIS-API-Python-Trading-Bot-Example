@@ -2,16 +2,14 @@
 # [plugin_updater.py]
 # ⚠️ 자가 업데이트 및 GCP 데몬 제어 전용 플러그인
 # 💡 깃허브 원격 저장소 강제 동기화 (git fetch & reset --hard)
-# 💡 OS 레벨 데몬 재가동 제어 (sudo systemctl restart)
+# 💡 OS 레벨 데몬 재가동 제어 (sudo systemctl restart) -> os._exit(0) 하드킬로 교체됨
 # 🚨 [V27.00 핫픽스] 사용자별 데몬 이름(DAEMON_NAME) .env 동적 로드 이식 완료
 # 🛡️ [V27.05 추가] 업데이트 직전 stable_backup 폴더로 롤백용 안전띠 결속 기능 탑재
-# 🚨 [V30.06 NEW] 장중 업데이트 레드존(Red-Zone) 원천 차단:
-# VWAP 타임 슬라이싱 및 장마감 정산의 무결성을 위해 
-# EST 14:55 ~ 16:10 사이의 업데이트 및 재가동을 100% 차단함.
 # 🚨 MODIFIED: [V42.16 핫픽스] pytz 영구 적출 및 ZoneInfo 락온 (ModuleNotFoundError 런타임 붕괴 방어)
-# 🚨 MODIFIED: [V44.52 휴일 락다운 해제 수술] 주말(토, 일) 및 휴장일에는 시계(14:55~16:10)를 무시하고 무조건 업데이트를 허용하는 달력 팩트 스캔 엔진(Bypass) 이식 완료.
+# 🚨 MODIFIED: [V44.52 휴일 락다운 해제 수술] 주말(토, 일) 및 휴장일에는 시계를 무시하고 무조건 업데이트를 허용하는 달력 팩트 스캔 엔진(Bypass) 이식 완료.
 # 🚨 MODIFIED: [V44.53 제1헌법 및 16계명 절대 락온] 달력 API(mcal) 스캔을 비동기(to_thread) 래핑하고 5초 타임아웃(Fail-Open)을 강제하여 이벤트 루프 교착(Deadlock) 원천 차단.
 # 🚨 MODIFIED: [V44.55 데몬 셧다운 교착(Zombie) 영구 소각] OS systemctl 의존성 철거 및 하드 킬(Self-Kill) 엔진 이식 완료.
+# 🚨 MODIFIED: [V75.05 레드존 팩트 교정] 제9경고에 따라 불필요한 레드존을 진공 압축하여 15:12 ~ 15:31 EST 구간으로 정밀 락온 완료.
 # ==========================================================
 import logging
 import asyncio
@@ -26,15 +24,14 @@ class SystemUpdater:
         self.remote_branch = "origin/main"
         
         load_dotenv()
-        # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막] systemd 데몬 이름(daemon_name)은 .env 파일이 아닌 OS의 .service 파일 내 Environment 속성에서 다이렉트로 주입받아야 한다. 인프라 샌드박스와 애플리케이션 설정의 혼용을 절대 금지한다.
-        # MODIFIED: [환경변수 스캔 범위 확장] systemd에서 주입한 소문자 daemon_name 우선 조회 및 대문자 폴백 팩트 교정
+        # 🚨 [AI 에이전트 절대 주의] systemd 데몬 이름은 OS의 .service 파일 내 Environment 속성 다이렉트 주입
         self.daemon_name = os.getenv("daemon_name") or os.getenv("DAEMON_NAME", "mybot")
 
     # 🚨 [제1헌법 준수] 동기 I/O 차단을 위해 async 격상
     async def is_update_allowed(self):
         """
         현재 시간이 업데이트 금지 시간대(레드존)인지 검사합니다.
-        기준: 14:55 EST ~ 16:10 EST (VWAP 가동 및 장마감 정산 보호)
+        기준: 15:12 EST ~ 15:31 EST (VWAP 가동 및 장마감 정산 보호)
         """
         # 🚨 MODIFIED: [V42.16] pytz 적출 및 ZoneInfo 이식 완료
         est = ZoneInfo('America/New_York')
@@ -61,11 +58,13 @@ class SystemUpdater:
             logging.debug(f"업데이트 락다운 달력 스캔 에러 (무시하고 시간 검사 진행): {e}")
 
         curr_time = now_est.time()
-        start_lock = datetime.time(14, 55)
-        end_lock = datetime.time(16, 10)
+        
+        # MODIFIED: [V75.05 레드존 진공 압축] 제9경고 반영 15:12 ~ 15:31 팩트 교정
+        start_lock = datetime.time(15, 12)
+        end_lock = datetime.time(15, 31)
         
         if start_lock <= curr_time <= end_lock:
-            return False, "⚠️ <b>[배포 금지]</b> 지금은 VWAP 타격 및 장마감 정산 윈도우입니다. (14:55~16:10 EST 업데이트 강제 차단)"
+            return False, "⚠️ <b>[배포 금지]</b> 지금은 암살자 덤핑 및 본진 덫 장전 디커플링 핵심 윈도우입니다. (15:12~15:31 EST 업데이트 강제 차단)"
         return True, ""
 
     async def _create_safety_backup(self):

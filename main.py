@@ -1,8 +1,8 @@
 # ==========================================================
 # FILE: main.py
 # ==========================================================
-# MODIFIED: [V44.68 콜드 스타트 방어막 전진 배치 및 팩트 교정]
 # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
+# 제1헌법: 파일 I/O 및 달력 API(mcal)는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
 # 제3헌법: KST 타임존 및 is_dst 기반의 동적 스케줄링 전면 소각. 모든 스케줄러 등록 시 ZoneInfo('America/New_York') 기준의 절대 시간으로 하드코딩 락온.
 # MODIFIED: [V44.47 KST 타임 패러독스 영구 소각] APScheduler 잡 등록 배선 EST 100% 락온 완료.
 # NEW: [전역 타임아웃 이식] scheduled_volatility_scan 이벤트 루프 교착 방어 타임아웃 래퍼 적용.
@@ -17,10 +17,13 @@
 # 🚨 NEW: [V73.00 본진 통합 지시서 덫 장전 디커플링 및 자전거래 원천 차단]
 # - 17:05 KST 스케줄을 스냅샷 박제 전용 코루틴(scheduled_snapshot_only)으로 역할 축소.
 # - 암살자 전량 덤핑(15:17~15:20) 이후인 15:26 EST에 실제 덫을 투하하는 코루틴(scheduled_regular_trade_delayed) 신설 락온.
-# - vwap_init_and_cancel 기상 시각을 15:26 EST로 동기화하여 섀도우 관측 궤도 교정 완료.
+# - vwap_init_and_cancel 기상 시각을 15:26 EST로 동기화하여 섀도우 관측 궤 교정 완료.
 # 🚨 MODIFIED: [V73.10 확정 정산 타임라인 16:05 EST 전진 배치]
 # - 애프터마켓 3% 덫 소각에 따라 무의미해진 21:00 EST 가결제 롤오버 대기를 전면 폐기.
 # - 정규장 마감 직후인 16:05 EST에 확정 정산 및 졸업 판별을 즉각 격발하도록 스케줄 및 콜드스타트 타임 윈도우 동기화 락온.
+# 🚨 NEW: [V75.02 글로벌 에러 핸들러 누락 팩트 교정]
+# - 글로벌 에러 핸들러 배선 결속을 통해 PTB 내부 네트워크 타임아웃 및 스케줄러 붕괴 팩트 로깅 완비
+# 🚨 MODIFIED: [V75.03 핫픽스] ContextTypes 임포트 누락으로 인한 런타임 즉사 맹점 100% 수술 완료
 # ==========================================================
 import os
 import logging
@@ -28,7 +31,8 @@ import datetime
 import asyncio
 import math 
 from zoneinfo import ZoneInfo
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, Defaults
+# MODIFIED: [V75.03] ContextTypes 누락 팩트 수혈
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, Defaults, ContextTypes
 from dotenv import load_dotenv
 
 from config import ConfigManager
@@ -94,6 +98,10 @@ logging.basicConfig(
 )
 
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+# NEW: [V75.02] 글로벌 에러 핸들러 탑재 (날것의 에러 및 타임아웃 팩트 소화)
+async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logging.error("🚨 [Global Error] Exception while handling an update:", exc_info=context.error)
 
 async def scheduled_volatility_scan(context):
     try:
@@ -232,6 +240,9 @@ def main():
     
     app.bot_data['app_data'] = app_data
     app.bot_data['bot_controller'] = bot
+
+    # NEW: [V75.02] 글로벌 에러 핸들러 락온
+    app.add_error_handler(global_error_handler)
     
     for cmd, handler in [
         ("start", bot.cmd_start), ("record", bot.cmd_record), ("history", bot.cmd_history), 

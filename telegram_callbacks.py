@@ -53,11 +53,17 @@
 # - 0주 상태에서만 코어 스위칭이 가능하도록 0주 락온(Lock-on) 방어막 완벽 이식.
 # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 및 유실된 라우터 전면 복구]
 # - 과거 대수술 시 통째로 유실되었던 MODE 액션 라우터와 AVWAP_SET 라우터 100% 원상 복구 완료.
-# - APEX_ON / APEX_OFF 분기망을 신설하여 텔레그램 수신 즉시 비동기 래핑으로 config 상태를 팩트 제어.
+# - APEX_ON / APEX_OFF 분기망 신설하여 텔레그램 수신 즉시 비동기 래핑으로 config 상태 팩트 제어.
 # - 제자리 메뉴 새로고침(cmd_settlement) 배선 개통으로 시각적 디커플링 원천 차단.
 # 🚨 NEW: [V73.00 UI 렌더링 디커플링 해체]
 # - 텔레그램 시작 화면 및 통합 지시서에 잔존하는 17:05 KST 예약 장전 레거시 텍스트를 15:26 EST 지연 장전으로 팩트 교정하여 시각적 환각을 100퍼센트 해체합니다. (telegram_view 연동)
 # - 수동 주문(EXEC) 시 생성되는 스냅샷 기반 덫 장전 프로세스 무결점 유지.
+# 🚨 NEW: [통합 지시서 수동 매매 취소 버튼 탑재 및 KIS 다이렉트 팩트 취소 라우팅 개통]
+# - CANCEL_EXEC 콜백 라우터를 신설하여 수동 매매 취소 기능을 개통. 
+# - KIS 예약 원장과 일반 미체결 원장을 비동기로 이중 스캔하고 팩트로 파기하여 제1헌법, 제19경고를 100% 완벽하게 준수.
+# 🚨 MODIFIED: [통합 지시서 수동 제어(EXEC/CANCEL) 완벽 스위칭 작전]
+# - CANCEL_EXEC 덫 파기 완료 시(nuked_count > 0), 당일 매매 잠금(REG Lock)을 강제로 해제하도록
+#   cfg.reset_lock_for_ticker를 비동기로 호출하는 무결성 락온 파이프라인 개통 완료.
 # ==========================================================
 import logging
 import datetime
@@ -102,7 +108,7 @@ class TelegramCallbacks:
                 q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                 vrev_qty = sum(int(float(lot.get('qty', 0))) for lot in q_data if int(float(lot.get('qty', 0))) > 0)
         except Exception:
-             pass
+            pass
 
         return max(kis_qty, v14_qty, vrev_qty)
 
@@ -199,7 +205,6 @@ class TelegramCallbacks:
                     
                     if res.get('rt_cd') == '0':
                         await asyncio.to_thread(self.queue_ledger.pop_lots, ticker, emergency_qty)
-          
                         msg = f"🚨 <b>[{ticker}] 수동 긴급 수혈 (Emergency MOC) 격발 완료!</b>\n"
                         msg += f"▫️ 포트폴리오 매니저의 승인 하에 최근 로트 <b>{emergency_qty}주</b>를 시장가(MOC)로 강제 청산했습니다.\n"
                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
@@ -241,7 +246,6 @@ class TelegramCallbacks:
                          await asyncio.to_thread(self.queue_ledger.delete_lot, ticker, target_date)
                      
                     await query.answer("✅ 지층 삭제 완료. KIS 원장과 동기화합니다.", show_alert=False)
-               
                     if ticker not in self.sync_engine.sync_locks:
                         self.sync_engine.sync_locks[ticker] = asyncio.Lock()
                     if not self.sync_engine.sync_locks[ticker].locked():
@@ -298,7 +302,7 @@ class TelegramCallbacks:
                 await asyncio.to_thread(self.cfg.set_reverse_state, ticker, is_rev_active, 0)
                 
                 await asyncio.to_thread(self.cfg.clear_escrow_cash, ticker)
-            
+             
                 ledger = await asyncio.to_thread(self.cfg.get_ledger)
                 ledger_data = [r for r in ledger if r.get('ticker') != ticker]
                 await asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["LEDGER"], ledger_data)
@@ -310,7 +314,7 @@ class TelegramCallbacks:
                             with open(backup_file, 'r', encoding='utf-8') as f:
                                 b_data = json.load(f)
                             b_data = [r for r in b_data if r.get('ticker') != ticker]
-                       
+                        
                             fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(backup_file) or '.')
                             with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
                                 json.dump(b_data, f_out, ensure_ascii=False, indent=4)
@@ -372,7 +376,7 @@ class TelegramCallbacks:
                         msg, markup = self.view.create_ledger_dashboard(target['ticker'], qty, avg, invested, sold, safe_trades, 0, 0, is_history=True)
                         
                     await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
-              
+             
             elif sub == "LIST":
                 if hasattr(controller, 'cmd_history'):
                     await controller.cmd_history(update, context)
@@ -407,11 +411,11 @@ class TelegramCallbacks:
                         revenue=target_hist['revenue'],
                         end_date=target_hist['end_date']
                     )
-             
+            
                     if img_path and os.path.exists(img_path):
                         with open(img_path, 'rb') as f_out:
                             if img_path.lower().endswith('.gif'):
-                                 await context.bot.send_animation(chat_id=chat_id, animation=f_out)
+                                await context.bot.send_animation(chat_id=chat_id, animation=f_out)
                             else:
                                  await context.bot.send_photo(chat_id=chat_id, photo=f_out)
                         await query.delete_message()
@@ -533,7 +537,7 @@ class TelegramCallbacks:
                         self.broker.send_reservation_order, 
                         t, o['side'], o['qty'], o['price'], o['type']
                     )
-                
+                 
                 is_success = res.get('rt_cd') == '0'
                 err_msg = res.get('msg1', '잔금패스')
                 status_icon = '✅' if is_success else f'❌({err_msg})'
@@ -549,6 +553,80 @@ class TelegramCallbacks:
                 msg += "\n⚠️ <b>일부 필수 주문 실패 (매매 잠금 보류)</b>"
 
             await context.bot.send_message(chat_id, msg, parse_mode='HTML')
+
+        # NEW: [통합 지시서 수동 매매 취소 버튼 탑재 및 KIS 다이렉트 팩트 취소 라우팅 개통]
+        elif action == "CANCEL_EXEC":
+            t = sub
+            await query.answer()
+            await query.edit_message_text(f"🛑 <b>[{t}] 수동 매매(일반/예약 덫) 취소 집행 중...</b>", parse_mode='HTML')
+            
+            nuked_count = 0
+            err_count = 0
+            
+            # 1. 예약 원장 덫 파기 (제19경고 준수)
+            try:
+                est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
+                d_str = est_now.strftime('%Y%m%d')
+                
+                resv_orders = await asyncio.wait_for(
+                    asyncio.to_thread(self.broker.get_reservation_orders, t, d_str, d_str),
+                    timeout=10.0
+                )
+                
+                if resv_orders and isinstance(resv_orders, list):
+                    for req in resv_orders:
+                        odno = req.get('ovrs_rsvn_odno') or req.get('odno')
+                        ord_dt = req.get('rsvn_ord_rcit_dt') or req.get('ord_dt', d_str)
+                        if odno:
+                            try:
+                                await asyncio.to_thread(self.broker.cancel_reservation_order, ord_dt, odno)
+                                nuked_count += 1
+                                await asyncio.sleep(0.2)
+                            except Exception as e:
+                                logging.error(f"🚨 [{t}] 수동 예약 덫 취소 실패: {e}")
+                                err_count += 1
+            except asyncio.TimeoutError:
+                logging.error(f"🚨 [{t}] 예약 덫 스캔 타임아웃")
+                err_count += 1
+            except Exception as e:
+                logging.error(f"🚨 [{t}] 예약 덫 스캔 에러: {e}")
+                err_count += 1
+
+            # 2. 일반 미체결 덫 파기
+            try:
+                unfilled = await asyncio.wait_for(
+                    asyncio.to_thread(self.broker.get_unfilled_orders_detail, t),
+                    timeout=10.0
+                )
+                if unfilled and isinstance(unfilled, list):
+                    for uo in unfilled:
+                        u_odno = uo.get('odno')
+                        if u_odno:
+                            try:
+                                await asyncio.to_thread(self.broker.cancel_order, t, u_odno)
+                                nuked_count += 1
+                                await asyncio.sleep(0.2)
+                            except Exception as e:
+                                logging.error(f"🚨 [{t}] 수동 일반 덫 취소 실패: {e}")
+                                err_count += 1
+            except asyncio.TimeoutError:
+                logging.error(f"🚨 [{t}] 일반 덫 스캔 타임아웃")
+                err_count += 1
+            except Exception as e:
+                logging.error(f"🚨 [{t}] 일반 덫 스캔 에러: {e}")
+                err_count += 1
+
+            # 🚨 MODIFIED: [통합 지시서 수동 제어(EXEC/CANCEL) 완벽 스위칭 작전]
+            if nuked_count > 0:
+                await asyncio.to_thread(self.cfg.reset_lock_for_ticker, t)
+
+            # 결과 타전
+            if err_count > 0:
+                await context.bot.send_message(chat_id, f"⚠️ <b>[{t}] 수동 취소 완료 (일부 오류 발생)</b>\n▫️ 총 <b>{nuked_count}건</b>의 덫을 파기하고 매매 잠금을 해제했으나, {err_count}건의 오류가 발생했습니다.", parse_mode='HTML')
+            elif nuked_count > 0:
+                await context.bot.send_message(chat_id, f"🛑 <b>[{t}] 수동 취소 팩트 집행 완료</b>\n▫️ 총 <b>{nuked_count}건</b>의 미체결 및 예약 덫을 100% 파기(Nuke)하고 당일 매매 잠금을 <b>해제(Unlock)</b>했습니다.", parse_mode='HTML')
+            else:
+                await context.bot.send_message(chat_id, f"ℹ️ <b>[{t}] 수동 취소 결과</b>\n▫️ 취소할 덫이 없습니다.", parse_mode='HTML')
 
         # 🚨 MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
         # V59/V61 대수술 중 누락되었던 SET_VER 라우터 100% 팩트 복원
@@ -574,6 +652,7 @@ class TelegramCallbacks:
                 msg, markup = self.view.get_v14_mode_selection_menu(ticker)
             else:
                 return
+             
             await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
         # 🚨 MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
@@ -581,7 +660,7 @@ class TelegramCallbacks:
         elif action == "SET_VER_CONFIRM":
             await query.answer()
             ticker = data[2]
-            
+             
             if sub == "V_REV":
                 await asyncio.to_thread(self.cfg.set_version, ticker, "V_REV")
                 await asyncio.to_thread(self.cfg.set_reverse_state, ticker, True, 0, 0.0)
@@ -718,7 +797,7 @@ class TelegramCallbacks:
             await query.answer()
             ticker = data[2]
             controller.user_states[chat_id] = f"CONF_{sub}_{ticker}"
-          
+           
             if sub == "SPLIT":
                 ko_name = "분할 횟수"
             elif sub == "TARGET":
@@ -734,4 +813,3 @@ class TelegramCallbacks:
             
             desc = "숫자만 입력하세요.\n(예: 액면분할 시 1주가 10주가 되었다면 10 입력, 10주가 1주로 병합되었다면 0.1 입력)" if sub == "STOCK_SPLIT" else "숫자만 입력하세요."
             await context.bot.send_message(chat_id, f"✏️ <b>[{ticker}] {ko_name}</b>를 설정합니다.\n{desc}", parse_mode='HTML')
-

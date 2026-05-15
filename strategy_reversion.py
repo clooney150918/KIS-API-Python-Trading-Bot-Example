@@ -41,6 +41,9 @@
 # 🚨 NEW: [V73.00 KIS VWAP 덫 장전 타임라인 디커플링 및 자전거래 원천 차단]
 # - KIS 서버로 전송되는 VWAP 시간 파라미터의 타겟 시각을 15:26:00 및 15:56:00 EST로 팩트 교정 완료.
 # - 암살자 전량 덤핑이 완료된 이후에 덫을 투하하여 자전거래를 수학적으로 영구 차단하는 디커플링 락온.
+# 🚨 MODIFIED: [V75.04 KIS 지정가 VWAP 알고리즘 예약 거절 엣지 케이스 완벽 수술 (3-Min Jitter Dynamic Shift)]
+# - START_TIME을 max(15:26:00 EST, 현재 시각 + 3분) 공식으로 산출하여 지터(Jitter) 대기나 수동 지연으로 인한 시간 역전 패러독스 원천 차단.
+# 🚨 MODIFIED: [V75.05 제20경고 절대 헌법 준수: V-REV 매수 타점 1층 평단가 앵커 락온 및 타점 배수 팩트 교정]
 # ==========================================================
 import math
 import os
@@ -90,7 +93,7 @@ class ReversionStrategy:
                     return
             except Exception:
                 pass
-                  
+                   
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
@@ -179,7 +182,7 @@ class ReversionStrategy:
         
         if pure_qty != legacy_q:
             logging.warning(f"⚠️ [{ticker}] V-REV 페일세이프 경고: KIS 순수 본대 수량({pure_qty}주)과 이월 큐 장부 수량({legacy_q}주) 불일치 감지. CALIB 비파괴 보정 또는 수동 동기화 요망.")
-            
+        
         logging.warning(f"🚨 [{ticker}] V_REV 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (KIS총잔고:{total_kis_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주 | 이월 큐 장부:{legacy_q}주)")
         
         return self.get_dynamic_plan(
@@ -258,10 +261,10 @@ class ReversionStrategy:
             p2_trigger = round(prev_c * 0.999, 2)
         else:
             side = "SELL" if curr_p > prev_c else "BUY"
-            # 🚨 MODIFIED: [V72.17 제20경고 준수: V-REV 매수 데드존 구축 및 앵커 최저가 락온]
-            safe_anchor = min(prev_c, l1_price) if l1_price > 0.0 else prev_c
-            p1_trigger = round(safe_anchor * 0.995, 2)
-            p2_trigger = round(safe_anchor * 0.9725, 2)
+            # 🚨 MODIFIED: [V75.05 제20경고 절대 헌법 준수: V-REV 매수 타점 1층 평단가 앵커 락온 및 타점 배수 팩트 교정]
+            safe_anchor = l1_price if l1_price > 0.0 else prev_c
+            p1_trigger = round(safe_anchor * 0.9976, 2)
+            p2_trigger = round(safe_anchor * 0.9887, 2)
 
         # 🚨 MODIFIED: [V72.24 자전거래(Wash Sale) 락온 방어막 복구]
         # p1_trigger와 p2_trigger 결정 직후 최소 매도가(min_sell)를 도출하여 자전거래 원천 차단
@@ -300,13 +303,19 @@ class ReversionStrategy:
             q1 = math.floor(b1_budget / p1_trigger) if p1_trigger > 0 else 0
             q2 = math.floor(b2_budget / p2_trigger) if p2_trigger > 0 else 0
             
-            # 🚨 MODIFIED: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
+            # 🚨 MODIFIED: [V75.04 KIS VWAP 3-Min 지터 동적 시프트(Shift) 및 KST 래핑 락온]
             est_zone = ZoneInfo('America/New_York')
             kst_zone = ZoneInfo('Asia/Seoul')
             now_est = datetime.now(est_zone)
             
-            start_dt_kst = now_est.replace(hour=15, minute=26, second=0).astimezone(kst_zone)
-            end_dt_kst = now_est.replace(hour=15, minute=56, second=0).astimezone(kst_zone)
+            base_start_est = now_est.replace(hour=15, minute=26, second=0, microsecond=0)
+            shifted_start_est = now_est + timedelta(minutes=3)
+            actual_start_est = max(base_start_est, shifted_start_est)
+            
+            base_end_est = now_est.replace(hour=15, minute=56, second=0, microsecond=0)
+            
+            start_dt_kst = actual_start_est.astimezone(kst_zone)
+            end_dt_kst = base_end_est.astimezone(kst_zone)
             
             start_t = start_dt_kst.strftime("%H%M%S")
             end_t = end_dt_kst.strftime("%H%M%S")
@@ -321,13 +330,19 @@ class ReversionStrategy:
                 orders.append({"side": "BUY", "qty": q2, "price": p2_trigger, "type": ord_type, "start_time": start_t if ord_type == "VWAP" else None, "end_time": end_t if ord_type == "VWAP" else None, "desc": desc_str})
         
         if rem_qty_total > 0:
-            # 🚨 MODIFIED: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
+            # 🚨 MODIFIED: [V75.04 KIS VWAP 3-Min 지터 동적 시프트(Shift) 및 KST 래핑 락온]
             est_zone = ZoneInfo('America/New_York')
             kst_zone = ZoneInfo('Asia/Seoul')
             now_est = datetime.now(est_zone)
             
-            start_dt_kst = now_est.replace(hour=15, minute=26, second=0).astimezone(kst_zone)
-            end_dt_kst = now_est.replace(hour=15, minute=56, second=0).astimezone(kst_zone)
+            base_start_est = now_est.replace(hour=15, minute=26, second=0, microsecond=0)
+            shifted_start_est = now_est + timedelta(minutes=3)
+            actual_start_est = max(base_start_est, shifted_start_est)
+            
+            base_end_est = now_est.replace(hour=15, minute=56, second=0, microsecond=0)
+            
+            start_dt_kst = actual_start_est.astimezone(kst_zone)
+            end_dt_kst = base_end_est.astimezone(kst_zone)
             
             start_t = start_dt_kst.strftime("%H%M%S")
             end_t = end_dt_kst.strftime("%H%M%S")
@@ -337,7 +352,7 @@ class ReversionStrategy:
                 sell_dict[trigger_l1] = sell_dict.get(trigger_l1, 0) + available_l1
             if available_upper > 0 and trigger_upper > 0:
                 sell_dict[trigger_upper] = sell_dict.get(trigger_upper, 0) + available_upper
-                 
+                
             for price in sorted(sell_dict.keys()):
                 s_qty = sell_dict[price]
                 ord_type = "VWAP" if s_qty >= 10 else "LOC"
