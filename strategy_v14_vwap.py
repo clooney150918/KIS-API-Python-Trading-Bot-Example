@@ -1,20 +1,11 @@
 # ==========================================================
 # FILE: strategy_v14_vwap.py
 # ==========================================================
-# 🚨 MODIFIED: [V72.04 후반전 별값 매수 예산 통합 락온]
-# - 후반전(T >= 분할/2) 진입 시 동일한 가격(별값)임에도 50:50으로 예산을 쪼개어
-#   VWAP 최소 수량(10주) 요건을 스스로 박탈하던 기계적 분할 맹점 원천 차단.
-# - 단일 가격 타격 시에는 예산을 100% 단일 버킷으로 통합하여 VWAP 격발 확률을 극대화함.
-# 🚨 MODIFIED: [V72.19 VWAP 알고리즘 타임라인 EST 절대 락온]
-# - get_plan 내부의 start_t, end_t 산출 시 서머타임 분기 연산(KST 역산)을 전면 적출하고
-#   KIS 서버 요구 스펙에 맞춰 152500과 155500으로 EST 절대 락온
-# 🚨 MODIFIED: [V72.25 KST 타임라인 동적 래핑 수술]
-# - KIS 서버 리젝 방어를 위해 EST 기반 팩트 타겟을 런타임에 KST로 동적 변환하여 주입하도록 아키텍처 수술 완료.
-# 🚨 NEW: [V73.00 KIS VWAP 덫 장전 타임라인 동적 래핑 수술 (15:26/15:56 락온)]
-# - KIS 서버로 전송되는 VWAP 시간 파라미터의 타겟 시각을 15:26:00 및 15:56:00 EST로 팩트 교정 완료.
-# - 암살자 전량 덤핑이 완료된 이후에 덫을 투하하여 자전거래를 수학적으로 영구 차단하는 디커플링 락온.
-# 🚨 MODIFIED: [V75.04 KIS 지정가 VWAP 알고리즘 예약 거절 엣지 케이스 완벽 수술 (3-Min Jitter Dynamic Shift)]
-# - START_TIME을 max(15:26:00 EST, 현재 시각 + 3분) 공식으로 산출하여 지터(Jitter) 대기나 수동 지연으로 인한 시간 역전 패러독스 원천 차단.
+# (상단 주석 생략...)
+# 🚨 MODIFIED: [V75.11 예산 증발 데이터 기아(Amnesia) 완벽 수술]
+# - 상태 파일(_load_state_if_needed)에서 날짜(date) 비교가 누락되어 어제의 예산 지출(BUY_BUDGET)이 
+#   오늘로 강제 이월(Carry-over)되는 치명적 하극상 원천 차단.
+# - 날짜가 일치할 때만 잔차를 로드하고, 다르면 0.0으로 팩트 초기화하도록 멱등성 락온.
 # ==========================================================
 import math
 import logging
@@ -47,6 +38,7 @@ class V14VwapStrategy:
         today_str = self._get_logical_date_str()
         return f"data/daily_snapshot_V14VWAP_{today_str}_{ticker}.json"
 
+    # 🚨 MODIFIED: [V75.11 예산 증발 기억상실 맹점 완벽 수술]
     def _load_state_if_needed(self, ticker):
         today_str = self._get_logical_date_str()
         if self.state_loaded.get(ticker) == today_str:
@@ -57,17 +49,20 @@ class V14VwapStrategy:
             try:
                 with open(state_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    for k in self.executed.keys():
-                        raw_val = data.get("executed", {}).get(k, 0)
-                        self.executed[k][ticker] = int(raw_val) if k == "SELL_QTY" else float(raw_val)
-                    self.state_loaded[ticker] = today_str
-                    return
+                    # 🚨 팩트 스캔: 날짜가 같을 때만 예산 복원
+                    if data.get("date") == today_str:
+                        for k in self.executed.keys():
+                            raw_val = data.get("executed", {}).get(k, 0)
+                            self.executed[k][ticker] = int(raw_val) if k == "SELL_QTY" else float(raw_val)
+                        self.state_loaded[ticker] = today_str
+                        return
             except Exception:
                 pass
                   
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
+        self._save_state(ticker) # 🚨 초기화 저장 강제 락온
 
     def _save_state(self, ticker):
         today_str = self._get_logical_date_str()
@@ -237,6 +232,9 @@ class V14VwapStrategy:
             q1 = math.floor(b1_budget / p_buy) if p_buy > 0 else 0
             q2 = math.floor(b2_budget / p_buy) if p_buy > 0 else 0
             
+            if q1 == 0 and q2 == 0 and p_buy > 0 and dynamic_budget >= p_buy:
+                q1 = int(math.floor(dynamic_budget / p_buy))
+            
             if q1 > 0: 
                 o_type = "VWAP" if q1 >= 10 else "LOC"
                 desc = f"🆕새출발1({o_type})"
@@ -254,6 +252,12 @@ class V14VwapStrategy:
                 q_avg = math.floor(b1_budget / p_avg) if p_avg > 0 else 0
                 q_star = math.floor(b2_budget / buy_star_price) if buy_star_price > 0 else 0
                  
+                if q_avg == 0 and q_star == 0:
+                    if p_avg > 0 and dynamic_budget >= p_avg: q_avg = math.floor(dynamic_budget / p_avg)
+                    elif buy_star_price > 0 and dynamic_budget >= buy_star_price: q_star = math.floor(dynamic_budget / buy_star_price)
+                elif q_avg == 0 and q_star > 0: q_star = math.floor(dynamic_budget / buy_star_price) if buy_star_price > 0 else 0
+                elif q_star == 0 and q_avg > 0: q_avg = math.floor(dynamic_budget / p_avg) if p_avg > 0 else 0
+                 
                 if q_avg > 0: 
                     o_type = "VWAP" if q_avg >= 10 else "LOC"
                     desc = f"⚓평단매수({o_type})"
@@ -263,7 +267,6 @@ class V14VwapStrategy:
                     desc = f"💫별값매수({o_type})"
                     core_orders.append({"side": "BUY", "price": buy_star_price, "qty": q_star, "type": o_type, "start_time": start_t if o_type == "VWAP" else None, "end_time": end_t if o_type == "VWAP" else None, "desc": desc})
             else:
-                # 🚨 MODIFIED: [V72.04] 후반전 별값 매수 예산 통합 락온
                 q_total = math.floor(dynamic_budget / buy_star_price) if buy_star_price > 0 else 0
                 if q_total > 0: 
                     o_type = "VWAP" if q_total >= 10 else "LOC"

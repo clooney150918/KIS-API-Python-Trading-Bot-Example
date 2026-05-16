@@ -11,13 +11,12 @@
 # 🚨 NEW: [3-Stage Apex Intercept (정점 요격) 전술 상태 렌더링 이식]
 # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 UI 연동]
 # 🚨 NEW: [V74.00 Operation HA V-Turn Intercept UI 디커플링 해체]
-# 🚨 MODIFIED: [V74.02 HA V-Turn 1양봉 격발 및 꼬리 스캔 팩트 동기화]
-# 🚨 NEW: [V74.04 심해 고도 필터(Deep-Sea Altitude Filter) UI 락온 및 스코프 전진 배치]
-# 🚨 MODIFIED: [V74.05 찐바닥 체력 30% 락다운 바이패스 소각 및 UI 원상 복구]
-# - 5년 장기 백테스트 결과에 따라 체력 30% 미만 시 셧다운을 절대 준수하도록 교정됨.
-# - 관제탑 UI 렌더링에서도 체력 30% 미만 시 V-Turn 포착 여부와 무관하게 
-#   무조건 🔴(미달)로 표출되도록 V65.00의 절대 헌법 UI로 100% 원상 복구 완료.
-# - V-Turn 시그널은 시계열 하락세 및 HA 모멘텀 부재만 바이패스(Bypass)합니다.
+# 🚨 MODIFIED: [V75.01 HA V-Turn 정밀 꼬리 파서 교체 및 심해 필터 전면 소각]
+# - 코어 엔진에 맞춰 '윗꼬리 없는 음봉 3연속 ➔ HA 양봉(꼬리 무관)' 패턴으로 렌더링 엔진 격상.
+# - 진입 고도 무관 요격을 위해 관제탑에 표출되던 심해 고도 필터 텍스트(UI) 전면 철거 완료.
+# 🚨 MODIFIED: [V75.01 찐바닥 체력 30% 락다운 절대 방어막 원상 복구 및 UI 디커플링 해체]
+# - V-Turn 포착 시 체력 30% 미만이어도 🟢로 표출되던 바이패스(Bypass) 렌더링을 영구 소각.
+# - 체력 30% 미만 시 무조건 🔴(조건 미달)로 표출되도록 절대 헌법 원상 복구.
 # 🚨 MODIFIED: [V75.02 관제탑 런타임 붕괴 및 시각적 환각 완벽 수술]
 # - get_decision 비동기 래핑 및 is_simulation=True 주입 (제1헌법 및 관찰자 효과 차단)
 # - 낡은 10시/15시 텍스트 소각 및 09:30~09:34 캔들 대기 / 지터 덤핑 타임라인 팩트 교정
@@ -49,7 +48,6 @@ class AvwapConsolePlugin:
         time_0930 = datetime.time(9, 30)
         is_regular_session = curr_time >= time_0930
         
-        # MODIFIED: [V75.05 텍스트 다이어트 팩트 교정] 프리장/정규장 꼬리표 (hl_label) 변수 소각
         if not is_regular_session:
             header_status = "🌅 <b>[ 프리마켓 관측 모드 (정규장 대기 중) ]</b>"
         else:
@@ -170,8 +168,6 @@ class AvwapConsolePlugin:
 
                                 df_5m['No_Lower_Wick'] = (df_5m[['HA_Open', 'HA_Close']].min(axis=1) - df_5m['HA_Low']) <= 0.01
                                 df_5m['No_Upper_Wick'] = (df_5m['HA_High'] - df_5m[['HA_Open', 'HA_Close']].max(axis=1)) <= 0.01
-                                df_5m['Has_Lower_Wick'] = (df_5m[['HA_Open', 'HA_Close']].min(axis=1) - df_5m['HA_Low']) > 0.01
-                                df_5m['Has_Upper_Wick'] = (df_5m['HA_High'] - df_5m[['HA_Open', 'HA_Close']].max(axis=1)) > 0.01
 
                                 df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
                                 df_5m['Is_Bearish'] = df_5m['HA_Close'] < df_5m['HA_Open']
@@ -180,17 +176,18 @@ class AvwapConsolePlugin:
                                     last_2 = df_5m.tail(2)
                                     ha_2_bullish_no_lower = last_2['Is_Bullish'].all() and last_2['No_Lower_Wick'].all()
 
-                                if len(df_5m) >= 3:
+                                # 🚨 MODIFIED: [V75.01 윗꼬리 없는 음봉 3연속 ➔ HA 양봉(꼬리 무관) 1개 포착]
+                                if len(df_5m) >= 4:
                                     last_idx = len(df_5m) - 1
-                                    bull_cond = df_5m['Is_Bullish'].iloc[last_idx] and df_5m['No_Lower_Wick'].iloc[last_idx] and df_5m['Has_Upper_Wick'].iloc[last_idx]
+                                    bull_cond = df_5m['Is_Bullish'].iloc[last_idx]
                                     if bull_cond:
                                         bear_count = 0
                                         for i in range(last_idx - 1, -1, -1):
-                                            if df_5m['Is_Bearish'].iloc[i] and df_5m['No_Upper_Wick'].iloc[i] and df_5m['Has_Lower_Wick'].iloc[i]:
+                                            if df_5m['Is_Bearish'].iloc[i] and df_5m['No_Upper_Wick'].iloc[i]:
                                                 bear_count += 1
                                             else:
                                                 break
-                                        if bear_count >= 2:
+                                        if bear_count >= 3:
                                             ha_v_turn_candidate = True
 
                                 last_ha = df_5m.iloc[-1]
@@ -219,7 +216,6 @@ class AvwapConsolePlugin:
         if base_prev_c > 0 and base_day_high > 0 and base_day_low > 0:
             b_high_pct = ((base_day_high - base_prev_c) / base_prev_c) * 100
             b_low_pct = ((base_day_low - base_prev_c) / base_prev_c) * 100
-            # MODIFIED: [V75.05 텍스트 다이어트 팩트 교정] 프리장/정규장 텍스트 소각
             msg += f"▫️ 고가: <b>${base_day_high:.2f}</b> ({b_high_pct:+.2f}%)\n"
             msg += f"▫️ 저가: <b>${base_day_low:.2f}</b> ({b_low_pct:+.2f}%)\n"
             msg += f"▫️ 현재가(1T 종가): <b>${base_curr_p:.2f}</b>\n"
@@ -227,13 +223,11 @@ class AvwapConsolePlugin:
         if base_prev_vwap > 0:
             msg += f"▫️ 전일 VWAP: <b>${base_prev_vwap:,.2f}</b>\n"
             rt_gap = ((base_curr_vwap - base_prev_vwap) / base_prev_vwap) * 100
-            # MODIFIED: [V75.05 텍스트 다이어트 팩트 교정] 프리장/정규장 텍스트 소각
             msg += f"▫️ 당일 VWAP: <b>${base_curr_vwap:,.2f}</b> ({rt_gap:+.2f}%)\n"
             if avg_vwap_5m > 0 and base_curr_vwap > 0:
                 avg_5m_gap = ((avg_vwap_5m - base_curr_vwap) / base_curr_vwap) * 100
                 msg += f"▫️ 5분 평균 VWAP: <b>${avg_vwap_5m:,.2f}</b> ({avg_5m_gap:+.2f}%)\n"
         else:
-            # MODIFIED: [V75.05 텍스트 다이어트 팩트 교정] 프리장/정규장 텍스트 소각
             msg += f"▫️ 당일 VWAP: <b>${base_curr_vwap:,.2f}</b>\n"
             if avg_vwap_5m > 0:
                 msg += f"▫️ 5분 평균 VWAP: <b>${avg_vwap_5m:,.2f}</b>\n"
@@ -294,19 +288,8 @@ class AvwapConsolePlugin:
             day_high = float(day_high) if day_high else curr_p
             day_low = float(day_low) if day_low else curr_p
             
-            day_amplitude = 0.0
-            deep_sea_threshold = 0.0
-            is_deep_sea = False
             ha_v_turn_detected = False
-
-            if day_high > 0 and day_low > 0:
-                day_amplitude = day_high - day_low
-                if day_amplitude > 0:
-                    deep_sea_threshold = day_low + (day_amplitude * 0.3)
-                    if curr_p <= deep_sea_threshold:
-                        is_deep_sea = True
-
-            if ha_v_turn_candidate and is_deep_sea:
+            if ha_v_turn_candidate:
                 ha_v_turn_detected = True
             
             avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
@@ -362,7 +345,7 @@ class AvwapConsolePlugin:
                 else:
                     seq_text = "하락세(Time_High&lt;Time_Low)"
         
-            # 🚨 MODIFIED: [V74.05 찐바닥 체력 30% 락다운 바이패스 소각] 
+            # 🚨 MODIFIED: [V75.01 체력 30% 절대 락온 팩트 렌더링 롤백]
             c1_str = "🟢" if cond1_met else "🔴"
             c2_str = "🟢" if cond2_met else "🔴"
             c3_str = "🟢" if rem_relative_pct >= 30.0 else "🔴"
@@ -379,7 +362,6 @@ class AvwapConsolePlugin:
             else:
                 trend_str = "⚠️ 데이터 수집 대기 중"
 
-            # 🚨 MODIFIED: [V74.05 체력 30% 바이패스 소각 원상 복구]
             c3_text = f"상대 잔여 체력 30% 이상 (현재: {rem_relative_pct:.1f}%)"
 
             msg += f"▫️ 판별 기준: <code>{criteria}</code>\n"
@@ -432,7 +414,6 @@ class AvwapConsolePlugin:
                     pos = min(5, max(0, math.ceil(exh / 20.0)))
                     return "━" * pos + "🎯" + "━" * (5 - pos)
 
-                # MODIFIED: [V75.05 텍스트 다이어트 팩트 교정] 프리장/정규장 텍스트 소각
                 msg += f"\n📊 <b>[ {t} 당일 체력 정밀 분석 ]</b>\n"
                 msg += f"▫️ 전일 종가: <b>${prev_c:.2f}</b> (베이스라인)\n"
                 msg += f"▫️ 고가: <b>${day_high:.2f}</b> ({high_pct:+.2f}%/<b>+{high_rebound_pct:.2f}%</b>)\n"
@@ -450,16 +431,7 @@ class AvwapConsolePlugin:
                 msg += f"▫️ 잔여 체력: <b>{rem_relative_str}</b>\n"
                 msg += f"   [0%] {make_bar(exh_5)} [100%]\n"
                 msg += f"               <b>({exh_5:.0f}% 소진 / 고가 기준)</b>\n\n"
-                
-                # 🚨 NEW: [V74.04 심해 고도 필터 렌더링 이식]
-                msg += f"🌊 <b>심해 고도 (Bottom 30% 찐바닥 락온)</b>\n"
-                msg += f"▫️ 심해 임계선: <b>${deep_sea_threshold:.2f}</b> (당일 진폭 ${day_amplitude:.2f})\n"
-                if is_deep_sea:
-                    msg += f"▫️ 현재가 위치: <b>🟢 심해 통과 (조건 충족)</b>\n"
-                else:
-                    msg += f"▫️ 현재가 위치: <b>🔴 고도 초과 (노이즈 바이패스)</b>\n"
 
-            # MODIFIED: [V75.02 낡은 10:00 / 15:00 하드코딩 텍스트 영구 소각 및 팩트 교정]
             if not tracking_cache.get(f"AVWAP_BOUGHT_{t}") and not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
                 curr_time = now_est.time()
                 time_0930 = datetime.time(9, 30)
@@ -486,7 +458,6 @@ class AvwapConsolePlugin:
             else:
                 try:
                     avwap_state_dict = {"strikes": strikes}
-                    # MODIFIED: [V75.02 제1헌법 준수 및 관찰자 효과 차단] 비동기 래핑 및 is_simulation=True 강제 주입
                     decision = await asyncio.wait_for(
                         asyncio.to_thread(
                             self.strategy.v_avwap_plugin.get_decision,
@@ -527,7 +498,7 @@ class AvwapConsolePlugin:
                 except Exception as e:
                     logging.debug(f"AVWAP 상태 텍스트 추출 에러: {e}")
 
-            msg += f"\n▫️ 상태: <b>{status_txt}</b>\n"
+            msg += f"▫️ 상태: <b>{status_txt}</b>\n"
             
             if avwap_qty > 0:
                 keyboard.append([InlineKeyboardButton(f"🧯 {t} 암살자 수동 청산 (0주 락온)", callback_data=f"AVWAP_SET:SYNC_ZERO:{t}")])

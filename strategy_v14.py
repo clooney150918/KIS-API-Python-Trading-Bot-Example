@@ -5,6 +5,9 @@
 # 🚨 MODIFIED: [V72.04 후반전 별값 매수 예산 통합 락온]
 # - 후반전(T >= 분할/2) 진입 시 동일한 가격(별값)임에도 50:50으로 예산을 쪼개는 로직을 철거함.
 # - 단일 가격 타격 시에는 예산을 100% 통합 버킷으로 묶어 KIS 10주 제약을 회피.
+# 🚨 MODIFIED: [V75.08 예산 영구 고갈 및 매수 증발 맹점 완벽 수술]
+# 🚨 MODIFIED: [V75.09 소형 시드 데이터 기아(Data Starvation) 맹점 영구 소각 및 영끌(Sweep) 타격 복원]
+# - 예산을 50%씩 기계적으로 쪼갰을 때 1주 가격에 미달하여 0주가 되어버리는 소형 시드 교착 버그 원천 차단.
 # ==========================================================
 import math
 import os
@@ -17,7 +20,6 @@ class V14Strategy:
     def __init__(self, config):
         self.cfg = config
 
-    # (...중략: _ceil ~ _apply_wash_trade_shield 유지...)
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
     def _floor(self, val): return math.floor(val * 100) / 100.0
 
@@ -215,6 +217,10 @@ class V14Strategy:
                 buy_qty1 = int(math.floor(half_budget / buy_price)) if buy_price > 0 else 0
                 buy_qty2 = int(math.floor((one_portion_amt - half_budget) / buy_price)) if buy_price > 0 else 0
                 
+                # 🚨 MODIFIED: [V75.09 소형 시드 데이터 기아 맹점 영구 소각 및 영끌(Sweep) 타격 복원]
+                if buy_qty1 == 0 and buy_qty2 == 0 and buy_price > 0 and one_portion_amt >= buy_price:
+                    buy_qty1 = int(math.floor(one_portion_amt / buy_price))
+                
                 if buy_qty1 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty1, "type": "LOC", "desc": "🆕새출발1"})
                 if buy_qty2 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty2, "type": "LOC", "desc": "🆕새출발2"})
                 orders = core_orders + bonus_orders
@@ -243,6 +249,10 @@ class V14Strategy:
                             b2_budget = one_portion_amt - b1_budget
                             buy_qty1 = int(math.floor(b1_budget / buy_price))
                             buy_qty2 = int(math.floor(b2_budget / buy_price))
+                            
+                            if buy_qty1 == 0 and buy_qty2 == 0 and one_portion_amt >= buy_price:
+                                buy_qty1 = int(math.floor(one_portion_amt / buy_price))
+                                
                             if buy_qty1 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty1, "type": "LOC", "desc": "⚓잔금매수1"})
                             if buy_qty2 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty2, "type": "LOC", "desc": "⚓잔금매수2"})
                     if not lock_s_sell and sell_qty > 0 and star_price > 0:
@@ -280,11 +290,16 @@ class V14Strategy:
                     q_avg = math.floor(half_amt / p_avg) if p_avg > 0 else 0
                     q_star = math.floor((one_portion_amt - half_amt) / p_star) if p_star > 0 else 0
                     
+                    if q_avg == 0 and q_star == 0:
+                        if p_avg > 0 and one_portion_amt >= p_avg: q_avg = math.floor(one_portion_amt / p_avg)
+                        elif p_star > 0 and one_portion_amt >= p_star: q_star = math.floor(one_portion_amt / p_star)
+                    elif q_avg == 0 and q_star > 0: q_star = math.floor(one_portion_amt / p_star) if p_star > 0 else 0
+                    elif q_star == 0 and q_avg > 0: q_avg = math.floor(one_portion_amt / p_avg) if p_avg > 0 else 0
+                    
                     if q_avg > 0: core_orders.append({"side": "BUY", "price": p_avg, "qty": q_avg, "type": "LOC", "desc": "⚓평단매수"})
                     if q_star > 0: core_orders.append({"side": "BUY", "price": p_star, "qty": int(q_star), "type": "LOC", "desc": "💫별값매수"})
                 else: 
                     if p_star > 0:
-                        # 🚨 MODIFIED: [V72.04] 후반전 별값 매수 예산 통합 락온
                         q_star_total = int(math.floor(one_portion_amt / p_star))
                         if q_star_total > 0:
                             core_orders.append({"side": "BUY", "price": p_star, "qty": q_star_total, "type": "LOC", "desc": "💫별값매수(통합)"})

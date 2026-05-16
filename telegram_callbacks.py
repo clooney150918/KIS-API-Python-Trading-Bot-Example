@@ -3,67 +3,14 @@
 # ==========================================================
 # 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
 # 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
-# MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각] 다이렉트 파일 I/O 및 config/ledger 접근 메서 전면 비동기 래핑 완료.
-# MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보] 큐 장부에 존재하지 않는 _load 메서 호출 찌꺼기 100% 소각.
-# MODIFIED: [V54.04 런타임 붕괴(Split-Brain) 근본 원인 팩트 수술]
-# 삼위일체 소각(/reset) 시 V_REV 모드라면 is_active를 False로 끄지 않고 True로 보존하여 '0주 새출발' 상태를 100% 팩트 락온.
-# 모드 스위칭(SET_VER_CONFIRM) 시에도 version과 is_active 플래그가 완벽히 동기화되도록 디커플링 배선 정밀 교정 완료.
-# MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
-# DEL_Q(삭제), CLEAR_Q(초기화), RESET(삼위일체 소각) 격발 시 존재하던 지저분한 다이렉트 파일 I/O(open, json, tempfile) 찌꺼기를 100% 영구 소각하고,
-# QueueLedger의 스레드 세이프(Thread-safe) 코어 메서드(delete_lot, clear_queue)로 직결(Lock-on) 완료.
-# MODIFIED: [V56.00 차세대 AVWAP 실전 암살자 전면 재가동 락온]
-# - Phantom Radar 암살자 제어 메뉴 영구 봉인 락다운 전면 해체.
-# - MODE 라우터 내 AVWAP_WARN, AVWAP_ON, AVWAP_OFF 팩트 제어 로직 100% 복구 완료.
-# MODIFIED: [V59.02 잔재 데드코드 영구 소각] 
-# 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP_SET 라우터 내 TARGET_MANUAL, TARGET_AUTO, EARLY, MULTI 제어 콜백 파이프라인(데드코드)을 전면 철거하고 REFRESH 기능만 보존 완료.
-# MODIFIED: [V59.03 관제탑 진입 배선 복구] 
-# settlement 메뉴에서 '관제탑' 버튼 클릭 시 cmd_avwap을 정상 호출하도록 AVWAP:MENU 라우팅 배선 복구 완료.
-# NEW: [V59.06] VWAP 런타임 엑스레이(Dry-Run) 진단 엔진 라우터 이식 완료 (순수 Read-Only 섀도 연산)
-# MODIFIED: [V60.00 옴니 매트릭스 락다운 데드코드 전면 폐기]
-# XRAY 진단 엔진 내부에서 매수 방아쇠를 강제로 잠그던 옴니 매트릭스 스캔 블록 및 시각적 브리핑 요소를 영구 소각함.
-# MODIFIED: [V61.00 숏(SOXS) 전면 작전 지시서 적용]
-# 1) SET_VER 및 SET_VER_CONFIRM 콜백 내 SOXS 락다운 방어막 텍스트를 시스템 영구 폐기 경고로 오버라이드 완료.
-# 2) TICKER 액션 내 SOXS 경고문 교정 및 '듀얼 모멘텀' 텍스트를 '싱글 모멘텀'으로 팩트 교정 완료.
-# NEW: [AVWAP 수동 개입 엣지 케이스 방어] 수동 매도 후 유령 물량을 0주로 강제 동기화하는 SYNC_ZERO 라우터 신설
-# MODIFIED: [V61.06 런타임 붕괴 방어] MODE 및 INPUT 라우터 내 IndentationError(들여쓰기) 팩트 완벽 교정
-# MODIFIED: [V66.07 오퍼레이션 SSOT - 엑스레이 환각 소각 및 VWAP 최초 명중 타전망 이식]
-# 엑스레이 진단 시 무조건 낡은 인메모리 상태를 강제 폐기(None)하고 최신 JSON 팩트 파일을 로드하도록 배선 교정 완료.
-# NEW: [KIS VWAP 알고리즘 대통합 수술] 수동 VWAP 설정(AUTO/MANUAL) 텔레그램 콜백 라우팅을 전면 소각하고 단일 KIS VWAP 예약 장전 모드로 팩트 락온 완료.
-# MODIFIED: [런타임 즉사 방어] SYNC_ZERO 콜백 라우터 내 IndentationError 팩트 무결점 4배수 교정 완료.
-# MODIFIED: [V71.02 XRAY 엔진 라우팅 영구 소각]
-# KIS 자체 VWAP 알고리즘 위임에 따라 1분 단위 시뮬레이션의 의미가 상실된 런타임 엑스레이(Dry-Run) 진단 콜백 라우터를 전면 적출 완료.
-# MODIFIED: [V71.14 지정가 VWAP 일반주문 역배선 팩트 락온]
-# MODIFIED: [V71.15 V-REV 수동 격발 렌더링 증발(Silent Skip) 버그 수술]
-# MODIFIED: [V71.24 일반주문 VWAP 팩트 롤백 대수술]
-# - KST 기반 지연 격발 엔진, 1시간 단위 타임 시프트(Time-Shift), 타임존 변환 데드코드를 전면 소각 완료.
-# - 코어 엔진이 지시서에 주입해준 EST 시간(152500, 155500)을 일반주문망으로 즉시 직결(Direct Pass)하는 팩트 락온 진공 압축.
-# MODIFIED: [V71.26 KST 타임라인 동적 래핑 수술]
-# - 수동 주문(EXEC) 라우터 내에 폴백(Fallback)으로 방치되어 있던 '152500' 등 EST 하드코딩 찌꺼기를 100% 영구 소각.
-# - 퀀트 엔진이 서머타임을 판독하여 주입한 KST 팩트 시간만을 다이렉트 패스하도록 무결점 역배선 개통 완료.
-# NEW: [V71.28 수동 주문(EXEC) 최신 예산 팩트 스냅샷 강제 갱신 엔진 탑재]
-# MODIFIED: [V71.29 수동 주문 예산 기아(Data Starvation) 맹점 수술]
-# - EXEC 격발 시 텔레그램 내부의 낡은 예산 할당 함수(_calculate_budget_allocation)가 V-REV 예산을 $0.0으로 
-#   강제 오판하여 매수 지시서가 공중 증발하던 치명적 하극상 맹점 원천 차단.
-# - 코어 엔진(scheduler_core)의 get_budget_allocation으로 다이렉트 배선을 교체하여 매수 타점 100% 장전 락온.
-# MODIFIED: [V72.01 V-REV 수동 주문(EXEC) 시각적 디커플링 해체]
-# - 수동 주문 실행 시 V-REV 모드임에도 V14 고유의 '💎' 아이콘이 하드코딩되어 
-#   표출되던 시각적 환각(UI 디커플링) 현상을 모드별 맞춤 아이콘('⚖️' / '💎')으로 100% 팩트 교정 완료.
-# MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
-# - V59/V61 대수술 중 누락되었던 SET_VER, SET_VER_CONFIRM, AVWAP 라우터를 100% 팩트 복구.
-# - 0주 상태에서만 코어 스위칭이 가능하도록 0주 락온(Lock-on) 방어막 완벽 이식.
-# 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 및 유실된 라우터 전면 복구]
-# - 과거 대수술 시 통째로 유실되었던 MODE 액션 라우터와 AVWAP_SET 라우터 100% 원상 복구 완료.
-# - APEX_ON / APEX_OFF 분기망 신설하여 텔레그램 수신 즉시 비동기 래핑으로 config 상태 팩트 제어.
-# - 제자리 메뉴 새로고침(cmd_settlement) 배선 개통으로 시각적 디커플링 원천 차단.
-# 🚨 NEW: [V73.00 UI 렌더링 디커플링 해체]
-# - 텔레그램 시작 화면 및 통합 지시서에 잔존하는 17:05 KST 예약 장전 레거시 텍스트를 15:26 EST 지연 장전으로 팩트 교정하여 시각적 환각을 100퍼센트 해체합니다. (telegram_view 연동)
-# - 수동 주문(EXEC) 시 생성되는 스냅샷 기반 덫 장전 프로세스 무결점 유지.
-# 🚨 NEW: [통합 지시서 수동 매매 취소 버튼 탑재 및 KIS 다이렉트 팩트 취소 라우팅 개통]
-# - CANCEL_EXEC 콜백 라우터를 신설하여 수동 매매 취소 기능을 개통. 
-# - KIS 예약 원장과 일반 미체결 원장을 비동기로 이중 스캔하고 팩트로 파기하여 제1헌법, 제19경고를 100% 완벽하게 준수.
 # 🚨 MODIFIED: [통합 지시서 수동 제어(EXEC/CANCEL) 완벽 스위칭 작전]
 # - CANCEL_EXEC 덫 파기 완료 시(nuked_count > 0), 당일 매매 잠금(REG Lock)을 강제로 해제하도록
 #   cfg.reset_lock_for_ticker를 비동기로 호출하는 무결성 락온 파이프라인 개통 완료.
+# 🚨 MODIFIED: [V75.11 수동주문 시장 국면 다이내믹 라우팅 락온 (✨사용자 제보 박제)]
+# - 수동 주문(EXEC) 시, 미국 정규장/프리장 시간대(PRE, REG, AFTER)라면 KIS 예약주문 시간 
+#   제약(10:00~22:20 KST)에 걸려 리젝당하는 맹점 완벽 해체.
+# - 장중에는 VWAP, LOC 등 모든 주문을 무조건 일반주문(send_order)으로 강제 직결하고, 
+#   장마감(CLOSE) 시간대에만 예약주문 API를 타도록 스마트 폴백 엔진 이식 완료.
 # ==========================================================
 import logging
 import datetime
@@ -458,7 +405,6 @@ class TelegramCallbacks:
 
             active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
             
-            # 🚨 MODIFIED: [V71.29 수동 주문 예산 기아 맹점 수술] 
             from scheduler_core import get_budget_allocation
             _, allocated_cash = await asyncio.to_thread(get_budget_allocation, cash, active_tickers, self.cfg)
             
@@ -486,7 +432,6 @@ class TelegramCallbacks:
             is_manual_vwap = await asyncio.to_thread(getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False), t)
             
             logic_qty_v14 = safe_qty
-            # 스냅샷이 막 소각되었으므로 is_snapshot_mode=True 를 강제 주입하여 실시간 예산으로 최신 지시서를 영구 박제합니다.
             plan = await asyncio.to_thread(self.strategy.get_plan, t, curr_p, safe_avg, logic_qty_v14, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_simulation=True, is_snapshot_mode=True)
             
             if safe_qty == 0:
@@ -494,7 +439,6 @@ class TelegramCallbacks:
                     if o['side'] == 'BUY' and 'Buy1' in o.get('desc', ''):
                         o['price'] = round(prev_c * 1.15, 2)
 
-            # 🚨 MODIFIED: [V72.01 V-REV 수동 주문(EXEC) 시각적 디커플링 해체]
             icon = "⚖️" if ver == "V_REV" else "💎"
             title = f"{icon} <b>[{t}] 예방적 덫 수동 주문 실행</b>\n"
             msg = title
@@ -502,12 +446,28 @@ class TelegramCallbacks:
        
             target_orders = plan.get('core_orders', plan.get('orders', []))
             
+            # 🚨 MODIFIED: [V75.11 수동주문 시장 국면 다이내믹 라우팅 락온]
+            is_market_active_now = status_code in ["PRE", "REG", "AFTER"]
+            
+            est_z = ZoneInfo('America/New_York')
+            kst_z = ZoneInfo('Asia/Seoul')
+            curr_est = datetime.datetime.now(est_z)
+            
+            b_start = curr_est.replace(hour=15, minute=26, second=0, microsecond=0)
+            s_start = curr_est + datetime.timedelta(minutes=3)
+            a_start = max(b_start, s_start)
+            b_end = curr_est.replace(hour=15, minute=56, second=0, microsecond=0)
+            
+            dyn_start_t = a_start.astimezone(kst_z).strftime("%H%M%S")
+            dyn_end_t = b_end.astimezone(kst_z).strftime("%H%M%S")
+
             for o in target_orders:
-                if o['type'] == "VWAP":
+                if o['type'] in ["VWAP", "LOC", "LIMIT"] or is_market_active_now:
                     res = await asyncio.to_thread(
                         self.broker.send_order, 
                         t, o['side'], o['qty'], o['price'], o['type'],
-                        start_time=o.get('start_time'), end_time=o.get('end_time')
+                        start_time=dyn_start_t if o['type'] == 'VWAP' else None,
+                        end_time=dyn_end_t if o['type'] == 'VWAP' else None
                     )
                 else:
                     res = await asyncio.to_thread(
@@ -526,11 +486,12 @@ class TelegramCallbacks:
             
             target_bonus = plan.get('bonus_orders', [])
             for o in target_bonus:
-                if o['type'] == "VWAP":
+                if o['type'] in ["VWAP", "LOC", "LIMIT"] or is_market_active_now:
                     res = await asyncio.to_thread(
                         self.broker.send_order, 
                         t, o['side'], o['qty'], o['price'], o['type'],
-                        start_time=o.get('start_time'), end_time=o.get('end_time')
+                        start_time=dyn_start_t if o['type'] == 'VWAP' else None,
+                        end_time=dyn_end_t if o['type'] == 'VWAP' else None
                     )
                 else:
                     res = await asyncio.to_thread(
@@ -629,7 +590,6 @@ class TelegramCallbacks:
                 await context.bot.send_message(chat_id, f"ℹ️ <b>[{t}] 수동 취소 결과</b>\n▫️ 취소할 덫이 없습니다.", parse_mode='HTML')
 
         # 🚨 MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
-        # V59/V61 대수술 중 누락되었던 SET_VER 라우터 100% 팩트 복원
         elif action == "SET_VER":
             await query.answer()
             ticker = data[2]
@@ -656,7 +616,6 @@ class TelegramCallbacks:
             await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
         # 🚨 MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
-        # V59/V61 대수술 중 누락되었던 SET_VER_CONFIRM 라우터 100% 팩트 복원
         elif action == "SET_VER_CONFIRM":
             await query.answer()
             ticker = data[2]
@@ -682,13 +641,11 @@ class TelegramCallbacks:
             await query.edit_message_text(msg, parse_mode='HTML')
 
         # 🚨 MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
-        # V59/V61 대수술 중 누락되었던 AVWAP 관제탑 호출 배선 100% 개통 완료
         elif action == "AVWAP":
             if sub == "MENU":
                 await controller.cmd_avwap(update, context)
 
         # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 및 유실된 라우터 전면 복구]
-        # 유실되었던 MODE 라우터(상방 스나이퍼, AVWAP 가동, APEX 스위치) 및 AVWAP_SET(관제탑 제어) 완벽 복원
         elif action == "MODE":
             ticker = data[2]
             if sub == "ON":

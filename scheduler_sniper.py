@@ -37,24 +37,19 @@
 # - 본진 덫 취소 시 로컬 JSON 의존성을 전면 소각하고 KIS 실원장(get_reservation_orders) 팩트 스캔을 통한 취소로 역배선 완료.
 # - 덤핑 직후 즉시 덫을 장전하던 하극상 철거. 15:25 EST 정각까지 비동기 디커플링 대기 후 예약주문(send_reservation_order)으로 팩트 지연 재장전 락다운 이식.
 # MODIFIED: [V71.14 지정가 VWAP 일반주문 역배선 팩트 락온]
-# - 본진 덫 지연 복원 시 VWAP 주문 파라미터 충돌(TypeError)을 유발하던 send_reservation_order 맹독성 오호출 영구 소각.
-# - VWAP(36)은 KIS 명세에 따라 send_order로 직결하도록 팩트 라우팅 분기 처리 완료.
 # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재 및 IndentationError 수술]
 # config에서 APEX 스위치 상태를 매 분 비동기로 스캔하여 get_avwap_decision 코어로 팩트 수혈.
 # 🚨 NEW: [V72.18 예약 원장 맵핑 누수 및 일반 미체결 이중 방화벽 락온]
 # 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈(Fail-Open) 팩트 교정]
-# - 달력 API 정상 빈 데이터 반환 시 무조건 휴장일로 간주하고 스케줄을 스킵하도록 락온.
 # 🚨 MODIFIED: [V72.22 백그라운드 태스크 가비지 컬렉터 증발 맹점 완벽 수술]
-# - 본진 덫 지연 복원 비동기 태스크(asyncio.create_task)가 GC에 의해 소각되지 않도록 강한 참조(Strong Reference) 세트(Set)에 락온.
 # 🚨 MODIFIED: [V72.26 KIS VWAP 체결 0주 오판 락다운 해체 수술]
-# - KIS VWAP 알고리즘이 매도를 집행하는 15:25 EST 부터 16:00 EST 구간에서는 실잔고가 0주가 되더라도 정상 체결로 판독하여 수동매매 오판 비상 알람을 강제 바이패스.
 # 🚨 MODIFIED: [V73.00 암살자 하극상 로직 영구 소각]
-# - 본진 덫이 15:26 EST에 장전됨에 따라 암살자 딥매수 시 발동하던 본진 덫 파기 로직 전면 소각 완료.
-# - 암살자 덤핑 후 본진 덫을 지연 복원해주던 백그라운드 태스크 및 렌더링 텍스트를 시스템 전역에서 100% 영구 적출하여 런타임 뇌관 해체.
 # 🚨 MODIFIED: [V75.09 스나이퍼 유령 체결 및 호가 이탈 원천 차단 (Operation No More Ghost)]
-# - 8초 룰 멱등성 교정: 미체결 상태에서 2초만에 무조건 루프를 탈출하던 들여쓰기 맹점 전면 수술.
-# - 시장가성 지정가 이식: 매수(BUY) 시 매도 1호가(Ask Price)를 팩트로 스캔 및 적용하여 호가 도망 방어.
+# - 8초 룰 멱등성 교정: 미체결 상태에서 2초만에 무조건 루프를 탈출하던 들여쓰기 맹점 완벽 수술 유지.
 # - 에러 타전망 구축: 주문 전송 후 서버 리젝(rt_cd != '0') 시 즉각 텔레그램 타전.
+# 🚨 MODIFIED: [V75.10 타점 정밀도 롤백 및 시장가성 지정가(Marketable Limit) 타격망 팩트 교체]
+# - 매수(BUY) 시: Ask Price 스캔 및 +0.2% 슬리피지 페널티를 전면 소각하고 결측 시 1분봉 현재가를 팩트로 직결 요격.
+# - 매도(SELL) 시: Bid Price를 무조건 다이렉트로 스캔하도록 조건문(exec_price <= 0.0)을 도려내고 최상단 전진 배치.
 # ==========================================================
 import logging
 import datetime
@@ -368,13 +363,13 @@ async def scheduled_sniper_monitor(context):
                                 await asyncio.sleep(1.0)
                                 continue
                             
-                            # 🚨 NEW: [Operation No More Ghost] 시장가성 지정가 이식
+                            # 🚨 MODIFIED: [V75.01 슬리피지 페널티 소각 및 1호가 팩트 스캔 롤백]
                             try:
                                 ask_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_ask_price, t), timeout=5.0)
                                 ask_price = float(ask_price_val or 0.0)
                             except Exception:
                                 ask_price = 0.0
-                            exec_price = ask_price if ask_price > 0 else round(price * 1.002, 2)
+                            exec_price = ask_price if ask_price > 0 else price
 
                             res = await asyncio.to_thread(broker.send_order, t, "BUY", qty, exec_price, "LIMIT")
                             odno = res.get('odno', '') if isinstance(res, dict) else ''
@@ -454,16 +449,15 @@ async def scheduled_sniper_monitor(context):
                         qty = int(decision.get("qty", 0))
                          
                         if qty > 0:
-                            exec_price = price
-                            if exec_price <= 0.0:
-                                try:
-                                    bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=10.0)
-                                    bid_price = float(bid_price_val or 0.0)
-                                except asyncio.TimeoutError:
-                                    bid_price = 0.0
-                                except Exception:
-                                    bid_price = 0.0
-                                exec_price = bid_price if bid_price > 0 else exec_curr_p
+                            # 🚨 MODIFIED: [V75.01 매수 1호가(Bid Price) 팩트 스캔 전진 배치 및 조건문 소각]
+                            try:
+                                bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=5.0)
+                                bid_price = float(bid_price_val or 0.0)
+                            except Exception:
+                                bid_price = 0.0
+                            
+                            fallback_price = price if price > 0.0 else exec_curr_p
+                            exec_price = bid_price if bid_price > 0 else fallback_price
                                    
                             has_unfilled = False
                             for _ in range(4):
@@ -635,13 +629,13 @@ async def scheduled_sniper_monitor(context):
                         if has_unfilled:
                             continue
                         
-                        # 🚨 NEW: [Operation No More Ghost] 시장가성 지정가 이식
+                        # 🚨 MODIFIED: [V75.01 슬리피지 가산 로직 소각 및 현재가 직결 요격 롤백]
                         try:
                             ask_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_ask_price, t), timeout=5.0)
                             ask_price = float(ask_price_val or 0.0)
                         except Exception:
                             ask_price = 0.0
-                        exec_price = ask_price if ask_price > 0 else round(limit_p * 1.002, 2)
+                        exec_price = ask_price if ask_price > 0 else limit_p
 
                         order_res = await asyncio.to_thread(broker.send_order, t, "BUY", qty, exec_price, "LIMIT")
                         odno = order_res.get('odno', '') if isinstance(order_res, dict) else ''
@@ -656,7 +650,7 @@ async def scheduled_sniper_monitor(context):
                                 my_order = next((ox for ox in safe_unfilled if ox.get('odno') == odno), None)
                                 if my_order:
                                     ccld_qty = int(float(my_order.get('tot_ccld_qty') or 0))
-                                    # 🚨 NEW: [Operation No More Ghost] 들여쓰기 붕괴 교정
+                                    # 🚨 NEW: [Operation No More Ghost] 들여쓰기 붕괴 교정 완료
                                     if ccld_qty >= qty:
                                         break
                                 else:
@@ -746,7 +740,15 @@ async def scheduled_sniper_monitor(context):
                         if has_unfilled:
                             continue
                 
-                        order_res = await asyncio.to_thread(broker.send_order, t, "SELL", qty, limit_p, "LIMIT")
+                        # 🚨 MODIFIED: [V75.01 매수 1호가 팩트 스캔 전진 배치 및 조건문 소각]
+                        try:
+                            bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=5.0)
+                            bid_price = float(bid_price_val or 0.0)
+                        except Exception:
+                            bid_price = 0.0
+                        exec_price = bid_price if bid_price > 0 else limit_p
+                
+                        order_res = await asyncio.to_thread(broker.send_order, t, "SELL", qty, exec_price, "LIMIT")
                         odno = order_res.get('odno', '') if isinstance(order_res, dict) else ''
                         
                         if order_res and order_res.get('rt_cd') == '0' and odno:
@@ -799,7 +801,7 @@ async def scheduled_sniper_monitor(context):
                         else:
                             # 🚨 NEW: [Operation No More Ghost] KIS 리젝 타전망 이식
                             err_msg = order_res.get('msg1', '응답 없음') if order_res else '통신 장애'
-                            logging.error(f"🚨 [{t}] 스나이퍼 매도 KIS 서버 거절: {err_msg}")
+                            logging.error(f"🚨 [{t}] 스나이퍼 상방 기습 서버 거절: {err_msg}")
                             reject_msg = (
                                 f"🚨 <b>[{t}] 스나이퍼 상방 기습 서버 거절 (Reject)!</b>\n"
                                 f"▫️ 사유: <code>{err_msg}</code>\n"

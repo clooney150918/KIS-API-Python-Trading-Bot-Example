@@ -9,12 +9,12 @@
 # 🚨 NEW: [V72.09 3-Stage Apex Intercept (정점 요격) 전술 탑재]
 # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재 및 IndentationError 팩트 수술]
 # 🚨 NEW: [V74.00 Operation HA V-Turn Intercept (정밀 요격) 전술 탑재]
-# 🚨 MODIFIED: [V74.02 HA V-Turn 정밀 꼬리(Wick) 파서 및 1양봉 격발 엔진 이식]
-# 🚨 NEW: [V74.04 심해 고도 필터(Deep-Sea Altitude Filter) 락온 및 스코프 전진 배치]
-# 🚨 MODIFIED: [V74.05 찐바닥 체력 30% 락다운 바이패스 소각 및 절대 락온 원상 복구]
-# - V-Turn 시그널이 포착되더라도 잔여 체력이 30% 미만으로 고갈되었을 때는 반등 캔들에 
-#   속지 않고 무조건 당일 영구 동결(SHUTDOWN)을 격발하도록 팩트 교정 완료.
-# - V-Turn 시그널은 체력이 30% 이상일 때만 시계열 하락세(BEAR)를 바이패스하여 타격함.
+# 🚨 MODIFIED: [V75.01 HA V-Turn 정밀 꼬리 파서 교체 및 심해 필터 전면 소각]
+# - 기존 '2연속 음봉 ➔ 양봉' 로직을 '윗꼬리 없는 음봉 3연속 ➔ HA 양봉(꼬리 무관)' 패턴으로 격상.
+# - 진입 고도와 무관하게 요격하도록 심해 필터 관련 day_amplitude, deep_sea_threshold 연산 영구 적출.
+# 🚨 MODIFIED: [V75.01 찐바닥 체력 30% 락다운 절대 방어막 원상 복구]
+# - V-Turn 시그널이 발생하더라도 잔여 체력(rem_relative_pct)이 30% 미만일 경우 
+#   속지 않고 강제 셧다운(SHUTDOWN) 되도록 바이패스(Bypass) 맹점을 소각.
 # 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
 # - UI 렌더링을 위한 섀도우 연산 시 실제 파일 상태가 덮어씌워지는 맹점 수술.
 # 🚨 MODIFIED: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술]
@@ -95,7 +95,6 @@ class VAvwapHybridPlugin:
         }
 
     # 🚨 MODIFIED: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술] 
-    # 기존 파일 데이터를 로드하여 병합(Merge)함으로써 상태 증발 맹점 원천 차단
     def save_state(self, ticker, now_est, state_data):
         file_path = self._get_state_file(ticker, now_est)
         today_str = self._get_logical_date_str(now_est)
@@ -199,7 +198,7 @@ class VAvwapHybridPlugin:
             logging.error(f"🚨 [V_AVWAP] YF 기초자산 매크로 컨텍스트 추출 실패 ({base_ticker}): {e}")
             return None
 
-    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, is_apex_on=True, is_simulation=False, **kwargs):
+    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, regime_data=None, is_apex_on=True, is_simulation=False, **kwargs):
         df_1min_base = df_1min_base if df_1min_base is not None else kwargs.get('base_df')
         avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
 
@@ -236,16 +235,13 @@ class VAvwapHybridPlugin:
         base_vwap = base_curr_p
         vwap_success = False 
 
-        # 🚨 [V74.04 제16경고 스코프 전진 배치 및 심해 필터 변수 락온]
+        # 🚨 MODIFIED: [V75.01 HA V-Turn 정밀 꼬리 파서 교체 및 심해 필터 전면 소각]
         ha_2_bullish_no_lower = False
         ha_v_turn_detected = False
         trend_sequence = "PENDING"
         
         is_pure_5m_2_bearish = False
         current_5m_is_bearish = False
-        
-        day_amplitude = 0.0
-        deep_sea_threshold = 0.0
 
         if df_1min_base is not None and not df_1min_base.empty:
             try:
@@ -317,24 +313,19 @@ class VAvwapHybridPlugin:
                                 last_2 = df_5m.tail(2)
                                 ha_2_bullish_no_lower = last_2['Is_Bullish'].all() and last_2['No_Lower_Wick'].all()
 
-                            if len(df_5m) >= 3:
+                            # 🚨 MODIFIED: [V75.01 윗꼬리 없는 음봉 3연속 ➔ HA 양봉(꼬리 무관) 1개 포착]
+                            if len(df_5m) >= 4:
                                 last_idx = len(df_5m) - 1
-                                bull_cond = df_5m['Is_Bullish'].iloc[last_idx] and df_5m['No_Lower_Wick'].iloc[last_idx] and df_5m['Has_Upper_Wick'].iloc[last_idx]
+                                bull_cond = df_5m['Is_Bullish'].iloc[last_idx]
                                 if bull_cond:
                                     bear_count = 0
                                     for i in range(last_idx - 1, -1, -1):
-                                        if df_5m['Is_Bearish'].iloc[i] and df_5m['No_Upper_Wick'].iloc[i] and df_5m['Has_Lower_Wick'].iloc[i]:
+                                        if df_5m['Is_Bearish'].iloc[i] and df_5m['No_Upper_Wick'].iloc[i]:
                                             bear_count += 1
                                         else:
                                             break
-                                    if bear_count >= 2:
-                                        day_amplitude = day_high - day_low
-                                        if day_amplitude > 0:
-                                            deep_sea_threshold = day_low + (day_amplitude * 0.3)
-                                            if exec_curr_p <= deep_sea_threshold:
-                                                ha_v_turn_detected = True
-                                            else:
-                                                logging.debug(f"🚨 [V_AVWAP] HA V-Turn 포착되었으나, 현재가({exec_curr_p})가 심해 임계선({deep_sea_threshold}) 초과로 기각(Bypass).")
+                                    if bear_count >= 3:
+                                        ha_v_turn_detected = True
 
             except Exception as e:
                 logging.error(f"🚨 [V_AVWAP] 기초자산 HA 및 5분봉 연산 실패: {e}")
@@ -460,7 +451,7 @@ class VAvwapHybridPlugin:
         
         rem_relative_pct = ((atr5 - actual_gap_pct) / atr5 * 100.0) if atr5 > 0 else 0.0
 
-        # 🚨 MODIFIED: [V74.05 찐바닥 체력 30% 락다운 절대 방어막 원상 복구]
+        # 🚨 MODIFIED: [V75.01 찐바닥 체력 30% 락다운 절대 방어막 원상 복구]
         # 어떠한 시그널이 나오더라도 체력이 30% 미만이면 무조건 당일 영구 동결
         if rem_relative_pct < 30.0:
             persistent_state["shutdown"] = True
@@ -485,7 +476,6 @@ class VAvwapHybridPlugin:
                 ha_latched_bull = True
                 latch_changed = True
                 
-        # 🚨 MODIFIED: [V74.05 시계열 하락 시 래치 해제 방어 (V-Turn은 바이패스)]
         if (trend_sequence == "BEAR" and not ha_v_turn_detected):
             if ha_latched_bull:
                 ha_latched_bull = False
@@ -499,7 +489,7 @@ class VAvwapHybridPlugin:
         # 🚨 V-Turn 타점 정밀 교정 시 VWAP 락다운 해방 바이패스 락온 유지 (체력 30% 이상일 때만 도달 가능)
         cond2_met = ((base_curr_p > base_vwap) and ha_latched_bull) or ha_v_turn_detected
         
-        # 🚨 MODIFIED: [V74.05 체력 30% 조건 원상 복구 (바이패스 불가)]
+        # 🚨 MODIFIED: [V75.01 체력 30% 조건 원상 복구 (바이패스 불가)]
         cond3_met = (rem_relative_pct >= 30.0)
 
         cond_seq = True
@@ -523,3 +513,4 @@ class VAvwapHybridPlugin:
             if not cond3_met: fail_reasons.append("체력미달")
             if not cond_seq: fail_reasons.append("시계열체력하락세")
             return _build_res('WAIT', f'진입조건대기({",".join(fail_reasons)})')
+
