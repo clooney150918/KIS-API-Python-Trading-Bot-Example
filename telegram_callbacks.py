@@ -11,6 +11,8 @@
 #   제약(10:00~22:20 KST)에 걸려 리젝당하는 맹점 완벽 해체.
 # - 장중에는 VWAP, LOC 등 모든 주문을 무조건 일반주문(send_order)으로 강제 직결하고, 
 #   장마감(CLOSE) 시간대에만 예약주문 API를 타도록 스마트 폴백 엔진 이식 완료.
+# 🚨 NEW: [V7.4 Assassin Lock-on] 정점 요격(Apex Intercept) 스위치 콜백 라우터 영구 소각
+# - /settlement 메뉴에서 오조작을 유발하던 APEX_ON, APEX_OFF 콜백 라우팅 블록을 100% 도려내어 팻핑거 맹점 해체.
 # ==========================================================
 import logging
 import datetime
@@ -141,7 +143,7 @@ class TelegramCallbacks:
             if not q_data:
                 await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
                 return
-            
+             
             await query.answer("⏳ KIS 서버에 수동 긴급 수혈(MOC) 명령을 격발합니다...", show_alert=False)
             
             emergency_qty = q_data[-1].get('qty', 0)
@@ -171,7 +173,7 @@ class TelegramCallbacks:
             if getattr(self, 'queue_ledger', None):
                  q_data = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
             else:
-                q_data = []
+                 q_data = []
              
             qty, price = 0, 0.0
             for item in q_data:
@@ -270,7 +272,7 @@ class TelegramCallbacks:
                             os.replace(tmp_path, backup_file)
                         except Exception:
                             pass
-                             
+                            
                 await asyncio.to_thread(_process_reset_files)
             
                 if getattr(self, 'queue_ledger', None):
@@ -294,12 +296,12 @@ class TelegramCallbacks:
                     self.sync_engine.sync_locks[ticker] = asyncio.Lock()
                      
                 if not self.sync_engine.sync_locks[ticker].locked():
-                     await query.edit_message_text(f"🔄 <b>[{ticker}] 잔고 기반 대시보드 업데이트 중...</b>", parse_mode='HTML')
-                     res = await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=True)
-                     if res == "SUCCESS": 
-                         async with self.tx_lock:
+                    await query.edit_message_text(f"🔄 <b>[{ticker}] 잔고 기반 대시보드 업데이트 중...</b>", parse_mode='HTML')
+                    res = await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=True)
+                    if res == "SUCCESS": 
+                        async with self.tx_lock:
                             _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
-                         await self.sync_engine._display_ledger(ticker, chat_id, context, message_obj=query.message, pre_fetched_holdings=holdings)
+                        await self.sync_engine._display_ledger(ticker, chat_id, context, message_obj=query.message, pre_fetched_holdings=holdings)
 
         elif action == "HIST":
             await query.answer()
@@ -474,7 +476,7 @@ class TelegramCallbacks:
                         self.broker.send_reservation_order, 
                         t, o['side'], o['qty'], o['price'], o['type']
                     )
-                
+            
                 is_success = res.get('rt_cd') == '0'
                 if not is_success:
                     all_success = False
@@ -612,7 +614,7 @@ class TelegramCallbacks:
                 msg, markup = self.view.get_v14_mode_selection_menu(ticker)
             else:
                 return
-             
+            
             await query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML')
 
         # 🚨 MODIFIED: [V72.15 settlement 콜백 라우팅 증발 맹점 영구 복원]
@@ -645,7 +647,6 @@ class TelegramCallbacks:
             if sub == "MENU":
                 await controller.cmd_avwap(update, context)
 
-        # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 및 유실된 라우터 전면 복구]
         elif action == "MODE":
             ticker = data[2]
             if sub == "ON":
@@ -672,16 +673,7 @@ class TelegramCallbacks:
                 await asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, False)
                 if hasattr(controller, 'cmd_settlement'):
                     await controller.cmd_settlement(update, context)
-            elif sub == "APEX_ON":
-                await query.answer(f"🎯 [{ticker}] 정점요격 전술 가동!", show_alert=False)
-                await asyncio.to_thread(self.cfg.set_avwap_apex_mode, ticker, True)
-                if hasattr(controller, 'cmd_settlement'):
-                    await controller.cmd_settlement(update, context)
-            elif sub == "APEX_OFF":
-                await query.answer(f"⚪ [{ticker}] 정점요격 전술 해제 (지터 덤핑 롤백)", show_alert=False)
-                await asyncio.to_thread(self.cfg.set_avwap_apex_mode, ticker, False)
-                if hasattr(controller, 'cmd_settlement'):
-                    await controller.cmd_settlement(update, context)
+            # 🚨 NEW: [V7.4 Assassin Lock-on] APEX_ON / APEX_OFF 라우팅 100% 영구 소각
 
         elif action == "AVWAP_SET":
             ticker = data[2]
@@ -708,8 +700,15 @@ class TelegramCallbacks:
                             'strikes': tracking_cache.get(f"AVWAP_STRIKES_{ticker}", 0),
                             'daily_bought_qty': tracking_cache.get(f"AVWAP_DAILY_BOUGHT_{ticker}", 0),
                             'daily_sold_qty': tracking_cache.get(f"AVWAP_DAILY_SOLD_{ticker}", 0),
-                            'first_scan_done': tracking_cache.get(f"AVWAP_FIRST_SCAN_DONE_{ticker}", False),
-                            'first_scan_passed': tracking_cache.get(f"AVWAP_FIRST_SCAN_PASSED_{ticker}", False),
+                            'trap_odno': tracking_cache.get(f"AVWAP_TRAP_ODNO_{ticker}", ""),
+                            'PM_H': tracking_cache.get(f"AVWAP_PM_H_{ticker}", 0.0),
+                            'PM_L': tracking_cache.get(f"AVWAP_PM_L_{ticker}", 0.0),
+                            'T_H': tracking_cache.get(f"AVWAP_T_H_{ticker}", 0.0),
+                            'T_L': tracking_cache.get(f"AVWAP_T_L_{ticker}", 0.0),
+                            'offset': tracking_cache.get(f"AVWAP_OFFSET_{ticker}", 0.0),
+                            'whipsaw_mode': tracking_cache.get(f"AVWAP_WHIPSAW_MODE_{ticker}", False),
+                            'whipsaw_armed': tracking_cache.get(f"AVWAP_WHIPSAW_ARMED_{ticker}", False),
+                            'whipsaw_checked': tracking_cache.get(f"AVWAP_WHIPSAW_CHECKED_{ticker}", False),
                             'dump_jitter_sec': tracking_cache.get(f"AVWAP_DUMP_JITTER_{ticker}", 0)
                         }
                         await asyncio.to_thread(self.strategy.v_avwap_plugin.save_state, ticker, now_est, state_data)
@@ -756,7 +755,7 @@ class TelegramCallbacks:
             controller.user_states[chat_id] = f"CONF_{sub}_{ticker}"
            
             if sub == "SPLIT":
-                ko_name = "분할 횟수"
+                 ko_name = "분할 횟수"
             elif sub == "TARGET":
                 ko_name = "목표 수익률(%)"
             elif sub == "COMPOUND":
@@ -770,3 +769,4 @@ class TelegramCallbacks:
             
             desc = "숫자만 입력하세요.\n(예: 액면분할 시 1주가 10주가 되었다면 10 입력, 10주가 1주로 병합되었다면 0.1 입력)" if sub == "STOCK_SPLIT" else "숫자만 입력하세요."
             await context.bot.send_message(chat_id, f"✏️ <b>[{ticker}] {ko_name}</b>를 설정합니다.\n{desc}", parse_mode='HTML')
+

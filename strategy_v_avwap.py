@@ -6,19 +6,15 @@
 # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
 # 🚨 NEW: [V65.00 AVWAP 동적 하드스탑 락온]
 # 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
-# 🚨 NEW: [V72.09 3-Stage Apex Intercept (정점 요격) 전술 탑재]
-# 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재 및 IndentationError 팩트 수술]
-# 🚨 NEW: [V74.00 Operation HA V-Turn Intercept (정밀 요격) 전술 탑재]
-# 🚨 MODIFIED: [V75.01 HA V-Turn 정밀 꼬리 파서 교체 및 심해 필터 전면 소각]
-# - 기존 '2연속 음봉 ➔ 양봉' 로직을 '윗꼬리 없는 음봉 3연속 ➔ HA 양봉(꼬리 무관)' 패턴으로 격상.
-# - 진입 고도와 무관하게 요격하도록 심해 필터 관련 day_amplitude, deep_sea_threshold 연산 영구 적출.
-# 🚨 MODIFIED: [V75.01 찐바닥 체력 30% 락다운 절대 방어막 원상 복구]
-# - V-Turn 시그널이 발생하더라도 잔여 체력(rem_relative_pct)이 30% 미만일 경우 
-#   속지 않고 강제 셧다운(SHUTDOWN) 되도록 바이패스(Bypass) 맹점을 소각.
-# 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
-# - UI 렌더링을 위한 섀도우 연산 시 실제 파일 상태가 덮어씌워지는 맹점 수술.
-# 🚨 MODIFIED: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술]
-# - save_state 시 기존 JSON 상태를 읽어와 병합(Merge)함으로써 상태 증발 맹점 원천 차단.
+# 🚨 NEW: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술]
+# 🚨 MODIFIED: [V76.01 ATR5 동적 하드스탑 영구 소각 및 투트랙 엑시트 절대 락온]
+# 🚨 MODIFIED: [V76.02 타점 역전 패러독스 하드 마진 락온 (매니저 제안 수혈)]
+# 🚨 MODIFIED: [V76.03 암살자 덤핑 지터(Jitter) 코어 연산 디커플링 해체 및 동적 타임라인 락온]
+# 🚨 NEW: [V77.00 V7.1 백테스트 절대 동기화 롤백 (Animal Spirit 야성 회복)]
+# 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] 
+# - 이벤트 루프 교착의 원흉이었던 동기 함수 _get_exec_1m_data() 100% 영구 소각
+# - get_decision 시그니처에 df_1min_exec 주입 및 time_est 기반 데이터 슬라이싱 락온
+# - 캔들 파서의 대문자 변수(High, Low, Open)를 소문자로 전면 교정하여 KeyError 런타임 붕괴 원천 차단
 # ==========================================================
 import logging
 import datetime
@@ -33,7 +29,8 @@ import tempfile
 
 class VAvwapHybridPlugin:
     def __init__(self):
-        self.plugin_name = "AVWAP_HYBRID_DUAL"
+        # NEW: [V77.00 플러그인 닉네임 교체 - 야성 회복]
+        self.plugin_name = "AVWAP_V7.1_ANIMAL_SPIRIT"
         self.leverage = 3.0       
 
     def _get_logical_date_str(self, now_est):
@@ -69,32 +66,36 @@ class VAvwapHybridPlugin:
                         data['daily_bought_qty'] = 0
                         data['daily_sold_qty'] = 0
 
-                    data['HA_LATCHED_BULL'] = False
+                    # NEW: [V77.00 상태 변수 초기화] V7.1 팩트 인젝션
+                    data['PM_H'] = 0.0
+                    data['PM_L'] = 0.0
+                    data['T_H'] = 0.0
+                    data['T_L'] = 0.0
+                    data['offset'] = 0.0
                     data['dump_jitter_sec'] = random.randint(0, 180)
-                    
-                    data['APEX_STAGE_1'] = False
-                    data['APEX_STAGE_2'] = False
-                    data['APEX_PEAK_PRICE'] = 0.0
 
                     data['date'] = today_str
                     self.save_state(ticker, now_est, data)
-                     
-                data['APEX_STAGE_1'] = data.get('APEX_STAGE_1', False)
-                data['APEX_STAGE_2'] = data.get('APEX_STAGE_2', False)
-                data['APEX_PEAK_PRICE'] = data.get('APEX_PEAK_PRICE', 0.0)
+                
+                # 안전 형변환 보장
+                data['PM_H'] = float(data.get('PM_H', 0.0))
+                data['PM_L'] = float(data.get('PM_L', 0.0))
+                data['T_H'] = float(data.get('T_H', 0.0))
+                data['T_L'] = float(data.get('T_L', 0.0))
+                data['offset'] = float(data.get('offset', 0.0))
 
                 return data
             except Exception:
                 pass
 
+        # NEW: [V77.00 초기 상태값 구성] 과잉 방어 플래그 소각
         return {
             "executed_buy": False, "shutdown": False, "strikes": 0, "qty": 0, 
             "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, 
-            "HA_LATCHED_BULL": False, "dump_jitter_sec": random.randint(0, 180),
-            "APEX_STAGE_1": False, "APEX_STAGE_2": False, "APEX_PEAK_PRICE": 0.0
+            "dump_jitter_sec": random.randint(0, 180),
+            "PM_H": 0.0, "PM_L": 0.0, "T_H": 0.0, "T_L": 0.0, "offset": 0.0
         }
 
-    # 🚨 MODIFIED: [V75.04 상태 캐시 기억상실(Amnesia) 완벽 수술] 
     def save_state(self, ticker, now_est, state_data):
         file_path = self._get_state_file(ticker, now_est)
         today_str = self._get_logical_date_str(now_est)
@@ -125,7 +126,7 @@ class VAvwapHybridPlugin:
                 os.fsync(f.fileno())
             os.replace(temp_path, file_path)
         except Exception as e:
-            logging.error(f"🚨 [V_AVWAP] 상태 저장 실패: {e}")
+            logging.error(f"🚨 [V_AVWAP] 상태 저장 실패 (원자적 쓰기 에러): {e}")
 
     def fetch_macro_context(self, base_ticker):
         try:
@@ -198,137 +199,35 @@ class VAvwapHybridPlugin:
             logging.error(f"🚨 [V_AVWAP] YF 기초자산 매크로 컨텍스트 추출 실패 ({base_ticker}): {e}")
             return None
 
-    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, now_est=None, avwap_state=None, regime_data=None, is_apex_on=True, is_simulation=False, **kwargs):
-        df_1min_base = df_1min_base if df_1min_base is not None else kwargs.get('base_df')
+    # MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] df_1min_exec 수혈 락온
+    def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, df_1min_exec=None, now_est=None, avwap_state=None, regime_data=None, is_simulation=False, **kwargs):
+        # NEW: [V77.00 스코프 상단 선언] 
         avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
-
-        base_curr_p = base_curr_p if base_curr_p > 0 else kwargs.get('base_curr_p', 0.0)
         exec_curr_p = exec_curr_p if exec_curr_p > 0 else kwargs.get('exec_curr_p', 0.0)
-        base_day_open = base_day_open if base_day_open > 0 else kwargs.get('base_day_open', 0.0)
         avwap_avg_price = avwap_avg_price if avwap_avg_price > 0 else kwargs.get('avwap_avg_price', kwargs.get('avg_price', 0.0))
         avwap_alloc_cash = avwap_alloc_cash if avwap_alloc_cash > 0 else kwargs.get('alloc_cash', kwargs.get('avwap_alloc_cash', 0.0))
-
-        atr5 = kwargs.get('atr5', 0.0)
-        day_high = kwargs.get('day_high', 0.0)
-        day_low = kwargs.get('day_low', 0.0)
-        prev_c = kwargs.get('prev_close', 0.0)
-
-        if now_est is None:
-            now_est = datetime.datetime.now(ZoneInfo('America/New_York'))
-
-        if base_curr_p <= 0.0 and df_1min_base is not None and not df_1min_base.empty:
-            try: base_curr_p = float(df_1min_base['close'].iloc[-1])
-            except Exception: pass
-
-        avwap_state = avwap_state or {}
-        curr_time = now_est.time()
-
-        time_0930 = datetime.time(9, 30)
+        amp5 = float(kwargs.get('amp5', 0.0))
+        prev_c = float(kwargs.get('prev_close', 0.0))
         
-        dump_jitter_sec = avwap_state.get('dump_jitter_sec', 0)
+        now_est = now_est or datetime.datetime.now(ZoneInfo('America/New_York'))
+        curr_time = now_est.time()
+        
+        time_0925 = datetime.time(9, 25)
+        time_0930 = datetime.time(9, 30)
+
+        persistent_state = self.load_state(exec_ticker, now_est)
+        is_shutdown = persistent_state.get('shutdown', False)
+        
+        dump_jitter_sec = persistent_state.get('dump_jitter_sec', 0)
         base_dump_dt = datetime.datetime.combine(now_est.date(), datetime.time(15, 20)).replace(tzinfo=ZoneInfo('America/New_York'))
         dynamic_dump_dt = base_dump_dt - datetime.timedelta(seconds=dump_jitter_sec)
         time_dynamic_dump = dynamic_dump_dt.time()
-
-        is_regular_session = curr_time >= time_0930
-
-        base_vwap = base_curr_p
-        vwap_success = False 
-
-        # 🚨 MODIFIED: [V75.01 HA V-Turn 정밀 꼬리 파서 교체 및 심해 필터 전면 소각]
-        ha_2_bullish_no_lower = False
-        ha_v_turn_detected = False
-        trend_sequence = "PENDING"
         
-        is_pure_5m_2_bearish = False
-        current_5m_is_bearish = False
-
-        if df_1min_base is not None and not df_1min_base.empty:
-            try:
-                df = df_1min_base.copy()
-
-                if 'time_est' in df.columns:
-                    if is_regular_session:
-                        df = df[(df['time_est'] >= '093000') & (df['time_est'] <= '155900')]
-                    else:
-                        df = df[(df['time_est'] >= '040000') & (df['time_est'] <= '092959')]
-
-                if not df.empty:
-                    df['tp'] = (df['high'].astype(float) + df['low'].astype(float) + df['close'].astype(float)) / 3.0
-                    df['vol'] = df['volume'].astype(float)
-                    df['vol_tp'] = df['tp'] * df['vol']
-
-                    cum_vol = df['vol'].sum()
-                    if cum_vol > 0:
-                        base_vwap = df['vol_tp'].sum() / cum_vol
-                        vwap_success = True
-
-                    t_high_idx = df['high'].astype(float).idxmax()
-                    t_low_idx = df['low'].astype(float).idxmin()
-                    if t_high_idx < t_low_idx:
-                        trend_sequence = "BEAR"
-                    elif t_low_idx < t_high_idx:
-                        trend_sequence = "BULL"
-
-                    if is_regular_session and curr_time < datetime.time(9, 35):
-                        ha_2_bullish_no_lower = False
-                        ha_v_turn_detected = False
-                    else:
-                        df['datetime'] = pd.to_datetime(df.index)
-                        df.set_index('datetime', inplace=True)
-                        df_5m = df.resample('5min', label='left', closed='left').agg({
-                            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
-                        }).dropna()
-
-                        if not df_5m.empty:
-                            df_5m['is_pure_bearish'] = df_5m['close'].astype(float) < df_5m['open'].astype(float)
-                            if len(df_5m) >= 3:
-                                last_2_pure = df_5m.iloc[-3:-1]
-                                is_pure_5m_2_bearish = bool(last_2_pure['is_pure_bearish'].all())
-                            
-                            current_5m_open = float(df_5m['open'].iloc[-1])
-                            current_5m_is_bearish = (base_curr_p < current_5m_open)
-
-                            df_5m['HA_Close'] = (df_5m['open'].astype(float) + df_5m['high'].astype(float) + df_5m['low'].astype(float) + df_5m['close'].astype(float)) / 4.0
-                            ha_open = []
-                            for i in range(len(df_5m)):
-                                if i == 0:
-                                    ha_open.append((float(df_5m['open'].iloc[i]) + float(df_5m['close'].iloc[i])) / 2.0)
-                                else:
-                                    ha_open.append((ha_open[i-1] + float(df_5m['HA_Close'].iloc[i-1])) / 2.0)
-
-                            df_5m['HA_Open'] = pd.Series(ha_open, index=df_5m.index)
-                            df_5m['HA_High'] = df_5m[['high', 'HA_Open', 'HA_Close']].max(axis=1)
-                            df_5m['HA_Low'] = df_5m[['low', 'HA_Open', 'HA_Close']].min(axis=1)
-
-                            df_5m['No_Lower_Wick'] = (df_5m[['HA_Open', 'HA_Close']].min(axis=1) - df_5m['HA_Low']) <= 0.01
-                            df_5m['No_Upper_Wick'] = (df_5m['HA_High'] - df_5m[['HA_Open', 'HA_Close']].max(axis=1)) <= 0.01
-                            df_5m['Has_Lower_Wick'] = (df_5m[['HA_Open', 'HA_Close']].min(axis=1) - df_5m['HA_Low']) > 0.01
-                            df_5m['Has_Upper_Wick'] = (df_5m['HA_High'] - df_5m[['HA_Open', 'HA_Close']].max(axis=1)) > 0.01
-
-                            df_5m['Is_Bullish'] = df_5m['HA_Close'] >= df_5m['HA_Open']
-                            df_5m['Is_Bearish'] = df_5m['HA_Close'] < df_5m['HA_Open']
-
-                            if len(df_5m) >= 2:
-                                last_2 = df_5m.tail(2)
-                                ha_2_bullish_no_lower = last_2['Is_Bullish'].all() and last_2['No_Lower_Wick'].all()
-
-                            # 🚨 MODIFIED: [V75.01 윗꼬리 없는 음봉 3연속 ➔ HA 양봉(꼬리 무관) 1개 포착]
-                            if len(df_5m) >= 4:
-                                last_idx = len(df_5m) - 1
-                                bull_cond = df_5m['Is_Bullish'].iloc[last_idx]
-                                if bull_cond:
-                                    bear_count = 0
-                                    for i in range(last_idx - 1, -1, -1):
-                                        if df_5m['Is_Bearish'].iloc[i] and df_5m['No_Upper_Wick'].iloc[i]:
-                                            bear_count += 1
-                                        else:
-                                            break
-                                    if bear_count >= 3:
-                                        ha_v_turn_detected = True
-
-            except Exception as e:
-                logging.error(f"🚨 [V_AVWAP] 기초자산 HA 및 5분봉 연산 실패: {e}")
+        pm_h = persistent_state.get('PM_H', 0.0)
+        pm_l = persistent_state.get('PM_L', 0.0)
+        t_h = persistent_state.get('T_H', 0.0)
+        t_l = persistent_state.get('T_L', 0.0)
+        offset = persistent_state.get('offset', 0.0)
 
         def _build_res(action, reason, qty=0, target_price=0.0):
             return {
@@ -336,181 +235,117 @@ class VAvwapHybridPlugin:
                 'reason': reason,
                 'qty': qty,
                 'target_price': target_price,
-                'vwap': base_vwap,
+                'vwap': 0.0,
                 'base_curr_p': base_curr_p,
                 'prev_vwap': context_data.get('prev_vwap', 0.0) if context_data else 0.0
             }
 
-        if not vwap_success and avwap_qty == 0:
-            return _build_res('WAIT', 'VWAP_데이터_결측_동결')
-
-        safe_qty = int(math.floor(float(avwap_qty)))
-
         # ---------------------------------------------------------
-        # [3-Stage Apex Intercept (정점 요격) 전술 상태 업데이트]
+        # 1. 매도 (보유 중일 때) 로직 - V7.1 백테스트 투트랙 자동 청산
         # ---------------------------------------------------------
-        persistent_state = self.load_state(exec_ticker, now_est)
-        apex_stage_1 = persistent_state.get('APEX_STAGE_1', False)
-        apex_stage_2 = persistent_state.get('APEX_STAGE_2', False)
-        apex_peak_price = persistent_state.get('APEX_PEAK_PRICE', 0.0)
-        apex_changed = False
-
-        actual_gap_dollar_apex = day_high - day_low
-        actual_gap_pct_apex = (actual_gap_dollar_apex / prev_c) * 100.0 if prev_c > 0 else 0.0
-
-        if is_apex_on: 
-            if day_high > apex_peak_price:
-                apex_peak_price = day_high
-                apex_changed = True
-                if apex_stage_1 and apex_stage_2:
-                    apex_stage_2 = False
-                    
-            if atr5 > 0 and actual_gap_pct_apex >= atr5:
-                if not apex_stage_1:
-                    apex_stage_1 = True
-                    apex_peak_price = day_high
-                    apex_changed = True
-
-            if apex_stage_1 and not apex_stage_2:
-                if is_pure_5m_2_bearish:
-                    apex_stage_2 = True
-                    apex_changed = True
-        else:
-            if apex_stage_1 or apex_stage_2 or apex_peak_price > 0.0:
-                apex_stage_1 = False
-                apex_stage_2 = False
-                apex_peak_price = 0.0
-                apex_changed = True
-
-        if apex_changed:
-            persistent_state['APEX_STAGE_1'] = apex_stage_1
-            persistent_state['APEX_STAGE_2'] = apex_stage_2
-            persistent_state['APEX_PEAK_PRICE'] = apex_peak_price
-            if not is_simulation:
-                self.save_state(exec_ticker, now_est, persistent_state)
-
-        # ---------------------------------------------------------
-        # 1. 매도 (보유 중일 때) 로직 - 동적 지터(15:17~15:20) 무조건 덤핑 락온
-        # ---------------------------------------------------------
-        if safe_qty > 0:
+        if avwap_qty > 0:
             safe_avg = avwap_avg_price if avwap_avg_price > 0 else exec_curr_p
 
             if safe_avg <= 0:
-                return _build_res('SELL', 'CORRUPT_PRICE_EMERGENCY_DUMP', qty=safe_qty, target_price=exec_curr_p)
-
-            if is_apex_on and apex_stage_2 and current_5m_is_bearish: 
-                persistent_state['shutdown'] = True
-                if not is_simulation:
-                    self.save_state(exec_ticker, now_est, persistent_state)
-                return _build_res('SELL', '🎯 정점 요격(Apex Intercept) 팩트 타격 완료', qty=safe_qty, target_price=exec_curr_p)
+                return _build_res('SELL', 'CORRUPT_PRICE_EMERGENCY_DUMP', qty=avwap_qty, target_price=exec_curr_p)
 
             if curr_time >= time_dynamic_dump:
                 persistent_state["shutdown"] = True
                 if not is_simulation:
                     self.save_state(exec_ticker, now_est, persistent_state)
-                reason_str = f'{time_dynamic_dump.strftime("%H:%M:%S")}_도달_당일교전종료_무조건덤핑'
-                return _build_res('SELL', reason_str, qty=safe_qty, target_price=exec_curr_p)
+                return _build_res('SELL', '동적_덤핑_타임라인_도달_전량_시장가_덤핑', qty=avwap_qty, target_price=exec_curr_p)
 
-            if atr5 > 0 and exec_curr_p > 0 and safe_avg > 0:
-                loss_pct = ((safe_avg - exec_curr_p) / safe_avg) * 100.0
-                if loss_pct >= atr5:
-                    persistent_state["shutdown"] = True
-                    if not is_simulation:
-                        self.save_state(exec_ticker, now_est, persistent_state)
-                    return _build_res('SELL', f'ATR5_동적_하드스탑_피격(-{loss_pct:.2f}%)_당일영구동결', qty=safe_qty, target_price=exec_curr_p)
+            exit_target_price = round(safe_avg * 1.02, 2)
+            if exec_curr_p >= exit_target_price:
+                return _build_res('SELL', '목표가(+2.0%)_도달_순수모멘텀_익절_격발', qty=avwap_qty, target_price=exit_target_price)
 
-            return _build_res('HOLD', '보유중_관망(동적_지터_덤핑_대기)')
+            return _build_res('HOLD', '보유중_순수익절(+2.0%)_및_동적덤핑_감시중')
 
         # ---------------------------------------------------------
-        # 2. 매수 (포지션 0주 일 때) 로직 - 배타적 갭 필터 및 모멘텀 스캔
+        # 2. 매수 (포지션 0주 일 때) 로직 - V7.1 암살자 스캔 및 격발
         # ---------------------------------------------------------
-        if not context_data:
-            return _build_res('WAIT', '매크로_데이터_수집대기')
-
-        if avwap_state.get('shutdown', False) or persistent_state.get('shutdown', False):
-             return _build_res('WAIT', '당일영구동결_상태(신규진입금지)')
-
-        if not is_regular_session:
-            return _build_res('WAIT', '프리마켓_노이즈_원천차단_정규장_개장_대기')
+        if is_shutdown:
+            return _build_res('WAIT', '당일영구동결_상태(신규진입금지)')
 
         if curr_time >= time_dynamic_dump:
             persistent_state["shutdown"] = True
             if not is_simulation:
                 self.save_state(exec_ticker, now_est, persistent_state)
-            reason_str = f'{time_dynamic_dump.strftime("%H:%M:%S")}_도달_신규진입_영구동결'
-            return _build_res('SHUTDOWN', reason_str)
+            return _build_res('SHUTDOWN', '동적_덤핑_타임라인_도달_신규진입_영구동결')
 
-        base_prev_c = float(context_data.get('prev_close', 0.0))
-        prev_vwap = float(context_data.get('prev_vwap', 0.0))
-
-        if prev_c <= 0 or atr5 <= 0 or day_high <= 0 or day_low <= 0 or exec_curr_p <= 0 or base_vwap <= 0 or prev_vwap <= 0:
+        if prev_c <= 0 or amp5 <= 0:
             return _build_res('WAIT', '진입_평가용_필수데이터_결측_대기')
-            
-        actual_gap_dollar = day_high - day_low
-        actual_gap_pct = (actual_gap_dollar / prev_c) * 100.0 if prev_c > 0 else 0.0
-        
-        rem_relative_pct = ((atr5 - actual_gap_pct) / atr5 * 100.0) if atr5 > 0 else 0.0
 
-        # 🚨 MODIFIED: [V75.01 찐바닥 체력 30% 락다운 절대 방어막 원상 복구]
-        # 어떠한 시그널이 나오더라도 체력이 30% 미만이면 무조건 당일 영구 동결
-        if rem_relative_pct < 30.0:
+        # NEW: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] df_1min_exec 릴레이 배선 및 time_est 슬라이싱 적용
+        if curr_time >= time_0925 and pm_h == 0.0:
+            df_1m = df_1min_exec
+            if df_1m is not None and not df_1m.empty and 'time_est' in df_1m.columns:
+                df_pre = df_1m[(df_1m['time_est'] >= '040000') & (df_1m['time_est'] <= '092959')]
+                if not df_pre.empty:
+                    pm_h = float(df_pre['high'].max())
+                    pm_l = float(df_pre['low'].min())
+                    
+                    offset = prev_c * amp5 * 0.40
+                    t_h = pm_h - offset
+                    t_l = pm_l + offset
+                    
+                    if t_l >= t_h:
+                        t_l = max(0.01, t_h - 0.01)
+
+                    persistent_state['PM_H'] = pm_h
+                    persistent_state['PM_L'] = pm_l
+                    persistent_state['T_H'] = t_h
+                    persistent_state['T_L'] = t_l
+                    persistent_state['offset'] = offset
+
+                    if not is_simulation:
+                        self.save_state(exec_ticker, now_est, persistent_state)
+                    logging.info(f"🎯 [V7.1 백테스트 락온] {exec_ticker} PM_H: {pm_h:.2f}, PM_L: {pm_l:.2f}, 순수 진폭 Offset: {offset:.2f} | T_H: {t_h:.2f}, T_L: {t_l:.2f}")
+                else:
+                    return _build_res('WAIT', '프리마켓_데이터_결측_대기중')
+
+        if pm_h == 0.0 or t_h == 0.0:
+            return _build_res('WAIT', '프리마켓_타겟_연산_대기중')
+
+        if curr_time < time_0930:
+            return _build_res('WAIT', '정규장_개장_대기중')
+
+        # NEW: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] time_est 슬라이싱 적용
+        df_1m = df_1min_exec
+        if df_1m is None or df_1m.empty or 'time_est' not in df_1m.columns:
+            return _build_res('WAIT', '정규장_실시간_1분봉_결측')
+
+        df_reg = df_1m[(df_1m['time_est'] >= '093000') & (df_1m['time_est'] <= '152000')]
+        if df_reg.empty:
+            return _build_res('WAIT', '정규장_캔들_형성대기')
+
+        # 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] 소문자 컬럼 매핑으로 KeyError 소각
+        curr_candle = df_reg.iloc[-1]
+        curr_h = float(curr_candle['high'])
+        curr_l = float(curr_candle['low'])
+        curr_o = float(curr_candle['open'])
+        
+        hit_h = curr_h >= t_h
+        hit_l = curr_l <= t_l
+        
+        if hit_h and hit_l:
+            if abs(curr_o - t_h) < abs(curr_o - t_l):
+                hit_l = False
+            else:
+                hit_h = False
+                
+        if hit_l:
             persistent_state["shutdown"] = True
             if not is_simulation:
                 self.save_state(exec_ticker, now_est, persistent_state)
-            return _build_res('SHUTDOWN', 'ATR5_상대체력_30%미만_고갈_당일신규진입_영구동결')
+            logging.info(f"🛑 [V7.1 하락 락온] 1분봉 저가({curr_l:.2f})가 T_L({t_l:.2f}) 하향 돌파. 당일 매매 셧다운!")
+            return _build_res('SHUTDOWN', '일반하락장_T_L하향돌파_매매종료')
 
-        base_day_high = float(kwargs.get('base_day_high', 0.0))
-        base_day_low = float(kwargs.get('base_day_low', 0.0))
-        
-        is_neg_gap_state = False
-        if base_day_high > 0 and base_day_low > 0 and base_prev_c > 0:
-            is_neg_gap_state = (base_day_high < base_prev_c) and (base_day_low < base_prev_c)
+        if hit_h:
+            safe_budget = avwap_alloc_cash * 0.95
+            buy_qty = int(math.floor(safe_budget / exec_curr_p)) if exec_curr_p > 0 else 0
+            if buy_qty > 0:
+                logging.info(f"🚀 [V7.1 상승 격발] 1분봉 고가({curr_h:.2f})가 T_H({t_h:.2f}) 상향 돌파. 야성 매수 진입!")
+                return _build_res('BUY', '일반상승장_T_H상향돌파_순수모멘텀_격발', qty=buy_qty, target_price=exec_curr_p)
 
-        cond1_met = not is_neg_gap_state
-
-        ha_latched_bull = persistent_state.get('HA_LATCHED_BULL', False)
-        latch_changed = False
-
-        if ha_2_bullish_no_lower or ha_v_turn_detected:
-            if not ha_latched_bull:
-                ha_latched_bull = True
-                latch_changed = True
-                
-        if (trend_sequence == "BEAR" and not ha_v_turn_detected):
-            if ha_latched_bull:
-                ha_latched_bull = False
-                latch_changed = True
-
-        if latch_changed:
-            persistent_state['HA_LATCHED_BULL'] = ha_latched_bull
-            if not is_simulation:
-                self.save_state(exec_ticker, now_est, persistent_state)
-
-        # 🚨 V-Turn 타점 정밀 교정 시 VWAP 락다운 해방 바이패스 락온 유지 (체력 30% 이상일 때만 도달 가능)
-        cond2_met = ((base_curr_p > base_vwap) and ha_latched_bull) or ha_v_turn_detected
-        
-        # 🚨 MODIFIED: [V75.01 체력 30% 조건 원상 복구 (바이패스 불가)]
-        cond3_met = (rem_relative_pct >= 30.0)
-
-        cond_seq = True
-        if trend_sequence == "BEAR":
-            cond_seq = False
-            # 🚨 시계열 하락장은 V-Turn 포착 시 바이패스 허용
-            if ha_v_turn_detected:
-                cond_seq = True
-
-        if cond1_met and cond2_met and cond3_met and cond_seq:
-            if avwap_alloc_cash > 0:
-                safe_budget = avwap_alloc_cash * 0.95
-                buy_qty = int(math.floor(safe_budget / exec_curr_p))
-                if buy_qty > 0:
-                    return _build_res('BUY', 'V자 반등(HA 찐바닥 포착)' if ha_v_turn_detected else '하이킨아시_배타적갭필터_통과_타격개시', qty=buy_qty, target_price=exec_curr_p)
-            return _build_res('WAIT', '가용예산부족_대기')
-        else:
-            fail_reasons = []
-            if not cond1_met: fail_reasons.append("원웨이/배타적갭필터미달")
-            if not cond2_met: fail_reasons.append("HA모멘텀미달")
-            if not cond3_met: fail_reasons.append("체력미달")
-            if not cond_seq: fail_reasons.append("시계열체력하락세")
-            return _build_res('WAIT', f'진입조건대기({",".join(fail_reasons)})')
-
+        return _build_res('WAIT', '순수_타격선_도달_감시중')

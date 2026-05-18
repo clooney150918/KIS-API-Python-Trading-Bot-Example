@@ -26,6 +26,11 @@
 # 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
 # - get_avwap_decision 호출 규격에 is_simulation 파라미터를 추가하여, 
 #   관제탑 UI 렌더링 시 암살자 코어의 상태(JSON)가 덮어씌워지는 맹점을 원천 차단하는 릴레이 배선 개통.
+# 🚨 MODIFIED: [순수익 2.0% 절대 보장 타점 공식]
+# - get_avwap_decision 호출 규격에 fee_rate 파라미터를 추가하여 하위 암살자 코어 플러그인으로 다이렉트 수혈하는 릴레이 배선 개통.
+# 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
+# - get_avwap_decision 파라미터에서 낡은 fee_rate, is_apex_on 영구 소각
+# - df_1min_exec 팩트 수혈 파라미터 신규 개통 및 릴레이 배선 적용
 # ==========================================================
 import logging
 import pandas as pd
@@ -41,7 +46,6 @@ class InfiniteStrategy:
         self.cfg = config
         self.v14_plugin = V14Strategy(config)
         self.v_avwap_plugin = VAvwapHybridPlugin()
-        # MODIFIED: [V42 U-Curve 락온 무결성 복구] ReversionStrategy 객체 생성 시 config 인자 주입 배선 100% 복구
         self.v_rev_plugin = ReversionStrategy(config)
         self.v14_vwap_plugin = V14VwapStrategy(config)
 
@@ -50,7 +54,6 @@ class InfiniteStrategy:
             return {"vwap_price": 0.0, "is_strong_up": False, "is_strong_down": False}
             
         try:
-            # 🚨 MODIFIED: [V44.61 팩트 수술] 프리마켓 거래량 노이즈가 지배력 연산을 오염시키는 맹점 원천 차단
             if 'time_est' in df.columns:
                 df = df[(df['time_est'] >= '093000') & (df['time_est'] <= '155900')]
             
@@ -108,10 +111,6 @@ class InfiniteStrategy:
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, vwap_status=None, is_snapshot_mode=False, regime_data=None):
         version = self.cfg.get_version(ticker)
         
-        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
-        # [ V61 절대 헌법 ]: 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다.
-        # TQQQ는 무조건 V14 전용 락온 상태를 유지합니다.
-        
         if ticker.upper() == "TQQQ" and version != "V14":
             logging.warning(f"🚨 [{ticker}] 절대 헌법 위반 감지. V14 모드로 강제 라우팅합니다.")
             self.cfg.set_version(ticker, "V14")
@@ -124,7 +123,6 @@ class InfiniteStrategy:
 
         is_vwap_enabled = getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False)(ticker)
         
-        # 기본 플랜 산출
         if version == "V14" and is_vwap_enabled:
             plan = self.v14_vwap_plugin.get_plan(
                 ticker=ticker, current_price=current_price, avg_price=avg_price, qty=qty,
@@ -133,8 +131,6 @@ class InfiniteStrategy:
                 is_snapshot_mode=is_snapshot_mode
             )
         elif version == "V_REV":
-            # 🚨 MODIFIED: [V71.16 V-REV 런타임 붕괴 및 지시서 증발 맹점 완벽 수술]
-            # V-REV 모드 더미 반환 로직 전면 소각 및 get_dynamic_plan 다이렉트 락온
             try:
                 from queue_ledger import QueueLedger
                 ql = QueueLedger()
@@ -147,7 +143,6 @@ class InfiniteStrategy:
                     is_snapshot_mode=is_snapshot_mode, market_type=market_type
                 )
                 
-                # EXEC 모듈 및 스케줄러 호환성을 위해 core_orders 배열 팩트 주입
                 plan['core_orders'] = [o for o in plan.get('orders', [])]
                 plan['bonus_orders'] = []
                 plan['is_reverse'] = True
@@ -205,12 +200,10 @@ class InfiniteStrategy:
     def fetch_avwap_macro(self, base_ticker):
         return self.v_avwap_plugin.fetch_macro_context(base_ticker)
 
-    # 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재] is_apex_on 파라미터 수혈
-    # 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단] is_simulation 파라미터 릴레이 배선 개통
-    def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, is_apex_on=True, is_simulation=False, **kwargs):
-        # MODIFIED: [V60.00] AVWAP 옴니 매트릭스 락다운 필터 100% 영구 소각 완료.
+    # 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] df_1min_exec 팩트 수혈 파라미터 신설 및 데드코드 소각
+    def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, is_simulation=False, df_1min_exec=None, **kwargs):
         return self.v_avwap_plugin.get_decision(
             base_ticker=base_ticker, exec_ticker=exec_ticker, base_curr_p=base_curr_p, exec_curr_p=exec_curr_p, 
             base_day_open=base_day_open, avwap_avg_price=avg_price, avwap_qty=qty, avwap_alloc_cash=alloc_cash,
-            context_data=context_data, df_1min_base=df_1min_base, now_est=now_est, avwap_state=avwap_state, is_apex_on=is_apex_on, is_simulation=is_simulation, **kwargs
+            context_data=context_data, df_1min_base=df_1min_base, df_1min_exec=df_1min_exec, now_est=now_est, avwap_state=avwap_state, is_simulation=is_simulation, **kwargs
         )

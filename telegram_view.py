@@ -18,6 +18,8 @@
 # - '당일 스냅샷 박제'에서 '당일' 텍스트를 전면 소각하여 가독성을 한층 더 진공 압축 완료.
 # 🚨 MODIFIED: [V73.13 통합 지시서 수동 제어(EXEC/CANCEL) 완벽 스위칭 락온]
 # - is_locked 상태에 따른 버튼 상호 배타적(Mutually Exclusive) 렌더링 적용으로 시각적 디커플링 해체 완료.
+# 🚨 NEW: [V7.4 Assassin Lock-on] 정점 요격(Apex Intercept) 렌더링 및 UI 버튼 전면 영구 소각
+# - /settlement 메뉴에서 오조작을 유발하던 Apex 스위치 버튼 및 렌더링 텍스트를 100% 도려내어 라우팅 오염 차단.
 # ==========================================================
 import os
 import math
@@ -234,10 +236,10 @@ class TelegramView:
         msg = f"🛑 <b>[{ticker}] 차세대 AVWAP 듀얼 모멘텀 무장 해제 및 경고</b>\n\n"
         msg += "현재 <b>AVWAP 암살자 모드</b> 가동을 지시하셨습니다.\n"
         msg += "이 전술은 잉여 현금의 100%를 장중 딥매수 모멘텀 타격에 쏟아붓는 초공격형 옵션입니다.\n\n"
-        msg += "⚠️ <b>[ 실전 가동 제약 사항 (V66 락온) ]</b>\n"
+        msg += "⚠️ <b>[ 실전 가동 제약 사항 (V7.4 락온) ]</b>\n"
         msg += "1. 기존 V14의 상방 스나이퍼 기능은 즉시 영구 셧다운됩니다.\n"
         msg += "2. V-REV 큐(Queue)와는 물량과 평단가가 100% 분리되어 독립 연산됩니다.\n"
-        msg += "3. 15:22~15:25 EST (동적 지터 분산 타격) 도달 시 수익/손실 불문 <b>무조건 전량 덤핑 청산 후 당일 영구 동결(Shut-down)</b> 됩니다.\n\n"
+        msg += "3. 15:20 EST 도달 전까지 체결되지 않은 덫은 파기되며 무조건 시장가로 <b>전량 덤핑 청산 후 당일 영구 동결(Shut-down)</b> 됩니다.\n\n"
         msg += "포트폴리오 매니저의 최종 승인을 대기합니다."
         
         keyboard = [
@@ -259,7 +261,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V73.00 무결점 디커플링 에디션</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V75.01 무결점 디커플링 에디션 (V7.4 Assassin)</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -423,7 +425,7 @@ class TelegramView:
                         target_price = safe_avg * (1 + safe_target / 100.0)
                         body_msg += f"⚙️ 🎯 익절 목표가: <b>${target_price:.2f}</b> (+{safe_target}%)\n"
                     body_msg += f"⚙️ ⭐ 별지점: {safe_star_pct}% | 🎯감시: {sniper_status_txt}\n"
-                     
+                
                 if sniper_status_txt == "ON":
                     if not is_trade_active:
                         body_msg += "🎯 상방 스나이퍼: 감시 종료 (장마감)\n"
@@ -522,9 +524,7 @@ class TelegramView:
                     avwap_status_txt = "실전 가동 중 🔥" if is_avwap_on else "대기 중 ⚪"
                     msg += f"▫️ AVWAP 암살자: <b>{avwap_status_txt}</b>\n"
                 
-                is_apex_on = config.get_avwap_apex_mode(t) if hasattr(config, 'get_avwap_apex_mode') else True
-                apex_status_txt = "가동 중 🔥" if is_apex_on else "대기 중 ⚪"
-                msg += f"▫️ 정점요격(Apex Intercept): <b>{apex_status_txt}</b>\n"
+                # 🚨 NEW: [V7.4 Assassin Lock-on] Apex Intercept 텍스트 렌더링 100% 영구 소각
                 
                 msg += "⚖️ <b>엔진 스탠바이:</b> 15:26 EST KIS VWAP 실전 덫 장전 및 관망 중\n\n"
             else:
@@ -541,8 +541,7 @@ class TelegramView:
                 is_avwap = config.get_avwap_hybrid_mode(t) if hasattr(config, 'get_avwap_hybrid_mode') else False
                 keyboard.append([InlineKeyboardButton(f"⚔️ 파격적 AVWAP 모멘텀 [ {'가동중' if is_avwap else 'OFF'} ]", callback_data=f"MODE:AVWAP_{'OFF' if is_avwap else 'WARN'}:{t}")])
                 
-                is_apex_on = config.get_avwap_apex_mode(t) if hasattr(config, 'get_avwap_apex_mode') else True
-                keyboard.append([InlineKeyboardButton(f"🎯 3-Stage 정점요격 전술 [ {'ON' if is_apex_on else 'OFF'} ]", callback_data=f"MODE:APEX_{'OFF' if is_apex_on else 'ON'}:{t}")])
+                # 🚨 NEW: [V7.4 Assassin Lock-on] Apex Intercept 토글 버튼 100% 영구 소각하여 팻핑거 맹점 해체
                 
                 if t == "SOXL": keyboard.append([InlineKeyboardButton(f"🔫 {t} 단일 롱 모멘텀 관제탑", callback_data=f"AVWAP:MENU:{t}")])
                 keyboard.append([InlineKeyboardButton(f"💸 {t} 복리", callback_data=f"INPUT:COMPOUND:{t}"), InlineKeyboardButton(f"💳 {t} 수수료", callback_data=f"INPUT:FEE:{t}")])
@@ -705,3 +704,4 @@ class TelegramView:
         if len(body) > (4000 - len(header) - len(footer)):
             body = "… (글자 수 제한으로 이전 로그 생략) …\n" + body[-(3800 - len(header) - len(footer)):]
         return header + body + footer
+

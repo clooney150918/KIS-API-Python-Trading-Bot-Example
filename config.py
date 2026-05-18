@@ -10,8 +10,9 @@
 # 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 목표 수익률 및 다중 출장 모드 설정 I/O 파이프라인 100% 소각 완료.
 # MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
 # VWAP_PROFILES 딕셔너리 내 SOXS 30분 압축 프로파일 영구 소각 및 get_active_tickers 반환 팩트 교정 완료.
-# NEW: [V72.16 AVWAP 정점요격 스위치 탑재]
-# 정점요격(Apex Intercept) 가동 상태를 영속화하기 위한 파일 맵핑 및 뮤텍스 기반 락온 스위치 제어 메서드 이식 완료.
+# 🚨 MODIFIED: [V7.4 Assassin Lock-on] 정점요격 스위치(APEX_MODE_CFG) 맵핑 및 락온 파일 입출력 전면 적출 완료
+# 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
+# - 백테스트 수수료 환경과 100% 동기화하기 위해 DEFAULT_FEE 기본값을 0.07%로 하향 팩트 락온.
 # ==========================================================
 
 import json
@@ -74,9 +75,8 @@ class ConfigManager:
             "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
             "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
             "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",       
-            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json",
-            # NEW: [V72.16 AVWAP 정점요격 스위치 탑재] 파일 맵핑 신설
-            "APEX_MODE_CFG": "data/avwap_apex_mode.json"
+            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json"
+            # 🚨 MODIFIED: [V7.4 Assassin Lock-on] APEX_MODE_CFG 영구 소각
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -85,12 +85,13 @@ class ConfigManager:
         self.DEFAULT_VERSION = {"SOXL": "V14", "TQQQ": "V14"}
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
-        self.DEFAULT_FEE = {"SOXL": 0.25, "TQQQ": 0.25} 
+        
+        # 🚨 MODIFIED: [V77.01 팩트 수술] 백테스트 환경과 100% 동기화 (0.07% 수수료율 하향 락온)
+        self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
         
         self._escrow_cache = {}
         self._locks_mutex = threading.Lock()
         # MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
-        # 설정 파일 및 장부에 대한 다중 스레드 I/O 경합 조건(Race Condition)을 원천 차단합니다.
         self._io_lock = threading.RLock()
 
     def get_vwap_profile(self, ticker: str) -> dict:
@@ -179,7 +180,7 @@ class ConfigManager:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 fd = None
                 f.write(str(content))
-                f.flush()
+            f.flush()
             
             os.fsync(f.fileno()) 
             os.replace(temp_path, filename)
@@ -197,7 +198,7 @@ class ConfigManager:
         return self._load_json(self.FILES["SPLIT_HISTORY"], {}).get(ticker, "")
 
     def set_last_split_date(self, ticker, date_str):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["SPLIT_HISTORY"], {})
             d[ticker] = date_str
             self._save_json(self.FILES["SPLIT_HISTORY"], d)
@@ -265,8 +266,8 @@ class ConfigManager:
             if is_locked:
                 locks[f"ORDER_LOCKED_{ticker}"] = True
             else:
-                 if f"ORDER_LOCKED_{ticker}" in locks:
-                    del locks[f"ORDER_LOCKED_{ticker}"]
+                if f"ORDER_LOCKED_{ticker}" in locks:
+                     del locks[f"ORDER_LOCKED_{ticker}"]
         self._atomic_update_locks(_update)
 
     def set_lock(self, ticker, market_type):
@@ -308,7 +309,7 @@ class ConfigManager:
 
     def apply_stock_split(self, ticker, ratio):
         if ratio <= 0: return
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             changed = False
             for r in ledger:
@@ -321,10 +322,10 @@ class ConfigManager:
                         r['avg_price'] = round(r['avg_price'] / ratio, 4)
                     changed = True
             if changed:
-              self._save_json(self.FILES["LEDGER"], ledger)
+                self._save_json(self.FILES["LEDGER"], ledger)
 
     def overwrite_genesis_ledger(self, ticker, genesis_records, actual_avg):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             target_recs = [r for r in ledger if r['ticker'] == ticker]
             
@@ -350,7 +351,7 @@ class ConfigManager:
             self._save_json(self.FILES["LEDGER"], ledger)
 
     def overwrite_incremental_ledger(self, ticker, temp_recs, new_today_records):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             remaining = [r for r in ledger if r['ticker'] != ticker]
             updated_ticker_recs = list(temp_recs)
@@ -359,8 +360,8 @@ class ConfigManager:
             max_id = max([r.get('id', 0) for r in ledger] + [0])
             
             for i, rec in enumerate(new_today_records):
-                max_id += 1
-                new_row = {
+                 max_id += 1
+                 new_row = {
                     "id": max_id,
                     "date": rec['date'],
                     "ticker": ticker,
@@ -370,17 +371,17 @@ class ConfigManager:
                     "avg_price": rec['avg_price'],
                     "exec_id": rec.get("exec_id", f"FASTTRACK_{int(time.time())}_{i}"),
                     "is_reverse": current_rev_state
-                }
-                if "desc" in rec:
+                 }
+                 if "desc" in rec:
                     new_row["desc"] = rec["desc"]
                     
-                updated_ticker_recs.append(new_row)
+                 updated_ticker_recs.append(new_row)
                  
             remaining.extend(updated_ticker_recs)
             self._save_json(self.FILES["LEDGER"], remaining)
 
     def overwrite_ledger(self, ticker, actual_qty, actual_avg):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             target_recs = [r for r in ledger if r['ticker'] == ticker]
             
@@ -400,7 +401,7 @@ class ConfigManager:
             self._save_json(self.FILES["LEDGER"], ledger)
 
     def calibrate_avg_price(self, ticker, actual_avg):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             target_recs = [r for r in ledger if r['ticker'] == ticker]
             if target_recs:
@@ -411,7 +412,7 @@ class ConfigManager:
     def calibrate_ledger_prices(self, ticker, target_date_str, exec_history):
         if not exec_history:
             return 0
-            
+             
         buy_qty = 0
         buy_amt = 0.0
         sell_qty = 0
@@ -436,7 +437,7 @@ class ConfigManager:
         if actual_buy_price == 0.0 and actual_sell_price == 0.0:
             return 0
             
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             changed_count = 0
             
@@ -461,7 +462,7 @@ class ConfigManager:
             return changed_count
 
     def clear_ledger_for_ticker(self, ticker):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             remaining = [r for r in ledger if r['ticker'] != ticker]
             self._save_json(self.FILES["LEDGER"], remaining)
@@ -508,7 +509,7 @@ class ConfigManager:
         return d.get(ticker, {"is_active": False, "day_count": 0, "exit_target": 0.0, "last_update_date": ""})
 
     def set_reverse_state(self, ticker, is_active, day_count, exit_target=0.0, last_update_date=None):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             if last_update_date is None:
                 est = ZoneInfo('America/New_York')
                 last_update_date = datetime.datetime.now(est).strftime('%Y-%m-%d')
@@ -518,7 +519,7 @@ class ConfigManager:
             self._save_json(self.FILES["REVERSE_CFG"], d)
 
     def increment_reverse_day(self, ticker):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             state = self.get_reverse_state(ticker)
             if state.get("is_active"):
                 est = ZoneInfo('America/New_York')
@@ -529,7 +530,7 @@ class ConfigManager:
                     new_day = state.get("day_count", 0) + 1
                     self.set_reverse_state(ticker, True, new_day, state.get("exit_target", 0.0), today_est_str)
                     return True
-            return False
+        return False
 
     def calculate_v14_state(self, ticker):
         ledger = self.get_ledger()
@@ -567,7 +568,7 @@ class ConfigManager:
                         total_invested -= (qty * avg_price)
                 holdings -= qty
                 rem_cash += amt
-                    
+             
         avg_price = total_invested / holdings if holdings > 0 else 0.0
         t_val = (holdings * avg_price) / base_portion if base_portion > 0 else 0.0
         
@@ -581,7 +582,7 @@ class ConfigManager:
         return max(0.0, round(t_val, 4)), max(0.0, current_budget), max(0.0, rem_cash)
 
     def archive_graduation(self, ticker, end_date, prev_close=0.0):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             ledger = self.get_ledger()
             target_recs = [r for r in ledger if r['ticker'] == ticker]
             if not target_recs:
@@ -675,7 +676,7 @@ class ConfigManager:
         return float(self._load_json(self.FILES["SEED_CFG"], self.DEFAULT_SEED).get(t, 6720.0))
         
     def set_seed(self, t, v): 
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["SEED_CFG"], self.DEFAULT_SEED)
             d[t] = v
             self._save_json(self.FILES["SEED_CFG"], d)
@@ -684,7 +685,7 @@ class ConfigManager:
         return float(self._load_json(self.FILES["COMPOUND_CFG"], self.DEFAULT_COMPOUND).get(t, 70.0))
         
     def set_compound_rate(self, t, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["COMPOUND_CFG"], self.DEFAULT_COMPOUND)
             d[t] = v
             self._save_json(self.FILES["COMPOUND_CFG"], d)
@@ -695,7 +696,7 @@ class ConfigManager:
         return val
         
     def set_version(self, t, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             if t == "TQQQ": v = "V14"
             d = self._load_json(self.FILES["VERSION_CFG"], self.DEFAULT_VERSION)
             d[t] = v
@@ -706,12 +707,13 @@ class ConfigManager:
         
     def get_target_profit(self, t): 
         return self._load_json(self.FILES["PROFIT_CFG"], self.DEFAULT_TARGET).get(t, 10.0)
-         
+        
     def get_fee(self, t): 
-        return float(self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE).get(t, 0.25))
+        # 🚨 MODIFIED: [V77.01 팩트 수술] 폴백(Fallback) 값 0.07% 동기화 락온
+        return float(self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE).get(t, 0.07))
       
     def set_fee(self, t, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE)
             d[t] = float(v)
             self._save_json(self.FILES["FEE_CFG"], d)
@@ -721,16 +723,16 @@ class ConfigManager:
         return float(self._load_json(self.FILES["SNIPER_MULTIPLIER_CFG"], self.DEFAULT_SNIPER_MULTIPLIER).get(t, default_val))
         
     def set_sniper_multiplier(self, t, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
-            d = self._load_json(self.FILES["SNIPER_MULTIPLIER_CFG"], self.DEFAULT_SNIPER_MULTIPLIER)
-            d[t] = float(v)
-            self._save_json(self.FILES["SNIPER_MULTIPLIER_CFG"], d)
+        with self._io_lock:
+             d = self._load_json(self.FILES["SNIPER_MULTIPLIER_CFG"], self.DEFAULT_SNIPER_MULTIPLIER)
+             d[t] = float(v)
+             self._save_json(self.FILES["SNIPER_MULTIPLIER_CFG"], d)
 
     def get_upward_sniper_mode(self, ticker): 
         return self._load_json(self.FILES["UPWARD_SNIPER"], {}).get(ticker, False)
         
     def set_upward_sniper_mode(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["UPWARD_SNIPER"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["UPWARD_SNIPER"], d)
@@ -739,7 +741,7 @@ class ConfigManager:
         return self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {}).get(ticker, False)
     
     def set_avwap_hybrid_mode(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
@@ -748,7 +750,7 @@ class ConfigManager:
         return self._load_json(self.FILES["MANUAL_VWAP_CFG"], {}).get(ticker, False)
         
     def set_manual_vwap_mode(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
@@ -757,7 +759,7 @@ class ConfigManager:
         return self._load_json(self.FILES["MASTER_SWITCH"], {}).get(ticker, "ALL")
         
     def set_master_switch(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["MASTER_SWITCH"], {})
             d[ticker] = str(v)
             self._save_json(self.FILES["MASTER_SWITCH"], d)
@@ -766,7 +768,7 @@ class ConfigManager:
         return self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {}).get(ticker, False)
         
     def set_sniper_buy_locked(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["SNIPER_BUY_LOCKED"], d)
@@ -775,35 +777,24 @@ class ConfigManager:
         return self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {}).get(ticker, False)
         
     def set_sniper_sell_locked(self, ticker, v):
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             d = self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["SNIPER_SELL_LOCKED"], d)
-
-    # NEW: [V72.16 AVWAP 정점요격 스위치 탑재] 정점요격 가동 상태 영속화 입출력
-    def get_avwap_apex_mode(self, ticker): 
-        return self._load_json(self.FILES["APEX_MODE_CFG"], {}).get(ticker, True)
-        
-    def set_avwap_apex_mode(self, ticker, v):
-        with self._io_lock:
-            d = self._load_json(self.FILES["APEX_MODE_CFG"], {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES["APEX_MODE_CFG"], d)
 
     def get_secret_mode(self): 
         return self._load_file(self.FILES["SECRET_MODE"]) == 'True'
         
     def set_secret_mode(self, v): 
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             self._save_file(self.FILES["SECRET_MODE"], str(v))
     
     def get_active_tickers(self): 
         tickers = self._load_json(self.FILES["TICKER"], ["SOXL", "TQQQ"])
-        # MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용] SOXS 영구 적출 및 롱(SOXL/TQQQ) 단일화 락온
         return [t for t in tickers if t not in ["SOXS", "SQQQ", "SPXU"]]
         
     def set_active_tickers(self, v): 
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             self._save_json(self.FILES["TICKER"], v)
     
     def get_chat_id(self): 
@@ -811,5 +802,5 @@ class ConfigManager:
         return int(v) if v else None
         
     def set_chat_id(self, v): 
-        with self._io_lock: # MODIFIED: [V54.03 JSON 락온]
+        with self._io_lock:
             self._save_file(self.FILES["CHAT_ID"], v)
