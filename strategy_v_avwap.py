@@ -15,6 +15,11 @@
 # - 이벤트 루프 교착의 원흉이었던 동기 함수 _get_exec_1m_data() 100% 영구 소각
 # - get_decision 시그니처에 df_1min_exec 주입 및 time_est 기반 데이터 슬라이싱 락온
 # - 캔들 파서의 대문자 변수(High, Low, Open)를 소문자로 전면 교정하여 KeyError 런타임 붕괴 원천 차단
+# 🚨 NEW: [V77.02 프리마켓 관제탑 데이터 기아 및 런타임 붕괴 완벽 수술]
+# - 실시간 관측 스코프 전면 개방: 04:00~09:24 EST 구간 동안 매 분 타겟을 실시간 연산
+# - 09:25 정밀 락온(Lock-on) 탑재: 09:25 EST 도달 찰나에 실시간 연산 종료 및 타겟 영구 박제(pm_locked)
+# - 섀도우 연산 관찰자 효과 차단: is_simulation=True 시 파일 I/O 강제 바이패스 락온
+# - 다이렉트 패스 페이로드 확장: _build_res에 타겟 파라미터(PM_H, PM_L, T_H, T_L, offset, pm_locked) 100% 팩트 적재
 # ==========================================================
 import logging
 import datetime
@@ -73,6 +78,9 @@ class VAvwapHybridPlugin:
                     data['T_L'] = 0.0
                     data['offset'] = 0.0
                     data['dump_jitter_sec'] = random.randint(0, 180)
+                    
+                    # 🚨 NEW: [V77.02 정밀 락온 플래그 이식]
+                    data['pm_locked'] = False
 
                     data['date'] = today_str
                     self.save_state(ticker, now_est, data)
@@ -83,6 +91,7 @@ class VAvwapHybridPlugin:
                 data['T_H'] = float(data.get('T_H', 0.0))
                 data['T_L'] = float(data.get('T_L', 0.0))
                 data['offset'] = float(data.get('offset', 0.0))
+                data['pm_locked'] = bool(data.get('pm_locked', False))
 
                 return data
             except Exception:
@@ -93,7 +102,8 @@ class VAvwapHybridPlugin:
             "executed_buy": False, "shutdown": False, "strikes": 0, "qty": 0, 
             "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, 
             "dump_jitter_sec": random.randint(0, 180),
-            "PM_H": 0.0, "PM_L": 0.0, "T_H": 0.0, "T_L": 0.0, "offset": 0.0
+            "PM_H": 0.0, "PM_L": 0.0, "T_H": 0.0, "T_L": 0.0, "offset": 0.0,
+            "pm_locked": False
         }
 
     def save_state(self, ticker, now_est, state_data):
@@ -212,6 +222,7 @@ class VAvwapHybridPlugin:
         now_est = now_est or datetime.datetime.now(ZoneInfo('America/New_York'))
         curr_time = now_est.time()
         
+        time_0400 = datetime.time(4, 0)
         time_0925 = datetime.time(9, 25)
         time_0930 = datetime.time(9, 30)
 
@@ -223,6 +234,7 @@ class VAvwapHybridPlugin:
         dynamic_dump_dt = base_dump_dt - datetime.timedelta(seconds=dump_jitter_sec)
         time_dynamic_dump = dynamic_dump_dt.time()
         
+        pm_locked = persistent_state.get('pm_locked', False)
         pm_h = persistent_state.get('PM_H', 0.0)
         pm_l = persistent_state.get('PM_L', 0.0)
         t_h = persistent_state.get('T_H', 0.0)
@@ -237,7 +249,14 @@ class VAvwapHybridPlugin:
                 'target_price': target_price,
                 'vwap': 0.0,
                 'base_curr_p': base_curr_p,
-                'prev_vwap': context_data.get('prev_vwap', 0.0) if context_data else 0.0
+                'prev_vwap': context_data.get('prev_vwap', 0.0) if context_data else 0.0,
+                # 🚨 NEW: [V77.02 다이렉트 패스 페이로드 확장] 관제탑 렌더링 팩트 수혈
+                'PM_H': pm_h,
+                'PM_L': pm_l,
+                'T_H': t_h,
+                'T_L': t_l,
+                'offset': offset,
+                'pm_locked': pm_locked
             }
 
         # ---------------------------------------------------------
@@ -276,39 +295,65 @@ class VAvwapHybridPlugin:
         if prev_c <= 0 or amp5 <= 0:
             return _build_res('WAIT', '진입_평가용_필수데이터_결측_대기')
 
-        # NEW: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] df_1min_exec 릴레이 배선 및 time_est 슬라이싱 적용
-        if curr_time >= time_0925 and pm_h == 0.0:
+        # 🚨 NEW: [V77.02 실시간 관측 스코프 전면 개방 및 09:25 정밀 락온 엔진 탑재]
+        if not pm_locked and curr_time >= time_0400:
             df_1m = df_1min_exec
             if df_1m is not None and not df_1m.empty and 'time_est' in df_1m.columns:
-                df_pre = df_1m[(df_1m['time_est'] >= '040000') & (df_1m['time_est'] <= '092959')]
+                end_time_str = curr_time.strftime('%H%M%S') if curr_time < time_0925 else '092459'
+                df_pre = df_1m[(df_1m['time_est'] >= '040000') & (df_1m['time_est'] <= end_time_str)]
+                
                 if not df_pre.empty:
-                    pm_h = float(df_pre['high'].max())
-                    pm_l = float(df_pre['low'].min())
+                    curr_pm_h = float(df_pre['high'].max())
+                    curr_pm_l = float(df_pre['low'].min())
                     
-                    offset = prev_c * amp5 * 0.40
-                    t_h = pm_h - offset
-                    t_l = pm_l + offset
+                    curr_offset = prev_c * amp5 * 0.40
+                    curr_t_h = curr_pm_h - curr_offset
+                    curr_t_l = curr_pm_l + curr_offset
                     
-                    if t_l >= t_h:
-                        t_l = max(0.01, t_h - 0.01)
+                    if curr_t_l >= curr_t_h:
+                        curr_t_l = max(0.01, curr_t_h - 0.01)
+
+                    pm_h = curr_pm_h
+                    pm_l = curr_pm_l
+                    t_h = curr_t_h
+                    t_l = curr_t_l
+                    offset = curr_offset
 
                     persistent_state['PM_H'] = pm_h
                     persistent_state['PM_L'] = pm_l
                     persistent_state['T_H'] = t_h
                     persistent_state['T_L'] = t_l
                     persistent_state['offset'] = offset
-
-                    if not is_simulation:
-                        self.save_state(exec_ticker, now_est, persistent_state)
-                    logging.info(f"🎯 [V7.1 백테스트 락온] {exec_ticker} PM_H: {pm_h:.2f}, PM_L: {pm_l:.2f}, 순수 진폭 Offset: {offset:.2f} | T_H: {t_h:.2f}, T_L: {t_l:.2f}")
+                    
+                    if curr_time >= time_0925:
+                        pm_locked = True
+                        persistent_state['pm_locked'] = True
+                        
+                        # 섀도우 연산 관찰자 효과 차단 (is_simulation=True 시 파일 I/O 강제 바이패스 락온)
+                        if not is_simulation:
+                            self.save_state(exec_ticker, now_est, persistent_state)
+                            logging.info(f"🎯 [V7.1 백테스트 락온 완료] {exec_ticker} 09:25 EST 팩트 타겟 영구 박제 | PM_H: {pm_h:.2f}, PM_L: {pm_l:.2f}, 진폭 Offset: {offset:.2f} | T_H: {t_h:.2f}, T_L: {t_l:.2f}")
+                    else:
+                        if not is_simulation:
+                            self.save_state(exec_ticker, now_est, persistent_state)
                 else:
+                    if curr_time >= time_0925:
+                        return _build_res('WAIT', '프리마켓_데이터_결측_대기중')
+            else:
+                if curr_time >= time_0925:
                     return _build_res('WAIT', '프리마켓_데이터_결측_대기중')
 
+        if not pm_locked and curr_time < time_0925:
+            return _build_res('WAIT', '👀 프리장 실시간 타겟 스캔 중')
+
         if pm_h == 0.0 or t_h == 0.0:
-            return _build_res('WAIT', '프리마켓_타겟_연산_대기중')
+            return _build_res('WAIT', '프리마켓_타겟_연산_데이터_결측')
 
         if curr_time < time_0930:
-            return _build_res('WAIT', '정규장_개장_대기중')
+            if not pm_locked:
+                return _build_res('WAIT', '👀 프리장 실시간 타겟 스캔 중')
+            else:
+                return _build_res('WAIT', '🔒 09:25 타겟 락온 완료 (정규장 대기 중)')
 
         # NEW: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] time_est 슬라이싱 적용
         df_1m = df_1min_exec
