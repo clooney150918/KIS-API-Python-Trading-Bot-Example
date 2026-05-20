@@ -15,6 +15,7 @@
 # 🚨 NEW: [V71.23 KIS API 알고리즘 타임 파라미터 유령 Key 소각 및 팩트 교정]
 # 🚨 NEW: [V77.00 V7.1 백테스트 절대 동기화] 순수 진폭 Amp 5MA 엔진 이식 및 get_amp_5d_data 개통
 # 🚨 MODIFIED: [V77.01 들여쓰기 붕괴 런타임 즉사 방어] get_execution_history 내 else: break 구문 IndentationError 팩트 교정 완료.
+# 🚨 MODIFIED: [V77.02 하극상 매수 영구 소각] _ceil_2 내부 파이썬 부동소수점 오차(IEEE 754) 1센트 팽창 버그 원천 차단.
 # ==========================================================
 
 import requests
@@ -168,7 +169,8 @@ class KoreaInvestmentBroker:
 
     def _ceil_2(self, value):
         if value is None: return 0.0
-        return max(0.01, math.ceil(value * 100) / 100.0)
+        # MODIFIED: [V77.02 하극상 매수 영구 소각] 파이썬 부동소수점 오차(IEEE 754)로 인한 1센트 팽창 버그 원천 차단을 위해 math.ceil 직전 round(..., 4) 주입
+        return max(0.01, math.ceil(round(float(value) * 100, 4)) / 100.0)
 
     def _safe_float(self, value):
         try: return float(str(value).replace(',', ''))
