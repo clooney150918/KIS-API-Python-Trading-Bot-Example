@@ -1,10 +1,7 @@
 # ==========================================================
 # FILE: strategy_v14.py
 # ==========================================================
-# MODIFIED: [V77.20 데이터 기아(Data Starvation) 및 스냅샷 증발 맹점 완벽 수술]
-# - V14 오리지널(LOC) 모드에서 스냅샷 모드 호출 시 JSON 파일 저장이 누락되어
-#   15:26 EDT 지연 장전 스케줄러가 0건의 주문을 생성하던 치명적 하극상 원천 차단.
-# - 모든 return 분기 직전에 self.save_daily_snapshot 락온(Lock-on) 방어막 이식 완료.
+# 🚨 MODIFIED: [스냅샷 무결성 파이프라인 팩트 교정] os.path.exists 방어막 소각
 # ==========================================================
 import math
 import os
@@ -18,7 +15,6 @@ class V14Strategy:
         self.cfg = config
 
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
-    def _floor(self, val): return math.floor(val * 100) / 100.0
 
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
@@ -32,9 +28,7 @@ class V14Strategy:
         today_str = self._get_logical_date_str()
         snap_file = f"data/daily_snapshot_V14_{today_str}_{ticker}.json"
         
-        if os.path.exists(snap_file):
-            return
-        
+        # 🚨 [스냅샷 무결성 락온] os.path.exists 방어막 영구 소각 (무조건 최신 팩트로 오버라이드)
         data = {
             "date": today_str,
             "total_q": int(plan_data.get('total_q', 0)),
@@ -52,14 +46,15 @@ class V14Strategy:
         
         os.makedirs(os.path.dirname(snap_file), exist_ok=True)
         try:
-            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(snap_file))
+            fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(snap_file), text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, snap_file)
         except Exception:
-            pass
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     def load_daily_snapshot(self, ticker):
         today_str = self._get_logical_date_str()
@@ -90,8 +85,8 @@ class V14Strategy:
 
         data = {"date": today_str, "QUARTER_SELL_COMPLETED": True}
         try:
-            fd, temp_path = tempfile.mkstemp(dir=".")
-            with os.fdopen(fd, 'w') as f:
+            fd, temp_path = tempfile.mkstemp(dir=".", text=True)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f)
                 f.flush()
                 os.fsync(f.fileno())
@@ -189,7 +184,6 @@ class V14Strategy:
                 
             if one_portion_amt <= 0:
                 plan_result = {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": 0.0, "process_status": "⛔리버스예산오류(0원)", "is_reverse": True, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-                # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
                 if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
                 return plan_result
         else:
@@ -201,7 +195,6 @@ class V14Strategy:
         base_price = current_price if current_price > 0 else prev_close
         if base_price <= 0: 
             plan_result = {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": "⛔가격오류", "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-            # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
             if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
             return plan_result
             
@@ -211,7 +204,6 @@ class V14Strategy:
                 core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
             orders = core_orders + bonus_orders
             plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-            # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
             if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
             return plan_result
 
@@ -228,10 +220,19 @@ class V14Strategy:
                 
                 if buy_qty1 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty1, "type": "LOC", "desc": "🆕새출발1"})
                 if buy_qty2 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty2, "type": "LOC", "desc": "🆕새출발2"})
-                orders = core_orders + bonus_orders
                 
+                q_base = sum(o['qty'] for o in core_orders if o['side'] == 'BUY')
+                if q_base > 0:
+                    for n in range(1, 6):
+                        jub_price = math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0
+                        if jub_price > 0.01:
+                            bonus_orders.append({
+                                "side": "BUY", "price": jub_price, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"
+                            })
+                        
+            
+                orders = core_orders + bonus_orders
                 plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-                # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
                 if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
                 return plan_result
 
@@ -269,11 +270,19 @@ class V14Strategy:
 
                 if lock_s_sell: process_status = "🔫리버스(명중)"
 
+                q_base = sum(o['qty'] for o in core_orders if o['side'] == 'BUY')
+                if q_base > 0:
+                    for n in range(1, 6):
+                        jub_price = math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0
+                        if jub_price > 0.01:
+                            bonus_orders.append({
+                                "side": "BUY", "price": jub_price, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"
+                            })
+
                 core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
                 orders = core_orders + bonus_orders
                 
                 plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-                # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
                 if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
                 return plan_result
 
@@ -285,7 +294,6 @@ class V14Strategy:
                 orders = core_orders + bonus_orders
                 
                 plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-                # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
                 if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
                 return plan_result
                 
@@ -333,6 +341,15 @@ class V14Strategy:
 
             if lock_s_sell: process_status = "🔫스나이퍼(명중)"
 
+            q_base = sum(o['qty'] for o in core_orders if o['side'] == 'BUY')
+            if q_base > 0:
+                for n in range(1, 6):
+                    jub_price = math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0
+                    if jub_price > 0.01:
+                        bonus_orders.append({
+                            "side": "BUY", "price": jub_price, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"
+                        })
+
             core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
             orders = core_orders + bonus_orders
             
@@ -343,6 +360,5 @@ class V14Strategy:
                 "real_cash_used": real_available_cash,
                 "tracking_info": tr_info 
             }
-            # MODIFIED: [V77.20 스냅샷 무결성 하드 가드 장착]
             if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
             return plan_result

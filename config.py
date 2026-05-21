@@ -13,6 +13,7 @@
 # 🚨 MODIFIED: [V7.4 Assassin Lock-on] 정점요격 스위치(APEX_MODE_CFG) 맵핑 및 락온 파일 입출력 전면 적출 완료
 # 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
 # - 백테스트 수수료 환경과 100% 동기화하기 위해 DEFAULT_FEE 기본값을 0.07%로 하향 팩트 락온.
+# 🚨 MODIFIED: [V77.29 데드코드 영구 소각] 중복 선언된 get_version_history 라우터를 전면 적출하고 get_full_version_history로 단일 진실 공급원(SSOT) 락온 완료
 # ==========================================================
 
 import json
@@ -76,7 +77,6 @@ class ConfigManager:
             "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
             "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",       
             "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json"
-            # 🚨 MODIFIED: [V7.4 Assassin Lock-on] APEX_MODE_CFG 영구 소각
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -86,12 +86,10 @@ class ConfigManager:
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         
-        # 🚨 MODIFIED: [V77.01 팩트 수술] 백테스트 환경과 100% 동기화 (0.07% 수수료율 하향 락온)
         self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
         
         self._escrow_cache = {}
         self._locks_mutex = threading.Lock()
-        # MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
         self._io_lock = threading.RLock()
 
     def get_vwap_profile(self, ticker: str) -> dict:
@@ -140,7 +138,7 @@ class ConfigManager:
             dir_name = os.path.dirname(filename) or '.'
             if not os.path.exists(dir_name):
                 os.makedirs(dir_name, exist_ok=True)
-                
+                 
             fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 fd = None
@@ -284,7 +282,7 @@ class ConfigManager:
             locks.clear()
             locks.update(surviving_locks)
         self._atomic_update_locks(_update)
-        
+         
     def reset_lock_for_ticker(self, ticker):
         est = ZoneInfo('America/New_York')
         today = datetime.datetime.now(est).strftime('%Y-%m-%d')
@@ -473,6 +471,7 @@ class ConfigManager:
         if records is None:
             records = self.get_ledger()
         target_recs = [r for r in records if r['ticker'] == ticker]
+        
         total_qty, total_invested, total_sold = 0, 0.0, 0.0    
         
         running_qty = 0
@@ -578,7 +577,7 @@ class ConfigManager:
         else:
             current_budget = base_portion
             t_val = 0.0
-            
+             
         return max(0.0, round(t_val, 4)), max(0.0, current_budget), max(0.0, rem_cash)
 
     def archive_graduation(self, ticker, end_date, prev_close=0.0):
@@ -648,7 +647,7 @@ class ConfigManager:
             }
             history.append(new_hist)
             self._save_json(self.FILES["HISTORY"], history)
-            
+             
             self.clear_ledger_for_ticker(ticker)
             
             return new_hist, added_seed
@@ -656,14 +655,12 @@ class ConfigManager:
     def get_history(self):
         return self._load_json(self.FILES["HISTORY"], [])
 
+    # MODIFIED: [V77.29 데드코드 영구 소각] 중복 선언된 get_version_history를 소각하고 단일화
     def get_full_version_history(self):
         return VERSION_HISTORY
 
-    def get_version_history(self):
-        return VERSION_HISTORY
-
     def get_latest_version(self):
-        history = self.get_version_history()
+        history = self.get_full_version_history()
         if history and len(history) > 0:
             latest_entry = history[-1]
             if isinstance(latest_entry, dict):

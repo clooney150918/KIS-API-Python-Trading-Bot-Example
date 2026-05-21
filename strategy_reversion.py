@@ -1,13 +1,7 @@
 # ==========================================================
 # FILE: strategy_reversion.py
 # ==========================================================
-# (상단 주석 생략...)
-# 🚨 MODIFIED: [V75.11 예산 증발 데이터 기아(Amnesia) 완벽 수술]
-# - 상태 파일(_load_state_if_needed)에서 날짜(date) 비교가 누락되어 어제의 예산 지출(BUY_BUDGET)이 
-#   오늘로 강제 이월(Carry-over)되는 치명적 하극상 원천 차단.
-# - 날짜가 일치할 때만 잔차를 로드하고, 다르면 0.0으로 팩트 초기화하도록 멱등성 락온.
-# - 스냅샷 모의 장전 시(is_snapshot_mode=True), 잔여 예산이 $0.0으로 기집행 처리되어
-#   매수 덫이 통째로 렌더링에서 증발하던 사용자 1의 맹점 원천 차단.
+# 🚨 MODIFIED: [스냅샷 무결성 파이프라인 팩트 교정] os.path.exists 방어막 소각
 # ==========================================================
 import math
 import os
@@ -40,7 +34,6 @@ class ReversionStrategy:
         today_str = self._get_logical_date_str()
         return f"data/daily_snapshot_REV_{today_str}_{ticker}.json"
 
-    # 🚨 MODIFIED: [V75.11 예산 증발 기억상실 맹점 완벽 수술]
     def _load_state_if_needed(self, ticker):
         today_str = self._get_logical_date_str()
         if self.state_loaded.get(ticker) == today_str:
@@ -51,7 +44,6 @@ class ReversionStrategy:
             try:
                 with open(state_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    # 🚨 팩트 스캔: 날짜가 같을 때만 어제의 예산 복원
                     if data.get("date") == today_str:
                         for k in self.executed.keys():
                             raw_val = data.get("executed", {}).get(k, 0)
@@ -64,7 +56,7 @@ class ReversionStrategy:
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
-        self._save_state(ticker) # 🚨 초기화 저장 강제 락온
+        self._save_state(ticker)
 
     def _save_state(self, ticker):
         today_str = self._get_logical_date_str()
@@ -77,7 +69,6 @@ class ReversionStrategy:
                 "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
             }
         }
-        temp_path = None
         try:
             dir_name = os.path.dirname(state_file)
             if dir_name and not os.path.exists(dir_name):
@@ -88,28 +79,18 @@ class ReversionStrategy:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, state_file)
-            temp_path = None
         except Exception:
-            if temp_path and os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
-
-    def refund_residual(self, ticker, bucket, refund_value):
-        pass
+            pass
 
     def save_daily_snapshot(self, ticker, plan_data):
         snap_file = self._get_snapshot_file(ticker)
-        if os.path.exists(snap_file):
-            return
-            
+        
+        # 🚨 [스냅샷 무결성 락온] os.path.exists 방어막 영구 소각 (무조건 최신 팩트로 오버라이드)
         today_str = self._get_logical_date_str()
         data = {
             "date": today_str,
             "plan": plan_data
         }
-        temp_path = None
         try:
             dir_name = os.path.dirname(snap_file)
             if not os.path.exists(dir_name):
@@ -120,11 +101,8 @@ class ReversionStrategy:
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, snap_file)
-            temp_path = None
         except Exception:
-            if temp_path and os.path.exists(temp_path):
-                try: os.unlink(temp_path)
-                except OSError: pass
+            pass
 
     def load_daily_snapshot(self, ticker):
         snap_file = self._get_snapshot_file(ticker)
@@ -148,10 +126,7 @@ class ReversionStrategy:
         legacy_lots = [item for item in q_data if not str(item.get("date", "")).startswith(today_str_est)]
         legacy_q = sum(int(item.get("qty", 0)) for item in legacy_lots if float(item.get('price', 0.0)) > 0)
         
-        if pure_qty != legacy_q:
-            logging.warning(f"⚠️ [{ticker}] V-REV 페일세이프 경고: KIS 순수 본대 수량({pure_qty}주)과 이월 큐 장부 수량({legacy_q}주) 불일치 감지. CALIB 비파괴 보정 또는 수동 동기화 요망.")
-        
-        logging.warning(f"🚨 [{ticker}] V_REV 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (KIS총잔고:{total_kis_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주 | 이월 큐 장부:{legacy_q}주)")
+        logging.warning(f"🚨 [{ticker}] V_REV 스냅샷 증발 감지! 페일세이프 긴급 복원 가동")
         
         return self.get_dynamic_plan(
             ticker=ticker,
@@ -165,9 +140,6 @@ class ReversionStrategy:
             is_snapshot_mode=True,
             market_type="REG"
         )
-
-    def reset_residual(self, ticker):
-        pass
 
     def record_execution(self, ticker, side, qty, exec_price):
         self._load_state_if_needed(ticker)
@@ -185,12 +157,9 @@ class ReversionStrategy:
         self._load_state_if_needed(ticker)
 
         cached_plan = self.load_daily_snapshot(ticker)
-        
-        # 🚨 MODIFIED: [V72.19 V-REV 덫 복원 시 스냅샷 데이터 기아 방어 전진 배치]
         if not is_snapshot_mode and cached_plan:
             return cached_plan
 
-        # 🚨 [제20경고 팩트 검증] 큐(Queue) 장부의 순수 평단가 역산. KIS 평단가(actual_avg) 절대 참조 금지.
         valid_q_data = [item for item in q_data if float(item.get('price', 0.0)) > 0]
         total_q = sum(int(item.get("qty", 0)) for item in valid_q_data)
         total_inv = sum(float(item.get('qty', 0)) * float(item.get('price', 0.0)) for item in valid_q_data)
@@ -206,7 +175,6 @@ class ReversionStrategy:
         
         upper_qty = total_q - l1_qty
 
-        # 🚨 MODIFIED: [V72.13 V-REV 1층 독립 및 상위층 총평단가 연동 엑시트 전술 이식]
         trigger_l1 = round(l1_price * 1.006, 2)
         trigger_upper = round(avg_price * 1.010, 2) if upper_qty > 0 else 0.0
 
@@ -227,12 +195,10 @@ class ReversionStrategy:
             p2_trigger = round(prev_c * 0.999, 2)
         else:
             side = "SELL" if curr_p > prev_c else "BUY"
-            # 🚨 MODIFIED: [V75.05 제20경고 절대 헌법 준수: V-REV 매수 타점 1층 평단가 앵커 락온 및 타점 배수 팩트 교정]
             safe_anchor = l1_price if l1_price > 0.0 else prev_c
             p1_trigger = round(safe_anchor * 0.9976, 2)
             p2_trigger = round(safe_anchor * 0.9887, 2)
 
-        # 🚨 MODIFIED: [V72.24 자전거래(Wash Sale) 락온 방어막 복구]
         rem_qty_total = max(0, int(total_q) - int(self.executed["SELL_QTY"].get(ticker, 0)))
         available_l1 = min(l1_qty, rem_qty_total) if rem_qty_total > 0 else 0
         available_upper = min(upper_qty, rem_qty_total - available_l1) if rem_qty_total > 0 else 0
@@ -253,8 +219,6 @@ class ReversionStrategy:
 
         orders = []
 
-        # 🚨 MODIFIED: [V75.11 스냅샷 매수 예산 기아(Data Starvation) 원천 차단]
-        # 스냅샷 모드일 때는 total_spent를 0.0으로 팩트 무시하고 100% 매수 덫을 렌더링(장전)합니다.
         total_spent = 0.0 if is_snapshot_mode else float(self.executed["BUY_BUDGET"].get(ticker, 0.0))
         
         seed_val = float(self.cfg.get_seed(ticker) or 0.0)
@@ -270,7 +234,6 @@ class ReversionStrategy:
             q1 = math.floor(b1_budget / p1_trigger) if p1_trigger > 0 else 0
             q2 = math.floor(b2_budget / p2_trigger) if p2_trigger > 0 else 0
             
-            # 🚨 MODIFIED: [V75.08 소형 시드 데이터 기아(Data Starvation) 맹점 영구 소각 및 영끌(Sweep) 타격 복원]
             if q1 == 0 and q2 == 0:
                 if p1_trigger > 0 and rem_budget >= p1_trigger:
                     q1 = math.floor(rem_budget / p1_trigger)
@@ -281,7 +244,6 @@ class ReversionStrategy:
             elif q2 == 0 and q1 > 0:
                 q1 = math.floor(rem_budget / p1_trigger) if p1_trigger > 0 else 0
             
-            # 🚨 MODIFIED: [V75.04 KIS VWAP 3-Min 지터 동적 시프트(Shift) 및 KST 래핑 락온]
             est_zone = ZoneInfo('America/New_York')
             kst_zone = ZoneInfo('Asia/Seoul')
             now_est = datetime.now(est_zone)

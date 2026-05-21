@@ -10,6 +10,7 @@
 # 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
 # 외부 모듈(telegram_callbacks, telegram_states, telegram_sync_engine)이 
 # 파일 I/O를 직접 수행하며 발생하는 락(Lock) 우회 맹점을 차단하기 위한 4대 스레드 세이프 전용 메서드 신설.
+# 🚨 MODIFIED: [V77.29 데드코드 영구 소각] 타 모듈에서 직접 연산하므로 방치된 get_total_qty 100% 영구 적출 완료.
 # ==========================================================
 import os
 import json
@@ -112,10 +113,6 @@ class QueueLedger:
             data = self._load_unsafe()
             q = data.get(ticker, [])
             return [lot for lot in q if int(float(lot.get("qty") or 0)) > 0]
-
-    def get_total_qty(self, ticker):
-        q = self.get_queue(ticker)
-        return sum(int(float(item.get("qty") or 0)) for item in q)
 
     def add_lot(self, ticker, qty, price, lot_type="NORMAL"):
         qty = int(float(qty or 0))

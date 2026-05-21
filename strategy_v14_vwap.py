@@ -1,11 +1,7 @@
 # ==========================================================
 # FILE: strategy_v14_vwap.py
 # ==========================================================
-# (상단 주석 생략...)
-# 🚨 MODIFIED: [V75.11 예산 증발 데이터 기아(Amnesia) 완벽 수술]
-# - 상태 파일(_load_state_if_needed)에서 날짜(date) 비교가 누락되어 어제의 예산 지출(BUY_BUDGET)이 
-#   오늘로 강제 이월(Carry-over)되는 치명적 하극상 원천 차단.
-# - 날짜가 일치할 때만 잔차를 로드하고, 다르면 0.0으로 팩트 초기화하도록 멱등성 락온.
+# 🚨 MODIFIED: [스냅샷 무결성 파이프라인 팩트 교정] os.path.exists 방어막 소각
 # ==========================================================
 import math
 import logging
@@ -38,7 +34,6 @@ class V14VwapStrategy:
         today_str = self._get_logical_date_str()
         return f"data/daily_snapshot_V14VWAP_{today_str}_{ticker}.json"
 
-    # 🚨 MODIFIED: [V75.11 예산 증발 기억상실 맹점 완벽 수술]
     def _load_state_if_needed(self, ticker):
         today_str = self._get_logical_date_str()
         if self.state_loaded.get(ticker) == today_str:
@@ -49,7 +44,6 @@ class V14VwapStrategy:
             try:
                 with open(state_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    # 🚨 팩트 스캔: 날짜가 같을 때만 예산 복원
                     if data.get("date") == today_str:
                         for k in self.executed.keys():
                             raw_val = data.get("executed", {}).get(k, 0)
@@ -62,7 +56,7 @@ class V14VwapStrategy:
         self.executed["BUY_BUDGET"][ticker] = 0.0
         self.executed["SELL_QTY"][ticker] = 0
         self.state_loaded[ticker] = today_str
-        self._save_state(ticker) # 🚨 초기화 저장 강제 락온
+        self._save_state(ticker)
 
     def _save_state(self, ticker):
         today_str = self._get_logical_date_str()
@@ -75,53 +69,40 @@ class V14VwapStrategy:
                 "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
             }
         }
-        temp_path = None
         try:
             dir_name = os.path.dirname(state_file)
-            os.makedirs(dir_name, exist_ok=True) 
+            if dir_name and not os.path.exists(dir_name):
+                os.makedirs(dir_name, exist_ok=True) 
             fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno()) 
             os.replace(temp_path, state_file)
-            temp_path = None
         except Exception as e:
             logging.critical(f"🚨 [STATE SAVE FAILED] {ticker} 상태 저장 실패. 봇 기억상실 위험! 원인: {e}")
-            if temp_path and os.path.exists(temp_path):
-                try: os.unlink(temp_path)
-                except OSError: pass
-
-    def refund_residual(self, ticker, bucket, refund_value):
-        pass
 
     def save_daily_snapshot(self, ticker, plan_data):
         today_str = self._get_logical_date_str()
         snap_file = self._get_snapshot_file(ticker)
         
-        if os.path.exists(snap_file):
-            return
-
+        # 🚨 [스냅샷 무결성 락온] os.path.exists 방어막 영구 소각 (무조건 최신 팩트로 오버라이드)
         data = {
             "date": today_str,
             "plan": plan_data
         }
-        temp_path = None
         try:
             dir_name = os.path.dirname(snap_file)
-            os.makedirs(dir_name, exist_ok=True)
+            if dir_name and not os.path.exists(dir_name):
+                os.makedirs(dir_name, exist_ok=True)
             fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno()) 
             os.replace(temp_path, snap_file)
-            temp_path = None
         except Exception as e:
             logging.critical(f"🚨 [SNAPSHOT SAVE FAILED] {ticker} 스냅샷 저장 실패. 지시서 보존 불가! 원인: {e}")
-            if temp_path and os.path.exists(temp_path):
-                try: os.unlink(temp_path)
-                except OSError: pass
 
     def load_daily_snapshot(self, ticker):
         snap_file = self._get_snapshot_file(ticker)
@@ -152,7 +133,7 @@ class V14VwapStrategy:
         except Exception:
             pass
             
-        logging.warning(f"🚨 [{ticker}] V14_VWAP 스냅샷 증발 감지! 페일세이프 긴급 복원 가동 (총잔고:{total_qty} - 암살자:{avwap_qty} = 본대:{pure_qty}주 | 이월 장부:{legacy_qty}주)")
+        logging.warning(f"🚨 [{ticker}] V14_VWAP 스냅샷 증발 감지! 페일세이프 긴급 복원 가동")
         
         return self.get_plan(
             ticker=ticker,
@@ -168,10 +149,6 @@ class V14VwapStrategy:
         )
 
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
-    def _floor(self, val): return math.floor(val * 100) / 100.0
-
-    def reset_residual(self, ticker):
-        pass
 
     def record_execution(self, ticker, side, qty, exec_price):
         self._load_state_if_needed(ticker)
@@ -197,7 +174,7 @@ class V14VwapStrategy:
         star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
         target_price = self._ceil(avg_price * (1 + target_ratio)) if avg_price > 0 else 0
         
-        buy_star_price = round(star_price - 0.01, 2) if star_price > 0.01 else 0.0
+        buy_star_price = max(0.01, round(star_price - 0.01, 2)) if star_price > 0 else 0.0
 
         _, dynamic_budget, _ = self.cfg.calculate_v14_state(ticker)
         
@@ -205,7 +182,6 @@ class V14VwapStrategy:
         process_status = "예방적방어선"
         is_zero_start_fact = False
         
-        # 🚨 MODIFIED: [V75.04 KIS VWAP 3-Min 지터 동적 시프트(Shift) 및 KST 래핑 락온]
         est_zone = ZoneInfo('America/New_York')
         kst_zone = ZoneInfo('Asia/Seoul')
         now_est = datetime.now(est_zone)
@@ -224,11 +200,11 @@ class V14VwapStrategy:
 
         if qty == 0:
             is_zero_start_fact = True
-            p_buy = self._ceil(prev_close * 1.15)
+            p_buy = max(0.01, round((prev_close * 1.15) - 0.01, 2))
             buy_star_price = p_buy 
             
             b1_budget = dynamic_budget * 0.5
-            b2_budget = dynamic_budget * 0.5
+            b2_budget = dynamic_budget - b1_budget
             q1 = math.floor(b1_budget / p_buy) if p_buy > 0 else 0
             q2 = math.floor(b2_budget / p_buy) if p_buy > 0 else 0
             
@@ -245,13 +221,15 @@ class V14VwapStrategy:
                 core_orders.append({"side": "BUY", "price": p_buy, "qty": q2, "type": o_type, "start_time": start_t if o_type == "VWAP" else None, "end_time": end_t if o_type == "VWAP" else None, "desc": desc})
             process_status = "✨새출발"
         else:
-            p_avg = self._ceil(avg_price)
+            safe_ceiling = min(avg_price, star_price) if star_price > 0 else avg_price
+            p_avg = max(0.01, round(safe_ceiling - 0.01, 2))
+            
             if t_val < (split / 2):
                 b1_budget = dynamic_budget * 0.5
-                b2_budget = dynamic_budget * 0.5
+                b2_budget = dynamic_budget - b1_budget
                 q_avg = math.floor(b1_budget / p_avg) if p_avg > 0 else 0
                 q_star = math.floor(b2_budget / buy_star_price) if buy_star_price > 0 else 0
-                 
+                
                 if q_avg == 0 and q_star == 0:
                     if p_avg > 0 and dynamic_budget >= p_avg: q_avg = math.floor(dynamic_budget / p_avg)
                     elif buy_star_price > 0 and dynamic_budget >= buy_star_price: q_star = math.floor(dynamic_budget / buy_star_price)
@@ -296,7 +274,7 @@ class V14VwapStrategy:
             'is_zero_start': is_zero_start_fact 
         }
         
-        self.save_daily_snapshot(ticker, plan_result)
+        self.save_daily_snapshot(ticker, plan_data=plan_result)
         return plan_result
 
     def get_dynamic_plan(self, ticker, current_price, prev_close, current_weight, min_idx, alloc_cash, qty, avg_price, market_type="REG"):

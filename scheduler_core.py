@@ -18,6 +18,7 @@
 # 🚨 MODIFIED: [V73.10 확정 정산 16:05 EST 전진 배치 및 시각적 디커플링 해체]
 # - scheduled_auto_sync 코루틴 내부의 시스템 로깅 및 텔레그램 상태 알림 메시지에 
 #   하드코딩된 21:00 EST 텍스트를 16:05 EST로 일괄 오버라이드 완료.
+# 🚨 MODIFIED: [V77.29 데드코드 영구 소각] 스나이퍼 내부에 중첩 구현되어 시스템 전역에서 호출되지 않는 잉여 전역 함수 get_actual_execution_price 영구 소각 완료
 # ==========================================================
 import os
 import logging
@@ -109,31 +110,6 @@ def get_budget_allocation(cash, tickers, cfg):
         
     return sorted_tickers, allocated
 
-def get_actual_execution_price(execs, target_qty, side_cd):
-    if not execs or target_qty <= 0: return 0.0
-    
-    execs.sort(key=lambda x: str(x.get('ord_tmd') or '000000'), reverse=True)
-    matched_qty = 0
-    total_amt = 0.0
-    for ex in execs:
-        if ex.get('sll_buy_dvsn_cd') == side_cd: 
-            eqty = int(float(ex.get('ft_ccld_qty') or 0))
-            eprice = float(ex.get('ft_ccld_unpr3') or 0.0)
-            if matched_qty + eqty <= target_qty:
-                total_amt += eqty * eprice
-                matched_qty += eqty
-            elif matched_qty < target_qty:
-                rem = target_qty - matched_qty
-                total_amt += rem * eprice
-                matched_qty += rem
-            
-            if matched_qty >= target_qty:
-                break
-    
-    if matched_qty > 0:
-        return round(total_amt / matched_qty, 2)
-    return 0.0
-
 def perform_self_cleaning():
     try:
         now = time.time()
@@ -150,6 +126,7 @@ def perform_self_cleaning():
                 try: os.remove(f)
                 except: pass
    
+    
         for prefix in ["daily_snapshot_*", "vwap_state_*"]:
             for f in glob.glob(f"data/{prefix}.json"):
                 if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
@@ -229,7 +206,6 @@ async def scheduled_force_reset(context):
                 
                 if version == "V_REV":
                     actual_avg = float(holdings.get(t, {'avg': 0})['avg'])
-                    
                     try:
                         curr_p_val = await asyncio.wait_for(
                              asyncio.to_thread(broker.get_current_price, t),

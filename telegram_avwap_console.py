@@ -1,14 +1,36 @@
 # ==========================================================
 # FILE: telegram_avwap_console.py
 # ==========================================================
+# 🚨 MODIFIED: [V53.11 시계열 체력 듀얼 대칭 락온] 
+# 🚨 MODIFIED: [V53.09 관제탑 UI 횡보장 킬 스위치 시각적 렌더링 강제 바이패스]
+# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
+# 🚨 NEW: [상대적 체력 연산 30.0% 셧다운 락온 및 UI 디커플링 수술]
+# 🚨 NEW: [V65.00 AVWAP 동적 하드스탑 락온]
+# 🚨 NEW: [V66.00 AVWAP 암살자 덤핑 지터(Jitter) 분산 락온]
+# 🚨 MODIFIED: [V66.05 Split-Brain 시각적 디커플링 해결]
+# 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 UI 연동]
+# 🚨 MODIFIED: [V75.02 관제탑 런타임 붕괴 및 시각적 환각 완벽 수술]
+# 🚨 MODIFIED: [V75.05 텍스트 다이어트 팩트 교정] 프리장/정규장 텍스트 전면 소각
+# 🚨 NEW: [V7.4 Assassin Lock-on] 관제탑 UI 렌더링 디커플링 해체
+# 🚨 MODIFIED: [V76.01 ATR5 동적 하드스탑 렌더링 영구 소각 및 투트랙 엑시트 UI 동기화]
+# 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
+# 🚨 NEW: [V77.02 프리마켓 관제탑 데이터 기아 및 런타임 붕괴 완벽 수술]
+# 🚨 MODIFIED: [V77.04 Operation Dawn Sniper - 프리장 선제 타격 및 50% 팩트 오프셋 이식 완비]
+# 🚨 MODIFIED: [V77.05 SyntaxError 핫픽스] unterminated string literal 런타임 즉사 원천 차단
+# 🚨 MODIFIED: [V77.06 3.0% 한계 돌파 팩트 롤백] 익절 렌더링 2.0% -> 3.0% 전면 상향 동기화
+# 🚨 NEW: [V77.08] 백테스트 절대 동기화 - 3단 상태 표시기 개조 및 시각적 노이즈 100% 영구 소각 에디션
+# 🚨 MODIFIED: [V77.12] 순수 지정가(T_H) 절대 락온 타격 엔진 상태 렌더링 동기화
+# 🚨 MODIFIED: [V77.14 백테스트 절대기준 동기화] 5분봉 과잉 방어 철거 및 순수 T_H 관통 타격 롤백 반영
+# 🚨 MODIFIED: [V77.15 관제탑 레이더 상시 가동 팩트 수술] 비활성(OFF) 상태 시 $0.00 렌더링 맹점 원천 차단
 # 🚨 MODIFIED: [V77.16 관제탑 시각적 마스킹 소각] 비활성(OFF) 상태에서도 실시간 작전 현황 100% 렌더링 락온
 # 🚨 MODIFIED: [V77.17 관제탑 용어 교정] 실시간 트레일링 팩트를 반영하여 '프리장 최고/최저' 명칭 수정
 # 🚨 MODIFIED: [V77.18 프리마켓 시계열 경계 누수 완벽 수술 및 T_H/T_L 절대 앵커 락온 (정규장 데이터 유입 원천 차단)]
-# 🚨 MODIFIED: [V77.19 관제탑 섀도우 연산 KIS 실잔고 파이프라인 결속 및 예산부족(0주) 환각 영구 소각]
-# 🚨 MODIFIED: [V77.20 조건 1,2,3 대통합] 16:00 EST 관제탑 연장, REG_H/L 렌더링 추가, T_L 셧다운 소각 팩트 교정 완료
-# 🚨 MODIFIED: [V77.21 UI 팩트 교정] T_L 활성 텍스트 환각 소각 및 단순 참조용 명시
-# 🚨 MODIFIED: [V77.23 애프터마켓 마스킹 전면 개방] 16:00 EST 이후 애프터마켓 상태 직관적 팩트 렌더링(🌙) 락온
-# 🚨 MODIFIED: [V77.25 UI 팩트 교정] 텍스트 다이어트 및 가독성 최적화를 위한 꼬리표 소각 및 줄바꿈 적용
+# 🚨 MODIFIED: [V77.19 관제탑 섀도우 연산 KIS 실잔고 파이프라인 결속 및 예산부족(0주) 환각 영구 소각
+# 🚨 MODIFIED: [V77.22 사이보그(Cyborg) 엑시트 전술 이식] 관제탑 0주 상태 시 수동 강제 요격 팩트 버튼 렌더링 락온
+# 🚨 MODIFIED: [V77.23 팻핑거 오조작 차단] 수동 요격 버튼을 즉각 격발(MANUAL_FIRE)에서 승인 요청(MANUAL_FIRE_REQ) 파이프라인으로 정밀 변환
+# 🚨 NEW: [V77.25 관제탑 UI 렌더링 대수술 및 정규장 고/저가 파이프라인 결속]
+# 🚨 MODIFIED: [V77.26 셧다운 락온 시 정규장 데이터 기아(Data Starvation) 완벽 수술] 
+# 스나이퍼가 셧다운(퇴근)되어 캐시 갱신을 멈추더라도, 관제탑은 자체 수혈한 df_1m을 통해 정규장 팩트(REG_H, REG_L)를 강제 역산하여 시각적 환각 원천 차단.
 # ==========================================================
 import logging
 import datetime
@@ -34,19 +56,47 @@ class AvwapConsolePlugin:
         
         time_0400 = datetime.time(4, 0)
         time_0930 = datetime.time(9, 30)
-        time_1600 = datetime.time(16, 0)
      
-        # MODIFIED: [V77.25] 불필요한 꼬리표 텍스트 소각
-        if curr_time < time_0930:
-            header_status = "🌅 <b>[ 프리장 선제 타격 모드 (04:00~09:29 스캔 중) ]</b>"
-        elif curr_time < time_1600:
-            header_status = "🔥 <b>[ 정규장 실시간 추격 모드 (09:30~16:00 감시 중) ]</b>"
-        else:
+        # MODIFIED: [V77.25 100% 비동기 달력 API 연동 및 시장 세션 상태 판독 이식]
+        import pandas_market_calendars as mcal
+        try:
+            def _fetch_schedule():
+                nyse = mcal.get_calendar('NYSE')
+                return nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
+            schedule = await asyncio.to_thread(_fetch_schedule)
+            if schedule.empty:
+                status_code = "CLOSE"
+            else:
+                market_open = schedule.iloc[0]['market_open'].astimezone(est)
+                market_close = schedule.iloc[0]['market_close'].astimezone(est)
+                pre_start = market_open.replace(hour=4, minute=0, second=0, microsecond=0)
+                after_end = market_close.replace(hour=20, minute=0, second=0, microsecond=0)
+
+                if pre_start <= now_est < market_open:
+                    status_code = "PRE"
+                elif market_open <= now_est < market_close:
+                    status_code = "REG"
+                elif market_close <= now_est < after_end:
+                    status_code = "AFTER"
+                else:
+                    status_code = "CLOSE"
+        except Exception:
+            if now_est.weekday() < 5:
+                status_code = "REG"
+            else:
+                status_code = "CLOSE"
+
+        # MODIFIED: [V77.25 세션별 맞춤형 상단 상태 텍스트 분기 정의]
+        if status_code in ["AFTER", "CLOSE"]:
             header_status = "🌙 <b>[ 애프터마켓 / 감시 종료 ]</b>"
+        elif status_code == "PRE":
+            header_status = "🌅 <b>[ 프리장 선제 타격 모드 (04:00~09:29 스캔 중) ]</b>"
+        else:
+            header_status = "🔥 <b>[ 정규장 실시간 추격 모드 (V77.08 지정가 덫 요격) ]</b>"
         
         active_tickers = await asyncio.to_thread(self.cfg.get_active_tickers)
         avwap_tickers = [t for t in active_tickers if t == "SOXL"]
-        
+       
         if not avwap_tickers:
             return "⚠️ <b>[AVWAP 암살자 오프라인]</b>\n▫️ AVWAP 지원 종목이 없습니다.", None
            
@@ -63,8 +113,7 @@ class AvwapConsolePlugin:
             logging.error(f"🚨 AVWAP 관제탑 KIS 예산 스캔 에러: {e}")
             available_cash = 0.0
         
-        # MODIFIED: [V77.25] '암살자' 워딩 소각
-        msg = f"🔫 <b>[ 차세대 AVWAP V77.25 관제탑 ]</b>\n{header_status}\n\n"
+        msg = f"🔫 <b>[ 차세대 AVWAP V77.26 관제탑 ]</b>\n{header_status}\n\n"
         keyboard = []
 
         for t in active_avwap:
@@ -82,7 +131,7 @@ class AvwapConsolePlugin:
                         
                         tracking_cache[f"AVWAP_LIMIT_ORDER_PLACED_{t}"] = saved_state.get('limit_order_placed', False)
                         tracking_cache[f"AVWAP_PLACED_TARGET_TH_{t}"] = saved_state.get('placed_target_th', 0.0)
-                        
+           
                         tracking_cache[f"AVWAP_PM_H_{t}"] = saved_state.get('PM_H', 0.0)
                         tracking_cache[f"AVWAP_PM_L_{t}"] = saved_state.get('PM_L', 0.0)
                         tracking_cache[f"AVWAP_T_H_{t}"] = saved_state.get('T_H', 0.0)
@@ -108,22 +157,23 @@ class AvwapConsolePlugin:
                     asyncio.gather(curr_p_task, prev_c_task, amp5_task, df_task, return_exceptions=True),
                     timeout=5.0
                 )
-                
+           
                 curr_p = float(res_batch[0]) if not isinstance(res_batch[0], Exception) and res_batch[0] else 0.0
                 prev_c = float(res_batch[1]) if not isinstance(res_batch[1], Exception) and res_batch[1] else 0.0
                 amp5 = float(res_batch[2]) if not isinstance(res_batch[2], Exception) and res_batch[2] else 0.0
                 df_1m = res_batch[3] if not isinstance(res_batch[3], Exception) else None
-                
+               
             except Exception as e:
                 logging.debug(f"🚨 데이터 팩트 수혈 에러: {e}")
                 curr_p, prev_c, amp5, df_1m = 0.0, 0.0, 0.0, None
 
-            reg_h, reg_l = 0.0, 0.0
+            # 🚨 MODIFIED: [V77.26 셧다운(Shutdown) 락온 시 정규장 팩트 증발(Data Starvation) 완벽 수술]
+            # 스나이퍼가 셧다운되어 캐시 갱신을 멈추더라도 관제탑은 자체 수혈한 df_1m으로 팩트를 강제 추출합니다.
             if df_1m is not None and not df_1m.empty and 'time_est' in df_1m.columns:
                 df_reg = df_1m[(df_1m['time_est'] >= '093000') & (df_1m['time_est'] <= '155959')]
                 if not df_reg.empty:
-                    reg_h = float(df_reg['high'].astype(float).max())
-                    reg_l = float(df_reg['low'].astype(float).min())
+                    tracking_cache[f"AVWAP_REG_H_{t}"] = float(df_reg['high'].astype(float).max())
+                    tracking_cache[f"AVWAP_REG_L_{t}"] = float(df_reg['low'].astype(float).min())
 
             avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
             avwap_avg = tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
@@ -194,7 +244,7 @@ class AvwapConsolePlugin:
                     tracking_cache[f"AVWAP_OFFSET_{t}"] = offset
         
                     if is_shutdown: 
-                        status_txt = f"🛑 셧다운 격발 ({reason})" if reason and action == 'SHUTDOWN' else "🛑 당일 신규진입 동결 (16:00 EST까지 감시 유지)"
+                        status_txt = f"🛑 셧다운 격발 ({reason})" if reason and action == 'SHUTDOWN' else "🛑 당일 영구동결 (SHUTDOWN 퇴근)"
                     elif avwap_qty > 0:
                         if trap_odno:
                             status_txt = "🎯 체결 완료 ➡️ [3.0% 지정가 익절 덫] 가동 중"
@@ -216,11 +266,13 @@ class AvwapConsolePlugin:
                                 status_txt = "⚡ T_H 선제 지정가 덫 장전 대기 중"
                             else:
                                 status_txt = f"⏳ 대기 ({reason})"
-                                
+                            
             except Exception as e:
                 logging.debug(f"AVWAP 상태 텍스트 추출 에러: {e}")
 
-            # MODIFIED: [V77.25] 텍스트 다이어트 및 줄바꿈 적용
+            reg_h = tracking_cache.get(f"AVWAP_REG_H_{t}", 0.0)
+            reg_l = tracking_cache.get(f"AVWAP_REG_L_{t}", 0.0)
+            
             msg += f"🎯 <b>[ {t} (롱) 작전반 - {active_str} ]</b>\n"
             msg += f"▫️ 프리장 최고 (PM_H): <b>${pm_h:.2f}</b>\n"
             msg += f"▫️ 프리장 최저 (PM_L): <b>${pm_l:.2f}</b>\n"
@@ -244,6 +296,11 @@ class AvwapConsolePlugin:
 
             if avwap_qty > 0:
                 keyboard.append([InlineKeyboardButton(f"🧯 {t} 암살자 수동 청산 (0주 락온)", callback_data=f"AVWAP_SET:SYNC_ZERO:{t}")])
+            else:
+                if t_h > 0.0:
+                    keyboard.append([InlineKeyboardButton(f"🔫 [{t}] 수동 강제 요격 (Manual Fire)", callback_data=f"AVWAP_SET:MANUAL_FIRE_REQ:{t}")])
+                else:
+                    keyboard.append([InlineKeyboardButton(f"❌ [{t}] 수동 요격 불가 (T_H 대기)", callback_data=f"AVWAP_SET:REFRESH:NONE")])
 
         keyboard.append([
             InlineKeyboardButton("🔄 관제탑 새로고침", callback_data="AVWAP_SET:REFRESH:NONE"),
