@@ -1,19 +1,13 @@
 # ==========================================================
 # FILE: config.py
 # ==========================================================
-# MODIFIED: [V54.01] VWAP 데이터 통합 롤백 완료
-# MODIFIED: [V54.02] IndentationError 런타임 즉사 버그 완벽 수술 (들여쓰기 팩트 교정)
 # MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
-# 다중 스레드(asyncio.to_thread) 환경에서 발생하는 JSON I/O 경합 조건(Race Condition) 
-# 및 스플릿 브레인(Split-Brain) 맹점을 원천 차단하기 위해 전역 RLock 탑재 및 모든 상태 변이(Setter) 함수에 락온 이식 완료.
-# MODIFIED: [V59.02 잔재 데드코드 영구 소각]
-# 15:25 전량 덤핑 헌법에 따라 의미를 상실한 AVWAP 목표 수익률 및 다중 출장 모드 설정 I/O 파이프라인 100% 소각 완료.
-# MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
-# VWAP_PROFILES 딕셔너리 내 SOXS 30분 압축 프로파일 영구 소각 및 get_active_tickers 반환 팩트 교정 완료.
-# 🚨 MODIFIED: [V7.4 Assassin Lock-on] 정점요격 스위치(APEX_MODE_CFG) 맵핑 및 락온 파일 입출력 전면 적출 완료
-# 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
-# - 백테스트 수수료 환경과 100% 동기화하기 위해 DEFAULT_FEE 기본값을 0.07%로 하향 팩트 락온.
 # 🚨 MODIFIED: [V77.29 데드코드 영구 소각] 중복 선언된 get_version_history 라우터를 전면 적출하고 get_full_version_history로 단일 진실 공급원(SSOT) 락온 완료
+# 🚨 NEW: [Case 11] AVWAP 다중 출격(Multi-Sortie) 모드 데이터 영속성 맵핑 및 락온
+# 🚨 MODIFIED: [Case 27 절대 위반 수술] 에스크로(Escrow) 엔진 100% 영구 적출 및 잔재 코드(Reset Locks) 소각 완료
+# 🚨 NEW: [데이터 기아 방어] V-REV 및 AVWAP 갭 스위칭 임계치 제어 파라미터 맵핑 100% 팩트 이식 완료
+# 🚨 MODIFIED: [맹점 2 수술] AVWAP vs V-REV 갭 임계치 메모리 충돌 원천 차단 (상태 오염 방어)
+# 🚨 MODIFIED: [제4헌법 준수] 파일 I/O 원자적 쓰기 스코프 누수(f.flush, os.fsync) 팩트 교정 및 ValueError 런타임 붕괴 완벽 차단
 # ==========================================================
 
 import json
@@ -37,7 +31,6 @@ try:
 except ImportError:
     VERSION_HISTORY = ["V14.x [-] 버전 기록 파일(version_history.py)을 찾을 수 없습니다."]
 
-# MODIFIED: [V61.00 숏(SOXS) 전면 소각] SOXS 프로파일 100% 적출 및 SOXL 단일 롱 모멘텀 락온
 VWAP_PROFILES = {
     "SOXL": {
         "15:27": 0.010835, "15:28": 0.010105, "15:29": 0.010360, "15:30": 0.010940, "15:31": 0.011123,
@@ -48,7 +41,6 @@ VWAP_PROFILES = {
         "15:52": 0.055668, "15:53": 0.066270, "15:54": 0.081758, "15:55": 0.109401, "15:56": 0.180271
     }
 }
-
 
 class ConfigManager:
     def __init__(self):
@@ -70,13 +62,16 @@ class ConfigManager:
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
+            "AVWAP_SORTIE_CFG": "data/avwap_sortie.json",
             "MANUAL_VWAP_CFG": "data/manual_vwap_config.json",
             "FEE_CFG": "data/fee_config.json", 
             "MASTER_SWITCH": "data/master_switch.json",
             "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
             "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
             "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",       
-            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json"
+            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json",
+            # NEW: [맹점 2] 상태 오염(Coupling) 원천 차단을 위해 AVWAP 갭 임계치 전용 파일 경로 신설
+            "AVWAP_GAP_THRESH_CFG": "data/avwap_gap_thresh.json"
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -85,10 +80,8 @@ class ConfigManager:
         self.DEFAULT_VERSION = {"SOXL": "V14", "TQQQ": "V14"}
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
-        
         self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
         
-        self._escrow_cache = {}
         self._locks_mutex = threading.Lock()
         self._io_lock = threading.RLock()
 
@@ -178,9 +171,10 @@ class ConfigManager:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 fd = None
                 f.write(str(content))
-            f.flush()
+                # MODIFIED: [제4헌법 준수] 파일 스트림 스코프 이탈 전 플러시 및 디스크 동기화 강제 배치 (ValueError 방어)
+                f.flush()
+                os.fsync(f.fileno()) 
             
-            os.fsync(f.fileno()) 
             os.replace(temp_path, filename)
             temp_path = None
         except Exception as e:
@@ -191,6 +185,34 @@ class ConfigManager:
             if temp_path and os.path.exists(temp_path):
                 try: os.remove(temp_path)
                 except Exception: pass
+
+    def get_vrev_gap_threshold(self, ticker):
+        return float(self._load_json(self.FILES["VREV_GAP_THRESH_CFG"], {}).get(ticker, -0.67))
+
+    def set_vrev_gap_threshold(self, ticker, v):
+        with self._io_lock:
+            d = self._load_json(self.FILES["VREV_GAP_THRESH_CFG"], {})
+            d[ticker] = float(v)
+            self._save_json(self.FILES["VREV_GAP_THRESH_CFG"], d)
+            
+    def get_vrev_gap_switching_mode(self, ticker):
+        return self._load_json(self.FILES["VREV_GAP_SWITCH_CFG"], {}).get(ticker, False)
+
+    def set_vrev_gap_switching_mode(self, ticker, v):
+        with self._io_lock:
+            d = self._load_json(self.FILES["VREV_GAP_SWITCH_CFG"], {})
+            d[ticker] = bool(v)
+            self._save_json(self.FILES["VREV_GAP_SWITCH_CFG"], d)
+            
+    # MODIFIED: [맹점 2 수술] AVWAP 전용 임계치 상태 격리 및 디커플링 팩트 교정
+    def get_avwap_gap_threshold(self, ticker):
+        return float(self._load_json(self.FILES["AVWAP_GAP_THRESH_CFG"], {}).get(ticker, -0.67))
+
+    def set_avwap_gap_threshold(self, ticker, v):
+        with self._io_lock:
+            d = self._load_json(self.FILES["AVWAP_GAP_THRESH_CFG"], {})
+            d[ticker] = float(v)
+            self._save_json(self.FILES["AVWAP_GAP_THRESH_CFG"], d)
 
     def get_last_split_date(self, ticker):
         return self._load_json(self.FILES["SPLIT_HISTORY"], {}).get(ticker, "")
@@ -203,57 +225,6 @@ class ConfigManager:
 
     def get_ledger(self):
         return self._load_json(self.FILES["LEDGER"], [])
-
-    def get_escrow_cash(self, ticker):
-        locks = self._load_json(self.FILES["LOCKS"], {})
-        persistent_escrow = locks.get(f"ESCROW_{ticker}", None)
-        
-        if persistent_escrow is not None:
-            return max(0.0, float(persistent_escrow))
-
-        ledger = self.get_ledger()
-        escrow = 0.0
-        for r in reversed(ledger):
-            if r.get('ticker') == ticker:
-                if r.get('is_reverse', False):
-                    if r['side'] == 'SELL':
-                        escrow += (r['qty'] * r['price'])
-                    elif r['side'] == 'BUY':
-                        escrow -= (r['qty'] * r['price'])
-                else:
-                    break
-        return max(0.0, float(escrow))
-
-    def set_escrow_cash(self, ticker, amount):
-        validated = max(0.0, float(amount))
-        def _update(locks):
-            locks[f"ESCROW_{ticker}"] = validated
-        self._atomic_update_locks(_update)
-
-    def add_escrow_cash(self, ticker, amount):
-        def _update(locks):
-            current = locks.get(f"ESCROW_{ticker}", 0.0)
-            locks[f"ESCROW_{ticker}"] = max(0.0, current + float(amount))
-        self._atomic_update_locks(_update)
-
-    def clear_escrow_cash(self, ticker):
-        def _update(locks):
-            if f"ESCROW_{ticker}" in locks:
-                del locks[f"ESCROW_{ticker}"]
-        self._atomic_update_locks(_update)
-
-    def get_total_locked_cash(self, exclude_ticker=None):
-        total = 0.0
-        try:
-            tickers = self.get_active_tickers()
-            for t in tickers:
-                if t != exclude_ticker:
-                    rev_state = self.get_reverse_state(t).get("is_active", False)
-                    if rev_state:
-                        total += self.get_escrow_cash(t)
-        except Exception:
-            pass
-        return total
 
     def get_order_locked(self, ticker):
         locks = self._load_json(self.FILES["LOCKS"], {})
@@ -277,7 +248,7 @@ class ConfigManager:
 
     def reset_locks(self):
         def _update(locks):
-            keys_to_keep = [k for k in locks.keys() if k.startswith("ESCROW_") or k.startswith("ORDER_LOCKED_")]
+            keys_to_keep = [k for k in locks.keys() if k.startswith("ORDER_LOCKED_")]
             surviving_locks = {k: locks[k] for k in keys_to_keep}
             locks.clear()
             locks.update(surviving_locks)
@@ -465,7 +436,6 @@ class ConfigManager:
             remaining = [r for r in ledger if r['ticker'] != ticker]
             self._save_json(self.FILES["LEDGER"], remaining)
             self.set_reverse_state(ticker, False, 0, 0.0)
-            self.clear_escrow_cash(ticker)
 
     def calculate_holdings(self, ticker, records=None):
         if records is None:
@@ -655,7 +625,6 @@ class ConfigManager:
     def get_history(self):
         return self._load_json(self.FILES["HISTORY"], [])
 
-    # MODIFIED: [V77.29 데드코드 영구 소각] 중복 선언된 get_version_history를 소각하고 단일화
     def get_full_version_history(self):
         return VERSION_HISTORY
 
@@ -706,7 +675,6 @@ class ConfigManager:
         return self._load_json(self.FILES["PROFIT_CFG"], self.DEFAULT_TARGET).get(t, 10.0)
         
     def get_fee(self, t): 
-        # 🚨 MODIFIED: [V77.01 팩트 수술] 폴백(Fallback) 값 0.07% 동기화 락온
         return float(self._load_json(self.FILES["FEE_CFG"], self.DEFAULT_FEE).get(t, 0.07))
       
     def set_fee(self, t, v):
@@ -742,6 +710,15 @@ class ConfigManager:
             d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
             d[ticker] = bool(v)
             self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
+
+    def get_avwap_sortie_mode(self, ticker):
+        return self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {}).get(ticker, "SINGLE")
+        
+    def set_avwap_sortie_mode(self, ticker, v):
+        with self._io_lock:
+            d = self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {})
+            d[ticker] = str(v)
+            self._save_json(self.FILES["AVWAP_SORTIE_CFG"], d)
 
     def get_manual_vwap_mode(self, ticker): 
         return self._load_json(self.FILES["MANUAL_VWAP_CFG"], {}).get(ticker, False)

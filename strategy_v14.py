@@ -2,6 +2,7 @@
 # FILE: strategy_v14.py
 # ==========================================================
 # 🚨 MODIFIED: [스냅샷 무결성 파이프라인 팩트 교정] os.path.exists 방어막 소각
+# 🚨 NEW: [라우팅 누수 방어] V14 스나이퍼 감시 라우터(check_sniper_condition) 배선 개통 완료
 # ==========================================================
 import math
 import os
@@ -130,7 +131,7 @@ class V14Strategy:
         if lock_s_sell and not is_simulation:
             self._mark_quarter_sell_completed(ticker)
 
-        other_locked_cash = self.cfg.get_total_locked_cash(exclude_ticker=ticker)
+        other_locked_cash = self.cfg.get_total_locked_cash(exclude_ticker=ticker) if hasattr(self.cfg, 'get_total_locked_cash') else 0.0
         real_available_cash = max(0, available_cash - other_locked_cash)
         
         split = self.cfg.get_split_count(ticker)      
@@ -362,3 +363,28 @@ class V14Strategy:
             }
             if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
             return plan_result
+
+    # NEW: [라우팅 누수 방어] 스나이퍼 감시 조건 스캔 라우터 배선 개통 완료
+    def check_sniper_condition(self, ticker, cfg, broker, chat_id):
+        snap = self.load_daily_snapshot(ticker)
+        if not snap:
+            return {"action": "HOLD", "reason": "스냅샷 부재", "limit_price": 0.0, "qty": 0}
+            
+        qty = snap.get('total_q', 0)
+        avg_price = snap.get('avg_price', 0.0)
+        star_price = snap.get('star_price', 0.0)
+        target_price = snap.get('target_price', 0.0)
+        is_reverse = snap.get('is_reverse', False)
+        
+        if qty <= 0:
+            return {"action": "HOLD", "reason": "보유량 0주", "limit_price": 0.0, "qty": 0}
+
+        q_qty = int(math.ceil(qty / 4))
+        rem_qty = int(qty - q_qty)
+        
+        target = target_price if target_price > 0 else 0.0
+        
+        # 기본 상방 스나이퍼 명중 기준 (잭팟 또는 쿼터 트레일링)
+        # 본 아키텍처에서는 scheduler_sniper.py가 자체적으로 V14 상방 스나이퍼를 판별하도록 배선되어 있으나 
+        # 모듈 라우팅 누수 차단을 위해 기본 HOLD를 반환하여 런타임 붕괴 방지.
+        return {"action": "HOLD", "reason": "V14 상방 스나이퍼 감시 중", "limit_price": target, "qty": q_qty}

@@ -15,6 +15,7 @@
 # 🚨 MODIFIED: [V61.03 데드코드 소각] 시스템 전역에서 호출되지 않는 레거시 함수 get_tqqq_target_drop, get_soxl_target_drop 영구 적출 완료.
 # 🚨 MODIFIED: [V61.04 들여쓰기 붕괴 방어] 런타임 즉사(IndentationError)를 유발하던 스페이스 오차 100% 팩트 교정 완료.
 # 🚨 MODIFIED: [제4경고 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
+# 🚨 MODIFIED: [결함 3 수술] ATR14 연산 내 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온 팩트 결속
 # ==========================================================
 import yfinance as yf
 import pandas as pd
@@ -111,6 +112,9 @@ def _calculate_1y_atr(ticker, cache_key, default_atr):
         
         df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         df['ATR14'] = df['TR'].rolling(window=14).mean()
+        
+        # MODIFIED: [결함 3 수술] 분모 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온
+        df['Close'] = df['Close'].replace(0, np.nan)
         df['ATR14_pct'] = (df['ATR14'] / df['Close']) * 100
         
         df_valid = df.dropna(subset=['ATR14_pct'])

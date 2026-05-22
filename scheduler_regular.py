@@ -1,9 +1,8 @@
 # ==========================================================
 # FILE: scheduler_regular.py
 # ==========================================================
-# 🚨 MODIFIED: [V73.15 타임라인 디커플링 대통합] 
-# - 17:05 KST: V14 모드(LOC/VWAP) 전용 180초 지터 선제 타격망 개통 및 V-REV 스냅샷 박제 분리 락온.
-# - KIS 서버 에러 타전망 html.escape 쉴드 강제 주입으로 런타임 파서 붕괴(Silent Death) 원천 차단.
+# 🚨 MODIFIED: [V73.15 타임라인 디커플링 대통합] 17:05 KST V14 선제 타격 및 V-REV 스냅샷 분리 락온
+# 🚨 MODIFIED: [Case 20 준수] b_start = max(b_start, s_start) 연산 100% 동기화 적용
 # ==========================================================
 import logging
 import datetime
@@ -108,9 +107,10 @@ async def scheduled_early_regular_trade(context):
                 if version == "V14":
                     msgs[t] += f"💎 <b>[{t}] V14 오리지널 정규장 실전 덫 장전 완료 (17:05 KST 타격망)</b>\n"
                     
+                    # MODIFIED: [Case 20] KST 동적 시프트 및 180초 지터 타임라인 수학적 락온
                     b_start = curr_est.replace(hour=15, minute=26, second=0, microsecond=0)
-                    if curr_est.time() > datetime.time(15, 26):
-                        b_start = curr_est + datetime.timedelta(minutes=3)
+                    s_start = curr_est + datetime.timedelta(minutes=3)
+                    b_start = max(b_start, s_start)
                     b_end = curr_est.replace(hour=15, minute=56, second=0, microsecond=0)
                     
                     dyn_start_t = b_start.astimezone(kst_z).strftime("%H%M%S")

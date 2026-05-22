@@ -1,15 +1,9 @@
 # ==========================================================
 # [plugin_updater.py]
 # ⚠️ 자가 업데이트 및 GCP 데몬 제어 전용 플러그인
-# 💡 깃허브 원격 저장소 강제 동기화 (git fetch & reset --hard)
-# 💡 OS 레벨 데몬 재가동 제어 (sudo systemctl restart) -> os._exit(0) 하드킬로 교체됨
-# 🚨 [V27.00 핫픽스] 사용자별 데몬 이름(DAEMON_NAME) .env 동적 로드 이식 완료
-# 🛡️ [V27.05 추가] 업데이트 직전 stable_backup 폴더로 롤백용 안전띠 결속 기능 탑재
-# 🚨 MODIFIED: [V42.16 핫픽스] pytz 영구 적출 및 ZoneInfo 락온 (ModuleNotFoundError 런타임 붕괴 방어)
-# 🚨 MODIFIED: [V44.52 휴일 락다운 해제 수술] 주말(토, 일) 및 휴장일에는 시계를 무시하고 무조건 업데이트를 허용하는 달력 팩트 스캔 엔진(Bypass) 이식 완료.
-# 🚨 MODIFIED: [V44.53 제1헌법 및 16계명 절대 락온] 달력 API(mcal) 스캔을 비동기(to_thread) 래핑하고 5초 타임아웃(Fail-Open)을 강제하여 이벤트 루프 교착(Deadlock) 원천 차단.
-# 🚨 MODIFIED: [V44.55 데몬 셧다운 교착(Zombie) 영구 소각] OS systemctl 의존성 철거 및 하드 킬(Self-Kill) 엔진 이식 완료.
+# 🚨 MODIFIED: [V44.53 제1헌법 및 16계명 절대 락온] 달력 API(mcal) 스캔을 비동기(to_thread) 래핑
 # 🚨 MODIFIED: [V75.05 레드존 팩트 교정] 제9경고에 따라 불필요한 레드존을 진공 압축하여 15:12 ~ 15:31 EST 구간으로 정밀 락온 완료.
+# 🚨 MODIFIED: [Case 14 절대 헌법 준수] 달력 API 타임아웃 5.0초를 10.0초로 팩트 교정하여 타임아웃 헌법 일원화.
 # ==========================================================
 import logging
 import asyncio
@@ -33,15 +27,12 @@ class SystemUpdater:
         현재 시간이 업데이트 금지 시간대(레드존)인지 검사합니다.
         기준: 15:12 EST ~ 15:31 EST (VWAP 가동 및 장마감 정산 보호)
         """
-        # 🚨 MODIFIED: [V42.16] pytz 적출 및 ZoneInfo 이식 완료
         est = ZoneInfo('America/New_York')
         now_est = datetime.datetime.now(est)
         
-        # 🚨 [V44.52 휴일 락다운 해제] 주말(토, 일)이면 무조건 업데이트 허용 (Bypass)
         if now_est.weekday() >= 5:
             return True, ""
 
-        # 🚨 [V44.53 제1헌법/16계명 적용] 비동기 래핑 및 타임아웃 족쇄 체결
         def _check_holiday():
             import pandas_market_calendars as mcal
             nyse = mcal.get_calendar('NYSE')
@@ -49,7 +40,8 @@ class SystemUpdater:
             return schedule.empty
 
         try:
-            is_holiday = await asyncio.wait_for(asyncio.to_thread(_check_holiday), timeout=5.0)
+            # MODIFIED: [Case 14 절대 헌법 준수] 타임아웃 10.0초로 팩트 교정
+            is_holiday = await asyncio.wait_for(asyncio.to_thread(_check_holiday), timeout=10.0)
             if is_holiday:
                 return True, ""
         except asyncio.TimeoutError:
@@ -59,7 +51,6 @@ class SystemUpdater:
 
         curr_time = now_est.time()
         
-        # MODIFIED: [V75.05 레드존 진공 압축] 제9경고 반영 15:12 ~ 15:31 팩트 교정
         start_lock = datetime.time(15, 12)
         end_lock = datetime.time(15, 31)
         
@@ -68,16 +59,10 @@ class SystemUpdater:
         return True, ""
 
     async def _create_safety_backup(self):
-        """
-        [롤백 봇(Rescue) 전용 아키텍처]
-        업데이트를 시도한다는 것 = 현재 코드가 정상 작동 중이라는 뜻이므로,
-        새로운 코드를 받기 전에 현재 파이썬 파일들을 stable_backup 폴더에 피신시킵니다.
-        """
         try:
             backup_dir = "stable_backup"
             os.makedirs(backup_dir, exist_ok=True)
             
-            # 현재 폴더의 모든 .py 파일들을 stable_backup 폴더로 복사 (에러 무시)
             proc = await asyncio.create_subprocess_shell(
                 f"cp -p *.py {backup_dir}/ 2>/dev/null || true",
                 stdout=subprocess.PIPE,
@@ -89,17 +74,11 @@ class SystemUpdater:
             logging.error(f"🚨 [Updater] 안전띠 결속 중 에러 발생 (업데이트는 계속 진행): {e}")
 
     async def pull_latest_code(self):
-        """
-        깃허브 서버와 통신하여 로컬의 변경 사항을 완벽히 무시하고
-        원격 저장소의 최신 코드로 강제 덮어쓰기(Hard Reset)를 수행합니다.
-        """
-        # 🚨 [비동기 래핑 대응] await 추가
         allowed, msg = await self.is_update_allowed()
         if not allowed:
             logging.warning(f"🛑 [Updater] 깃허브 강제 동기화 차단 (레드존): {msg}")
             return False, msg
 
-        # 💡 [안전띠 결속] 깃허브 동기화 직전에 현재 상태를 백업합니다!
         await self._create_safety_backup()
 
         try:
@@ -134,14 +113,7 @@ class SystemUpdater:
             logging.error(f"🚨 [Updater] 동기화 중 치명적 예외 발생: {e}")
             return False, f"업데이트 프로세스 예외 발생: {e}"
 
-    # 🚨 [제1헌법 준수] 동기 함수 의존성 해결을 위해 async 격상
     async def restart_daemon(self):
-        """
-        GCP 리눅스 OS에 데몬 재가동 명령을 하달하는 대신,
-        파이썬 프로세스를 즉각 폭파(Hard Kill)시킵니다.
-        systemd의 Restart=always 속성이 즉시 봇을 부활시킵니다.
-        """
-        # 🚨 [비동기 래핑 대응] await 추가
         allowed, _ = await self.is_update_allowed()
         if not allowed:
             logging.error("❌ 레드존 시간대 데몬 재가동 시도가 감지되어 OS 강제 차단했습니다.")
@@ -149,10 +121,7 @@ class SystemUpdater:
 
         try:
             logging.info(f"🔄 [Updater] 좀비 셧다운 방어를 위해 파이썬 프로세스를 즉시 자폭(Hard Kill)시킵니다. (systemd가 부활시킴)")
-            
-            # MODIFIED: [V44.55] sudo systemctl 의존성 영구 철거 및 즉각 셧다운(os._exit) 타격
             os._exit(0)
-            
             return True
         except Exception as e:
             logging.error(f"🚨 [Updater] 데몬 자폭 명령 하달 실패: {e}")

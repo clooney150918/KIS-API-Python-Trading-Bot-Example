@@ -2,6 +2,7 @@
 # FILE: main.py
 # ==========================================================
 # 🚨 MODIFIED: [V73.15 타임라인 디커플링 대통합] 17:05 KST V14 선제 타격 및 V-REV 스냅샷 분리 락온
+# 🚨 MODIFIED: [맹점 4 수술] 서머타임 래핑 타임 패러독스 차단 및 KST 네이티브 위임 락온
 # ==========================================================
 import os
 import logging
@@ -174,7 +175,7 @@ def main():
     latest_version = cfg.get_latest_version() 
     
     print("=" * 60)
-    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V73.15 타임라인 디커플링 락온)")
+    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V77.34 팩트 교정본)")
     print("=" * 60)
     
     perform_self_cleaning()
@@ -237,11 +238,8 @@ def main():
     jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    # 🚨 NEW: [17:05 KST] V14 선제 타격 및 V-REV 스냅샷 분리 락온
-    dt_now_kst = datetime.datetime.now(kst_zone)
-    target_kst_dt = datetime.datetime.combine(dt_now_kst.date(), datetime.time(17, 5), tzinfo=kst_zone)
-    target_est_dt = target_kst_dt.astimezone(est_zone)
-    early_trade_time = datetime.time(hour=target_est_dt.hour, minute=target_est_dt.minute, tzinfo=est_zone)
+    # 🚨 MODIFIED: [맹점 4 수술] KST 래핑 타임 패러독스(Time Paradox) 완벽 교정 및 PTB 네이티브 타임존 100% 위임
+    early_trade_time = datetime.time(17, 5, tzinfo=kst_zone)
 
     jq.run_daily(scheduled_early_regular_trade, time=early_trade_time, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     

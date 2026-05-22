@@ -20,17 +20,19 @@
 # - V-REV 모드가 더미 깡통 데이터([])를 반환하여 17:05 스케줄러 및 수동 주문(EXEC) 시 
 #   주문이 100% 증발(Data Starvation)하던 치명적 라우팅 누수 원천 차단.
 # - QueueLedger를 동적 로드하고 get_dynamic_plan과 직결하여 팩트 기반 VWAP 예약 주문을 완벽히 반환하도록 역배선 개통 완료.
-# 🚨 NEW: [V72.16 AVWAP 정점요격 스위치 탑재]
+# MODIFIED: [V72.16 AVWAP 정점요격 스위치 탑재]
 # get_avwap_decision 호출 규격에 is_apex_on 파라미터를 추가하여,
 # 전투 사령부에서 추출한 스위치 상태를 암살자 코어(strategy_v_avwap)로 다이렉트 수혈 배선 개통 완료.
-# 🚨 MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
+# MODIFIED: [V75.01 관찰자 효과 원천 차단 및 상태 오염 방어막 이식]
 # - get_avwap_decision 호출 규격에 is_simulation 파라미터를 추가하여, 
 #   관제탑 UI 렌더링 시 암살자 코어의 상태(JSON)가 덮어씌워지는 맹점을 원천 차단하는 릴레이 배선 개통.
-# 🚨 MODIFIED: [순수익 2.0% 절대 보장 타점 공식]
+# MODIFIED: [순수익 2.0% 절대 보장 타점 공식]
 # - get_avwap_decision 호출 규격에 fee_rate 파라미터를 추가하여 하위 암살자 코어 플러그인으로 다이렉트 수혈하는 릴레이 배선 개통.
-# 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
+# MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술]
 # - get_avwap_decision 파라미터에서 낡은 fee_rate, is_apex_on 영구 소각
 # - df_1min_exec 팩트 수혈 파라미터 신규 개통 및 릴레이 배선 적용
+# 🚨 NEW: [Case 11] 다중 출격(Multi-Sortie) 모드 파라미터 수혈 배선 이식
+# 🚨 NEW: [라우팅 누수 방어] V14 스나이퍼 감시 라우터(check_sniper_condition) 배선 개통 완료
 # ==========================================================
 import logging
 import pandas as pd
@@ -165,6 +167,14 @@ class InfiniteStrategy:
             
         return plan
 
+    # NEW: [라우팅 누수 방어] V14 스나이퍼 감시 라우터 배선 개통 완료
+    def check_sniper_condition(self, ticker, cfg, broker, chat_id):
+        version = self.cfg.get_version(ticker)
+        if version == "V14":
+            if hasattr(self.v14_plugin, 'check_sniper_condition'):
+                return self.v14_plugin.check_sniper_condition(ticker, cfg, broker, chat_id)
+        return {"action": "HOLD", "reason": "스나이퍼 감시 대기(또는 모듈 없음)", "limit_price": 0.0, "qty": 0}
+
     def capture_vrev_snapshot(self, ticker, clear_price, avg_price, qty):
         if qty <= 0: return None
         
@@ -200,10 +210,9 @@ class InfiniteStrategy:
     def fetch_avwap_macro(self, base_ticker):
         return self.v_avwap_plugin.fetch_macro_context(base_ticker)
 
-    # 🚨 MODIFIED: [V77.01 데이터 기아 방어 및 런타임 무결성 팩트 수술] df_1min_exec 팩트 수혈 파라미터 신설 및 데드코드 소각
-    def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, is_simulation=False, df_1min_exec=None, **kwargs):
+    def get_avwap_decision(self, base_ticker, exec_ticker, base_curr_p, exec_curr_p, base_day_open, avg_price, qty, alloc_cash, context_data, df_1min_base, now_est, avwap_state=None, regime_data=None, is_simulation=False, df_1min_exec=None, sortie_mode="SINGLE", **kwargs):
         return self.v_avwap_plugin.get_decision(
             base_ticker=base_ticker, exec_ticker=exec_ticker, base_curr_p=base_curr_p, exec_curr_p=exec_curr_p, 
             base_day_open=base_day_open, avwap_avg_price=avg_price, avwap_qty=qty, avwap_alloc_cash=alloc_cash,
-            context_data=context_data, df_1min_base=df_1min_base, df_1min_exec=df_1min_exec, now_est=now_est, avwap_state=avwap_state, is_simulation=is_simulation, **kwargs
+            context_data=context_data, df_1min_base=df_1min_base, df_1min_exec=df_1min_exec, now_est=now_est, avwap_state=avwap_state, is_simulation=is_simulation, sortie_mode=sortie_mode, **kwargs
         )

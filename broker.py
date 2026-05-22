@@ -16,6 +16,9 @@
 # 🚨 NEW: [V77.00 V7.1 백테스트 절대 동기화] 순수 진폭 Amp 5MA 엔진 이식 및 get_amp_5d_data 개통
 # 🚨 MODIFIED: [V77.01 들여쓰기 붕괴 런타임 즉사 방어] get_execution_history 내 else: break 구문 IndentationError 팩트 교정 완료.
 # 🚨 MODIFIED: [V77.02 하극상 매수 영구 소각] _ceil_2 내부 파이썬 부동소수점 오차(IEEE 754) 1센트 팽창 버그 원천 차단.
+# 🚨 MODIFIED: [Case 03 준수] 동일 종목 유령 중복 응답 누적 합산 절대 금지 및 무시 처리 팩트 교정 완료.
+# 🚨 MODIFIED: [결함 2 수술] get_amp_5d_data 내 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온 팩트 결속
+# 🚨 MODIFIED: [제2헌법 준수] yfinance 네임스페이스 오염을 유발하는 중복 임포트 영구 소각 및 단일화 락온
 # ==========================================================
 
 import requests
@@ -106,7 +109,7 @@ class KoreaInvestmentBroker:
                         try: os.remove(temp_path)
                         except Exception: pass
             else:
-                print(f"❌ [Broker] 토큰 발급 실패: {data.get('error_description', '알 수 없는 오류')}")
+                print(f"❌ [Broker] 토큰 발급 실패: {data.get('error_description', '알 수 알 없는 오류')}")
         except Exception as e:
             print(f"❌ [Broker] 토큰 통신 에러: {e}")
 
@@ -169,7 +172,6 @@ class KoreaInvestmentBroker:
 
     def _ceil_2(self, value):
         if value is None: return 0.0
-        # MODIFIED: [V77.02 하극상 매수 영구 소각] 파이썬 부동소수점 오차(IEEE 754)로 인한 1센트 팽창 버그 원천 차단을 위해 math.ceil 직전 round(..., 4) 주입
         return max(0.01, math.ceil(round(float(value) * 100, 4)) / 100.0)
 
     def _safe_float(self, value):
@@ -269,14 +271,8 @@ class KoreaInvestmentBroker:
                             if ticker not in holdings: 
                                 holdings[ticker] = {'qty': qty, 'ord_psbl_qty': ord_psbl_qty, 'avg': avg}
                             else:
-                                prev = holdings[ticker]
-                                # 💡 [멱등성 가드] 동일 수량/평단가 중복 응답 무시
-                                if prev['qty'] == qty and abs(prev['avg'] - avg) < 0.001: continue 
-                                total_qty = prev['qty'] + qty
-                                new_avg = ((prev['avg'] * prev['qty']) + (avg * qty)) / total_qty if total_qty > 0 else avg
-                                holdings[ticker]['qty'] = total_qty
-                                holdings[ticker]['ord_psbl_qty'] += ord_psbl_qty
-                                holdings[ticker]['avg'] = new_avg
+                                # MODIFIED: [Case 03] KIS API 잔고 동일 종목 유령 중복 응답 누적 합산(+=) 절대 금지 및 무조건 무시(continue) 처리
+                                continue 
 
                     tr_cont = res_hold.headers.get('tr_cont', '') if hasattr(res_hold, 'headers') else ''
                     fk200 = (resp_json.get('ctx_area_fk200', '') or '').strip()
@@ -297,7 +293,7 @@ class KoreaInvestmentBroker:
             df = stock.history(period="5d", interval="1m", prepost=False, timeout=10)
             if df.empty: return 0.0, 0.0
             df = _flatten_columns(df)
-            est = ZoneInfo('America/New_York') # 🚨 [제3헌법] EST 락온
+            est = ZoneInfo('America/New_York') 
             if df.index.tz is None: df.index = df.index.tz_localize('UTC').tz_convert(est)
             else: df.index = df.index.tz_convert(est)
 
@@ -342,7 +338,10 @@ class KoreaInvestmentBroker:
             vol_price = typical_price * regular_market['Volume']
             cum_vol_price = vol_price.cumsum()
             cum_vol = regular_market['Volume'].cumsum()
-            vwap_series = pd.Series(np.where(cum_vol > 0, cum_vol_price / cum_vol, np.nan), index=cum_vol.index).ffill() 
+            
+            safe_cum_vol = np.where(cum_vol == 0, 1.0, cum_vol)
+            vwap_array = np.where(cum_vol > 0, cum_vol_price / safe_cum_vol, np.nan)
+            vwap_series = pd.Series(vwap_array, index=cum_vol.index).ffill() 
       
             current_vwap = float(vwap_series.iloc[-1]) if not vwap_series.empty else 0.0
             if pd.isna(current_vwap): current_vwap = 0.0
@@ -610,7 +609,6 @@ class KoreaInvestmentBroker:
         for o in target_orders: self.cancel_order(ticker, o.get('odno')); time.sleep(0.3)
         return len(target_orders)
 
-    # 🚨 MODIFIED: [V71.16 KIS API 알고리즘 타임 파라미터 명세 100% 팩트 교정]
     def send_order(self, ticker, side, qty, price, order_type="LIMIT", start_time=None, end_time=None):
         try: order_qty = int(float(qty))
         except (TypeError, ValueError): return {'rt_cd': '999', 'msg1': f'유효하지 않은 주문 수량: {qty!r}'}
@@ -619,13 +617,11 @@ class KoreaInvestmentBroker:
         for attempt in range(2):
             tr_id = "TTTT1002U" if side == "BUY" else "TTTT1006U"
             excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
-            # 🚨 36: VWAP 추가 및 32: LOO 강제 매핑
             ord_dvsn = {"LOC": "34", "MOC": "33", "LOO": "32", "MOO": "31", "VWAP": "36"}.get(order_type, "00")
             final_price = 0 if order_type in ["MOC", "MOO"] else self._ceil_2(price)
          
             if order_type not in ["MOC", "MOO"] and final_price <= 0.0: return {'rt_cd': '999', 'msg1': f'가격 오류: {price}'}
             
-            # 🚨 MODIFIED: [V72.24 KIS 명세 반영 SLL_TYPE 누수 방어 이식]
             sll_type = "00" if side == "SELL" else ""
             
             body = {
@@ -634,14 +630,12 @@ class KoreaInvestmentBroker:
                 "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn, "SLL_TYPE": sll_type
             }
             
-            # 🚨 NEW: [V71.23 KIS API 알고리즘 타임 파라미터 유령 Key 소각 및 팩트 교정]
-            # KIS 명세서 팩트 기반 START_TIME / END_TIME 절대 락온
             if order_type == "VWAP":
                 if start_time and end_time:
                     body["ALGO_ORD_TMD_DVSN_CD"] = "00"
             
-                    body["START_TIME"] = start_time  # 🚨 KIS 명세 팩트 복구
-                    body["END_TIME"] = end_time     # 🚨 KIS 명세 팩트 복구
+                    body["START_TIME"] = start_time
+                    body["END_TIME"] = end_time
                 else:
                     body["ALGO_ORD_TMD_DVSN_CD"] = "02"
 
@@ -672,7 +666,6 @@ class KoreaInvestmentBroker:
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": str(qty), "OVRS_ORD_UNPR": str(price), "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0"}
         return self._call_api("TTTS6038U", "/uapi/overseas-stock/v1/trading/daytime-order-rvsecncl", "POST", body=body)
 
-    # 🚨 MODIFIED: [V71.14 지정가 VWAP(Limit VWAP) 예약주문 데드코드 전면 폐기 및 일반주문 이관]
     def send_reservation_order(self, ticker, side, qty, price, order_type="LIMIT"):
         try: order_qty = int(float(qty))
         except: return {'rt_cd': '999', 'msg1': '수량 오류'}
@@ -687,10 +680,10 @@ class KoreaInvestmentBroker:
         }
         
         if order_type == "LOC":
-            body["ORD_DVSN"] = "34" # 34: LOC (장마감지정가)
+            body["ORD_DVSN"] = "34" 
             body["FT_ORD_UNPR3"] = final_price
         else:
-            body["ORD_DVSN"] = "00" # 일반 지정가 예약
+            body["ORD_DVSN"] = "00" 
             body["FT_ORD_UNPR3"] = final_price
             
         res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/order-resv", "POST", body=body)
@@ -704,8 +697,6 @@ class KoreaInvestmentBroker:
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "RSVN_ORD_RCIT_DT": order_date, "OVRS_RSVN_ODNO": order_id}
         return self._call_api("TTTT3017U", "/uapi/overseas-stock/v1/trading/order-resv-ccnl", "POST", body=body)
 
-    # 🚨 MODIFIED: [V77.01 들여쓰기 붕괴 런타임 즉사 방어]
-    # else: break 구문이 for 구문과 동일한 인덴트로 이탈했던 맹점 100% 팩트 교정 완료
     def get_execution_history(self, ticker, start_date, end_date):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         odno_map = {}
@@ -721,16 +712,18 @@ class KoreaInvestmentBroker:
                 for item in output:
                     try:
                         iq, ip = float(item.get('ft_ccld_qty', 0)), float(item.get('ft_ccld_unpr3', 0))
-        
+                        # MODIFIED: [Case 16 & V77.01 들여쓰기 붕괴 런타임 즉사 방어 및 변수 스코프 전진 배치]
+                        odno = item.get('odno', f"__nk_{id(item)}")
                         if iq > 0:
-                            odno = item.get('odno', f"__nk_{id(item)}")
-                            if odno not in odno_map: odno_map[odno] = {"item": dict(item), "total_qty": iq, "total_amt": iq * ip}
-     
-                        else: odno_map[odno]["total_qty"] += iq; odno_map[odno]["total_amt"] += (iq * ip)
+                            if odno not in odno_map: 
+                                odno_map[odno] = {"item": dict(item), "total_qty": iq, "total_amt": iq * ip}
+                            else: 
+                                odno_map[odno]["total_qty"] += iq
+                                odno_map[odno]["total_amt"] += (iq * ip)
                     except: continue
                 if res.headers.get('tr_cont', '') in ['M', 'F']: time.sleep(0.3); continue
                 else: break
-            else: break  # 🚨 [팩트 교정 완료] if 분기문에 100% 결속되도록 인덴트 수정
+            else: break
         return [{"ft_ccld_qty": str(d["total_qty"]), "ft_ccld_unpr3": str(d["total_amt"]/d["total_qty"] if d["total_qty"]>0 else 0), **d["item"]} for d in odno_map.values()]
 
     def get_genesis_ledger(self, ticker, limit_date_str=None):
@@ -797,8 +790,6 @@ class KoreaInvestmentBroker:
             ret.is_panic, ret.gap_pct = False, 0.0; return ret
 
     def get_day_high_low(self, ticker):
- 
-        """ 🚨 [제3헌법] 정규장 데이터 슬라이싱 디커플링 """
         try:
             hist = yf.Ticker(ticker).history(period="1d", interval="1m", prepost=True, timeout=5)
             if not hist.empty:
@@ -829,7 +820,6 @@ class KoreaInvestmentBroker:
         except: pass
         return 0.0, 0.0
 
-    # 🚨 NEW: [V77.00 V7.1 백테스트 절대 동기화] 순수 진폭 Amp 5MA 엔진 이식 및 get_amp_5d_data 개통
     def get_amp_5d_data(self, ticker):
         try:
             hist = yf.Ticker(ticker).history(period="15d", prepost=False, timeout=5)
@@ -837,6 +827,9 @@ class KoreaInvestmentBroker:
             
             hist['Prev_Close'] = hist['Close'].shift(1)
             hist = hist.dropna(subset=['High', 'Low', 'Prev_Close']).copy()
+            
+            # MODIFIED: [결함 2 수술] 분모 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온
+            hist['Prev_Close'] = hist['Prev_Close'].replace(0, np.nan)
             
             hist['Amp'] = (hist['High'] - hist['Low']) / hist['Prev_Close']
             hist['Amp_5d'] = hist['Amp'].rolling(window=5).mean()

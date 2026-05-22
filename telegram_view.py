@@ -1,7 +1,9 @@
 # ==========================================================
 # FILE: telegram_view.py
 # ==========================================================
-# 🚨 MODIFIED: [V73.15 스케줄 연대기 팩트 패치] 17:05 KST V14 조기 덫 장전 팩트 텍스트 렌더링
+# 🚨 MODIFIED: [V77.33 엣지케이스 팩트 수술] 통합 지시서 에스크로(Escrow) UI 렌더링 전면 소각
+# 🚨 MODIFIED: [UI 렌더링 무결성] 최신 버전 V77.34 락온 및 시작 메뉴 텍스트 간소화 (텔레그램 네이티브 공백 교정)
+# 🚨 NEW: [Case 11] 환경설정(/settlement)에 다중 출격(Multi-Sortie) 스위치 동적 렌더링 팩트 교정
 # ==========================================================
 import os
 import math
@@ -65,19 +67,19 @@ class TelegramView:
         sync_time = "05:05" if is_dst else "06:05"    
         dst_state = "🌞서머타임 ON" if is_dst else "❄️서머타임 OFF"
         
-        msg = f"🌌 [ 옴니 매트릭스 퀀트 엔진 {latest_version} ]\n"
+        msg = f"🌌 <b>[ 옴니 매트릭스 퀀트 엔진 {latest_version} ]</b>\n"
         msg += "💠 무결성 싱글 롱 모멘텀 (SOXL 전용) & V-REV 갭 스위칭\n\n"
         
-        msg += f"🕒 [ 운영 스케줄 ({dst_state}) ]\n"
+        msg += f"🕒 <b>[ 운영 스케줄 ({dst_state}) ]</b>\n"
         msg += f"🔹 {fact_hour}:00 : 🔐 매매 초기화 및 변동성 락온\n"
-        msg += f"🔹 {fact_hour}:05 : 📸 V14 선제 덫 장전 & V-REV 모의 스냅샷\n"
+        msg += f"🔹 {fact_hour}:05 : 📸 V14장전 & V-REV스냅샷\n"
         msg += f"🔹 {matrix_time} : 🏛️ 옴니 매트릭스 시장 국면 판별\n"
         msg += f"🔹 {trap_time} : 🌃 V-REV 덫 실전 투하\n"
-        msg += "   (자전거래 차단)\n"
+        msg += "       (자전거래 차단)\n"
         msg += f"🔹 {sync_time} : 📝 확정 정산 스캔 & 졸업 발급\n"
         msg += "🔹 6시간 간격 : 🔑 API 토큰 자동 갱신\n\n"
         
-        msg += "🛠 [ 주요 명령어 ]\n"
+        msg += "🛠 <b>[ 주요 명령어 ]</b>\n"
         msg += "▶️ /sync : 📜 통합 지시서 조회\n"
         msg += "▶️ /record : 📊 장부 동기화 및 조회\n"
         msg += "▶️ /history : 🏆 졸업 명예의 전당\n"
@@ -92,7 +94,7 @@ class TelegramView:
         msg += "⚠️ /reset : 🔓 비상 해제 메뉴 (락/리버스)\n"
         msg += "┗ 🚨 수동 닻 올리기: 예산 부족으로 리버스 진입 후 예수금을 추가 입금하셨다면, 이 메뉴에서 반드시 '리버스 강제 해제' 버튼을 눌러주세요!\n\n"
         
-        msg += "⚠️ /update : 🚀 시스템 자가 업데이트 (경고: 로컬 코드가 초기화됨)\n"
+        msg += "⚠️ /update : 🚀 시스템 자가 업데이트 (경고: 로컬 코드가 초기화됨)"
         return msg
 
     def get_update_confirm_menu(self):
@@ -240,7 +242,7 @@ class TelegramView:
         page_items = history_data[start_idx:end_idx]
 
         msg = "🚀 <b>[ PIPIOS 퀀트 엔진 패치노트 ]</b>\n"
-        msg += "▫️ 현재 시스템: <code>V77.30 무결점 디커플링 에디션 (V7.4 Assassin)</code>\n\n"
+        msg += "▫️ 현재 시스템: <code>V77.34 무결점 디커플링 에디션 (V7.4 Assassin)</code>\n\n"
         
         for item in page_items:
             if isinstance(item, str):
@@ -278,27 +280,16 @@ class TelegramView:
         return msg, InlineKeyboardMarkup(keyboard)
 
     def create_sync_report(self, status_text, dst_text, cash, rp_amount, ticker_data, is_trade_active, p_trade_data=None, exchange_rate=None):
-        total_locked = 0.0
-        header_msg = ""
-        body_msg = ""
-        keyboard = []
-        real_cash = 0.0
-        krw_profit = 0.0
-        
-        total_locked = sum(t_info.get('escrow', 0.0) for t_info in ticker_data)
         header_msg = f"📜 <b>[ 통합 지시서 ({status_text}) ]</b>\n📅 <b>{dst_text}</b>\n"
         
-        if total_locked > 0:
-            real_cash = max(0, cash - total_locked)
-            header_msg += f"💵 한투 전체 잔고: ${cash:,.2f}\n"
-            header_msg += f"🔒 에스크로 격리금: -${total_locked:,.2f}\n"
-            header_msg += f"✅ 실질 가용 예산: ${real_cash:,.2f}\n"
-        else:
-            header_msg += f"💵 주문가능금액: ${cash:,.2f}\n"
-        
+        header_msg += f"💵 주문가능금액: ${cash:,.2f}\n"
         header_msg += f"🏛️ RP 투자권장: ${rp_amount:,.2f}\n"
         header_msg += "----------------------------\n\n"
         
+        keyboard = []
+        body_msg = ""
+        krw_profit = 0.0
+
         for t_info in ticker_data:
             t = t_info.get('ticker', 'UNK')
             v_mode = t_info.get('version', 'V14')
@@ -368,12 +359,6 @@ class TelegramView:
             
             body_msg += f"💵 총 시드: ${safe_seed:,.0f}\n🛒 <b>{bdg_txt}</b>\n"
        
-            escrow = t_info.get('escrow', 0.0)
-            if escrow > 0:
-                body_msg += f"🔐 내 금고 보호액: ${escrow:,.2f}\n"
-            elif is_rev_logic and proc_status == "🩸리버스(긴급수혈)":
-                body_msg += "🔐 내 금고 보호액: $0.00 (Empty 🚨)\n"
-            
             body_msg += f"💰 현재 ${safe_curr:,.2f} / 평단 ${safe_avg:,.2f} ({fact_qty}주)\n"
             
             if prev_close > 0 and day_high > 0 and day_low > 0:
@@ -522,6 +507,11 @@ class TelegramView:
                     is_avwap_on = config.get_avwap_hybrid_mode(t)
                     avwap_status_txt = "실전 가동 중 🔥" if is_avwap_on else "대기 중 ⚪"
                     msg += f"▫️ AVWAP 암살자: <b>{avwap_status_txt}</b>\n"
+                    
+                    if is_avwap_on:
+                        sortie_mode = getattr(config, 'get_avwap_sortie_mode', lambda x: "SINGLE")(t)
+                        sortie_txt = "다중 출격 (무한 타격)" if sortie_mode == "MULTI" else "단일 타격 (조기 퇴근)"
+                        msg += f"▫️ 작전 궤도: <b>{sortie_txt}</b>\n"
                 
                 msg += "⚖️ <b>엔진 스탠바이:</b> 15:26 EST KIS VWAP 실전 덫 장전 및 관망 중\n\n"
             else:
@@ -537,6 +527,13 @@ class TelegramView:
             if ver == "V_REV":
                 is_avwap = config.get_avwap_hybrid_mode(t) if hasattr(config, 'get_avwap_hybrid_mode') else False
                 keyboard.append([InlineKeyboardButton(f"⚔️ 파격적 AVWAP 모멘텀 [ {'가동중' if is_avwap else 'OFF'} ]", callback_data=f"MODE:AVWAP_{'OFF' if is_avwap else 'WARN'}:{t}")])
+                
+                if is_avwap:
+                    sortie_mode = getattr(config, 'get_avwap_sortie_mode', lambda x: "SINGLE")(t)
+                    next_sortie = "MULTI" if sortie_mode == "SINGLE" else "SINGLE"
+                    btn_text = "🔄 다중 출격 전환" if sortie_mode == "SINGLE" else "🔄 단일 타격 전환"
+                    keyboard.append([InlineKeyboardButton(btn_text, callback_data=f"MODE:AVWAP_SORTIE:{t}:{next_sortie}")])
+                
                 if t == "SOXL": keyboard.append([InlineKeyboardButton(f"🔫 {t} 단일 롱 모멘텀 관제탑", callback_data=f"AVWAP:MENU:{t}")])
                 keyboard.append([InlineKeyboardButton(f"💸 {t} 복리", callback_data=f"INPUT:COMPOUND:{t}"), InlineKeyboardButton(f"💳 {t} 수수료", callback_data=f"INPUT:FEE:{t}")])
                 keyboard.append([InlineKeyboardButton(f"✂️ {t} 액면보정", callback_data=f"INPUT:STOCK_SPLIT:{t}")])

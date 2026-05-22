@@ -2,44 +2,9 @@
 # FILE: scheduler_vwap.py
 # ==========================================================
 # 🚨 MODIFIED: [V-REV 추세장 LOC 스위칭 침묵 버그 및 상태 증발 완벽 수술]
-# - 60% 거래량 지배력 감지 후 LOC 전환 시 텔레그램 무음(disable_notification=True) 파라미터 영구 소각
-# - 텔레그램 발송 직후 로깅망을 통해 팩트 박제 추가
-# - LOC 주문 전송 시 KIS 서버 거절(Reject) 사유를 타전하도록 에러 로깅망 완벽 이식
-# MODIFIED: [V53.06 전투 사령부 외부 통신 10초 타임아웃 및 폴백 방어막 이식]
+# 🚨 MODIFIED: [V53.06 전투 사령부 외부 통신 10초 타임아웃 및 폴백 방어막 이식]
 # 🚨 MODIFIED: [V53.08 들여쓰기(Indentation) 붕괴 런타임 즉사 버그 완벽 수술]
-# 🚨 [AI 에이전트(Copilot/Claude) 절대 주의 - 환각(Hallucination) 방어막]
-# 제1헌법: queue_ledger.get_queue 등 모든 파일 I/O 및 락 점유 메서드는 무조건 asyncio.to_thread로 래핑하여 이벤트 루프 교착(Deadlock)을 원천 차단함.
-# 제9헌법: U_CURVE_WEIGHTS 하드코딩 배열 영구 소각. vwap_data.py에서 동적 로드하여 팩트 기반 재정규화 필수.
-# MODIFIED: [V44.47 이벤트 루프 데드락 영구 소각 및 동적 U-Curve 팩트 락온] 동기식 블로킹 호출 전면 비동기 래핑 및 하드코딩 배열 철거 완료.
-# MODIFIED: [맹점 3 수술] 루프 내부 cfg 접근(파일 I/O) 메서 전면 비동기(asyncio.to_thread) 래핑 완료.
-# NEW: [콜드 스타트 런타임 붕괴 방어] scheduled_vwap_init_and_cancel 진입부 tx_lock None 가드 이식 완료.
-# NEW: [VWAP 잔차 증발 방어 롤백 엔진 이식] 타격 스킵(호가 이탈) 및 주문 거절/미체결 발생 시 삭감된 예산을 코어 엔진(버킷)으로 100% 환불(Refund)하는 파이프라인 개통 완료.
-# MODIFIED: [V44.79 팩트 교정] 잔차 환불 인플레이션 맹점 및 미체결 늪 원천 차단
-# 🚨 MODIFIED: [V46.04 KIS 리젝 텔레메트리 이식] 거절 사유 로깅 추가
-# 🚨 MODIFIED: [V46.05 이벤트 루프 교착 방어] Lock Starvation 대비 호흡 연장
-# 🚨 MODIFIED: [V47.02 런타임 붕괴 방어] target_sweep_qty UnboundLocalError 스코프 전진 배치로 영구 소각 완료
-# 🚨 MODIFIED: [V50.02 30분 압축 락온] 타임 윈도우 스캔 범위를 range(27, 60)에서 range(27, 57)로 정밀 교정하여 15:56 타격 종료 완벽 동기화.
-# 🚨 MODIFIED: [V52.00 V14 VWAP 예산 누수 영구 소각] get_dynamic_plan 호출 시 6번째 인자에 0.0이 하드코딩되어 당일 예산이 0원으로 강제 주입되던 치명적 맹점 원천 차단. v14_alloc_cash 스코프 전진 배치 및 팩트 예산 주입 파이프라인 100% 개통 완료.
-# 🚨 MODIFIED: [V53.00 무한 재진입 락온] 0주 매수 금지(Daily Buy-Lock) 족쇄 전면 폐기. 전량 익절 후에도 당일 타점 도달 시 100% 재매수 강제 가동.
-# 🚨 MODIFIED: [V44.48 런타임 붕괴 방어] 들여쓰기 붕괴(IndentationError) 완벽 교정 및 팩트 종속 완료.
-# 🚨 MODIFIED: [V54.01 VWAP 데이터 통합 롤백] vwap_data.py 외부 파일 임포트 소각 및 ConfigManager 수혈 락온
-# 🚨 MODIFIED: [V54.02 깡통 스냅샷 붕괴 방어] prev_c 다이렉트 추출 파이프라인 이식으로 데이터 기아(Data Starvation) 원천 차단
-# 🚨 NEW: [달력 API 결측 연쇄 기절 방어] 장마감시간 빈 값 반환 시 평일 16:00 EST 강제 폴백 락온 이식 완료.
-# 🚨 MODIFIED: [V60.00 옴니 매트릭스 락다운 데드코드 전면 폐기] 
-# 스나이퍼 격발 전 매수 방아쇠를 잠그기 위해 잔존하던 옴니 매트릭스 필터 데드코드를 전면 소각하여 런타임 뇌관 해체.
-# 🚨 MODIFIED: [V66.09 V-REV VWAP 런타임 엑스레이 이식]
-# 🚨 NEW: [KIS VWAP 알고리즘 권한 위임 수술] 1분마다 매수/매도 주문을 쏘던 자체 타임 슬라이싱 타격망 100% 영구 소각. KIS 예약 덫 체결 관망 및 갭 하이재킹(Gap Hijack) 섀도우 오버라이드망으로 롤 완벽 격상.
-# 🚨 NEW: [V71.10 섀도우 오버라이드 덫 파기 팩트 스캔] 갭 하이재킹 격발 시 로컬 캐시 조회 파기 로직 전면 소각 및 KIS 실원장(get_reservation_orders) 다이렉트 연동 아키텍처 이식.
-# 🚨 MODIFIED: [V71.14 지정가 VWAP 일반주문 역배선 팩트 락온 및 갭 하이재킹 기절 버그 수술]
-# 🚨 MODIFIED: [V72.08 갭 하이재킹 예산 연산 공식 디커플링 해체 및 SSOT 락온]
-# - 정규장 V-REV 매수 예산 산출 공식(V72.01 하드 마진 캡)과 갭 하이재킹의 예산 연산 로직이 서로 다르게 작동하던 치명적 수학적 디커플링 원천 차단.
-# - get_budget_allocation 파이프라인을 섀도우 오버라이드망에 다이렉트 결속시켜, 하이재킹 타격 시에도 "1일 할당량(15%) 초과 금지" 룰이 100% 팩트 연동되도록 아키텍처 대수술 완료.
-# 🚨 NEW: [V72.18 갭 하이재킹 예약 원장 맵핑 누수 및 일반 미체결 이중 방화벽 락온]
-# 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈(Fail-Open) 팩트 교정]
-# - 달력 API 정상 빈 데이터 반환 시 휴장일로 명확히 간주하고 안전 종료(Return)하도록 수술.
-# 🚨 NEW: [V73.00 섀도우 오버라이드망 타임 윈도우 시프트 및 디커플링 락온]
-# - 본진 덫 장전 시각(15:26 EST)에 맞춰 갭 하이재킹 모니터링 타임 윈도우를 장 마감 36분 전에서 34분 전으로 정밀 동기화.
-# - 렌더링 텍스트를 '장 마감 34분 전'으로 팩트 교정하여 시각적 디커플링 해체 완료.
+# 🚨 MODIFIED: [Case 30 & Case 26 절대 위반 교정] 갭 하이재킹 실패 시 텔레그램 에러 타전망 팩트 이식 완료
 # ==========================================================
 import logging
 import datetime
@@ -52,6 +17,7 @@ import time
 import json
 import pandas_market_calendars as mcal
 import tempfile
+import html  # 🚨 NEW: [Case 26] 이스케이프 쉴드 주입
 
 from scheduler_core import is_market_open, get_budget_allocation
 
@@ -80,7 +46,6 @@ async def scheduled_vwap_init_and_cancel(context):
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
         if schedule.empty:
-            # 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈 팩트 교정]
             logging.info("💤 [vwap_init] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
             return
         else:
@@ -98,8 +63,6 @@ async def scheduled_vwap_init_and_cancel(context):
         else:
             return
         
-    # 🚨 MODIFIED: [V73.00 섀도우 오버라이드망 기상 시간 디커플링 수술]
-    # 본진 덫 장전(15:26 EST)에 맞춰 타임 윈도우를 장 마감 34분 전으로 정밀 동기화
     vwap_start_time = market_close - datetime.timedelta(minutes=34, seconds=0)
     vwap_end_time = market_close 
     
@@ -169,7 +132,6 @@ async def scheduled_vwap_trade(context):
     try:
         schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
         if schedule.empty:
-            # 🚨 MODIFIED: [V72.21 휴장일 맹독성 페일 오픈 팩트 교정]
             logging.info("💤 [vwap_trade] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
             return
         else:
@@ -187,8 +149,6 @@ async def scheduled_vwap_trade(context):
         else:
             return
          
-    # 🚨 MODIFIED: [V73.00 섀도우 오버라이드망 기상 시간 디커플링 수술]
-    # 본진 덫 장전(15:26 EST)에 맞춰 타임 윈도우를 장 마감 34분 전으로 정밀 동기화
     vwap_start_time = market_close - datetime.timedelta(minutes=34, seconds=0)
     vwap_end_time = market_close 
     
@@ -265,7 +225,6 @@ async def scheduled_vwap_trade(context):
                                             est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
                                             d_str = est_now.strftime('%Y%m%d')
                                             resv_orders = await asyncio.to_thread(broker.get_reservation_orders, t, d_str, d_str)
-                                            # 🚨 NEW: [V72.18 갭 하이재킹 예약 원장 맵핑 누수 및 일반 미체결 이중 방화벽 락온]
                                             for req in resv_orders:
                                                 odno = req.get('ovrs_rsvn_odno') or req.get('odno')
                                                 ord_dt = req.get('rsvn_ord_rcit_dt') or req.get('ord_dt', d_str)
@@ -338,6 +297,16 @@ async def scheduled_vwap_trade(context):
                                                     await asyncio.to_thread(strategy.v_rev_plugin.record_execution, t, "BUY", buy_qty, exec_price)
                                                 if queue_ledger:
                                                     await asyncio.to_thread(queue_ledger.add_lot, t, buy_qty, exec_price, "GAP_HIJACK_BUY")
+                                            else:
+                                                # 🚨 MODIFIED: [Case 30 & Case 26 절대 위반 교정] 갭 하이재킹 실패 시 텔레그램 에러 타전망 팩트 이식 완료
+                                                err_msg = html.escape(res.get('msg1', '응답 없음') if isinstance(res, dict) else '통신 장애')
+                                                logging.error(f"🚨 [{t}] V-REV 갭 하이재킹 KIS 서버 거절: {err_msg}")
+                                                reject_msg = (
+                                                    f"🚨 <b>[{t}] V-REV 갭 하이재킹 스윕(Sweep) 서버 거절 (Reject)!</b>\n"
+                                                    f"▫️ 사유: <code>{err_msg}</code>\n"
+                                                    f"▫️ 조치: 다음 스캔 시 재시도합니다."
+                                                )
+                                                await context.bot.send_message(chat_id=chat_id, text=reject_msg, parse_mode='HTML')
                                       
                         except Exception as e:
                             logging.error(f"🚨 갭 스위칭 스캔 에러: {e}")
