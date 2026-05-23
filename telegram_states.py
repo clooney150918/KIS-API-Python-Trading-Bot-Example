@@ -7,10 +7,8 @@
 # MODIFIED: [V44.48 수동 조작 데드코드 영구 소각 및 런타임 무결성 확보] 큐 장부에 존재하지 않는 _load 메서드 호출 찌꺼기 100% 소각.
 # MODIFIED: [맹점 4 수술] 텔레그램 상태 제어 시 발생하는 cfg.get_seed 동기 I/O 블로킹 뇌관 전면 비동기 래핑 완료.
 # 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
-# 지층 수정(EDITQ_) 시 존재하던 지저분한 다이렉트 파일 I/O(open, json, tempfile) 로직을 전면 적출하고, 
-# QueueLedger의 스레드 세이프(Thread-safe) 코어 메서드(edit_lot)로 직결(Lock-on)하여 동시성 충돌 뇌관 완전 해체.
 # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] 
-# 15:25 전량 덤핑 헌법에 따라 무의미해진 AVWAP 목표 수익률 수동 입력 처리(CONF_AVWAP_TARGET) 블록을 100% 영구 도려냄.
+# 🚨 NEW: [Case 33 절대 규칙] 3단 지수 백오프 이식으로 팻핑거 검증 통신 에러 원천 차단
 # ==========================================================
 import logging
 import datetime
@@ -81,20 +79,25 @@ class TelegramStates:
                     return await update.message.reply_text("❌ 수량/평단가는 숫자로 입력하세요. (수정 취소됨)")
                 
                 try:
-                    # 🚨 MODIFIED: [V44.44 이벤트 루프 교착 방어] API 호출 비동기 래핑
-                    curr_p = await asyncio.wait_for(
-                        asyncio.to_thread(self.broker.get_current_price, ticker), 
-                        timeout=3.0
-                    )
+                    curr_p = 0.0
+                    for attempt in range(3):
+                        try:
+                            curr_p_val = await asyncio.wait_for(
+                                asyncio.to_thread(self.broker.get_current_price, ticker), 
+                                timeout=5.0
+                            )
+                            curr_p = float(curr_p_val or 0.0)
+                            break
+                        except Exception:
+                            if attempt == 2: curr_p = 0.0
+                            else: await asyncio.sleep(1.0 * (2 ** attempt))
+                            
                     if curr_p and curr_p > 0 and (price < curr_p * 0.7 or price > curr_p * 1.3):
                         del controller.user_states[chat_id]
                         return await update.message.reply_text(f"🚨 <b>팻핑거 방어 가동:</b> 입력가(${price:.2f})가 현재가(${curr_p:.2f}) 대비 ±30%를 초초과합니다. 다시 시도해주세요.", parse_mode='HTML')
                 except Exception:
                     pass
 
-                # 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT] 텔레그램 다이렉트 파일 I/O 및 락 우회 병목 영구 소각
-                # 기존 _update_q_ledger 내부 함수(json.dump, tempfile 등)를 전면 적출하고 
-                # QueueLedger의 Thread-safe 코어 메서드인 edit_lot을 비동기(to_thread) 래핑하여 직결 완료.
                 if getattr(self, 'queue_ledger', None):
                     await asyncio.to_thread(self.queue_ledger.edit_lot, ticker, target_date, qty, price)
                 
@@ -112,15 +115,12 @@ class TelegramStates:
             val = float(text)
             parts = state.split("_")
             
-            # 🚨 MODIFIED: [V59.02 잔재 데드코드 영구 소각] CONF_AVWAP_TARGET 상태의 사용자 목표 수익률 입력 처리 블록 전면 도려냄.
-            
             if state.startswith("SEED"):
                 if val < 0:
                     return await update.message.reply_text("❌ 오류: 시드머니는 0 이상이어야 합니다.")
                     
                 action, ticker = parts[1], parts[2]
                 
-                # MODIFIED: [맹점 4 수술] 파일 I/O 동기 블로킹 비동기 래핑
                 curr = await asyncio.to_thread(self.cfg.get_seed, ticker)
 
                 new_v = curr + val if action == "ADD" else (max(0, curr - val) if action == "SUB" else val)
@@ -132,7 +132,6 @@ class TelegramStates:
                     return await update.message.reply_text("❌ 오류: 분할 횟수는 1 이상이어야 합니다.")
                     
                 ticker = parts[2]
-                # 🚨 MODIFIED: 파일 I/O 비동기 래핑
                 def _set_split():
                     d = self.cfg._load_json(self.cfg.FILES["SPLIT"], self.cfg.DEFAULT_SPLIT)
                     d[ticker] = val
@@ -142,7 +141,6 @@ class TelegramStates:
                 
             elif state.startswith("CONF_TARGET"):
                 ticker = parts[2]
-                # 🚨 MODIFIED: 파일 I/O 비동기 래핑
                 def _set_target():
                     d = self.cfg._load_json(self.cfg.FILES["PROFIT_CFG"], self.cfg.DEFAULT_TARGET)
                     d[ticker] = val

@@ -8,6 +8,10 @@
 # 🚨 MODIFIED: [맹점 1 수술] 다중 출격(Multi-Sortie) 기요틴 하극상 런타임 붕괴 원천 차단 및 셧다운 방어막 팩트 교정
 # 🚨 NEW: [Case 31] 1분봉 시차 패러독스(Latency Phantom Fill) 방어를 위한 캐시 수혈 및 다중출장 상태 초기화 배선 개통 완료.
 # 🚨 MODIFIED: [결함 1 수술] AVWAP 익절 덫 타점 2.0% 하향 락온 (타점 역전 패러독스 원천 소각 및 회전율 극대화)
+# 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
+# 🚨 MODIFIED: [V79.50] MA5 연산 비동기 병렬 스캔 및 get_decision 다이렉트 주입 배선 100% 개통
+# 🚨 MODIFIED: [Case 14 절대 헌법 준수] is_market_open 및 _get_market_hours 등 달력 API 타임아웃 10.0초 락온 완료
+# 🚨 MODIFIED: [Case 31 연계 미시구조 수술] 매수 체결 직후 KIS 잔고 편입 딜레이(Latency)로 인한 매도 덫 '증거금 부족' 리젝 방어를 위해 1.0초 대기 샌드위치 이식.
 # ==========================================================
 import logging
 import datetime
@@ -26,12 +30,22 @@ import pandas_market_calendars as mcal
 from scheduler_core import is_market_open
 
 async def scheduled_sniper_monitor(context):
-    try:
-        is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
-    except asyncio.TimeoutError:
-        logging.error("⚠️ 달력 API 타임아웃. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다.")
-        est = ZoneInfo('America/New_York')
-        is_open = datetime.datetime.now(est).weekday() < 5
+    is_open = False
+    for attempt in range(3):
+        try:
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            break
+        except asyncio.TimeoutError:
+            if attempt == 2:
+                logging.error("⚠️ 달력 API 타임아웃. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다.")
+                est = ZoneInfo('America/New_York')
+                is_open = datetime.datetime.now(est).weekday() < 5
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
+        except Exception:
+            if attempt == 2:
+                est = ZoneInfo('America/New_York')
+                is_open = datetime.datetime.now(est).weekday() < 5
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open: return
     
@@ -46,24 +60,28 @@ async def scheduled_sniper_monitor(context):
         nyse = mcal.get_calendar('NYSE')
         return nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
 
-    try:
-        schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_hours), timeout=10.0)
-        if schedule.empty:
-            logging.info("💤 [sniper_monitor] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
-            return
-        else:
-            market_open = schedule.iloc[0]['market_open'].astimezone(est)
-            market_close = schedule.iloc[0]['market_close'].astimezone(est)
-    except asyncio.TimeoutError:
-        logging.error("⚠️ 장운영시간 달력 API 타임아웃. 평일 강제 시간 세팅.")
+    schedule = None
+    for attempt in range(3):
+        try:
+            schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_hours), timeout=10.0)
+            break
+        except asyncio.TimeoutError:
+            if attempt == 2: logging.error("⚠️ 장운영시간 달력 API 타임아웃. 평일 강제 시간 세팅.")
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
+        except Exception:
+            if attempt == 2: pass
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
+            
+    if schedule is not None and not schedule.empty:
+        market_open = schedule.iloc[0]['market_open'].astimezone(est)
+        market_close = schedule.iloc[0]['market_close'].astimezone(est)
+    elif schedule is not None and schedule.empty:
+        logging.info("💤 [sniper_monitor] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
+        return
+    else:
         if now_est.weekday() < 5:
             market_open = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
             market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
-        else: return
-    except Exception:
-        if now_est.weekday() < 5:
-             market_open = now_est.replace(hour=9, minute=30, second=0, microsecond=0)
-             market_close = now_est.replace(hour=16, minute=0, second=0, microsecond=0)
         else: return
    
     pre_start = market_open - datetime.timedelta(hours=5, minutes=30)
@@ -94,20 +112,27 @@ async def scheduled_sniper_monitor(context):
                
     async def _do_sniper():
         async with tx_lock:
-            try:
-                cash, holdings = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=10.0)
-            except asyncio.TimeoutError:
-                logging.warning("⚠️ 잔고 조회 타임아웃 (10초). 폴백 적용.")
-                cash, holdings = 0.0, None
-            except Exception:
-                cash, holdings = 0.0, None
+            cash, holdings = 0.0, None
+            for attempt in range(3):
+                try:
+                    cash, holdings = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=15.0)
+                    break
+                except asyncio.TimeoutError:
+                    if attempt == 2: logging.warning("⚠️ 잔고 조회 타임아웃 (15초). 폴백 적용.")
+                    else: await asyncio.sleep(1.0 * (2 ** attempt))
+                except Exception:
+                    if attempt == 2: pass
+                    else: await asyncio.sleep(1.0 * (2 ** attempt))
             
             if holdings is None: return
             
             safe_holdings = holdings if isinstance(holdings, dict) else {}
             avwap_free_cash = max(0.0, float(cash))
             
-            for t in await asyncio.to_thread(cfg.get_active_tickers):
+            active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
+            for t in active_tickers:
+                await asyncio.sleep(0.06) 
+                
                 version = await asyncio.to_thread(cfg.get_version, t)
 
                 if version == "V_REV":
@@ -159,7 +184,6 @@ async def scheduled_sniper_monitor(context):
                                 tracking_cache[f"AVWAP_LIMIT_ORDER_PLACED_{t}"] = saved_state.get('limit_order_placed', False)
                                 tracking_cache[f"AVWAP_PLACED_TARGET_TH_{t}"] = saved_state.get('placed_target_th', 0.0)
                                 tracking_cache[f"AVWAP_BUY_ODNO_{t}"] = saved_state.get('buy_odno', "")
-                                # NEW: [Case 31] 타임 쉴드 동기화 락온
                                 tracking_cache[f"AVWAP_TRAP_PLACED_TIME_{t}"] = saved_state.get('trap_placed_time', "")
                         except Exception: pass
                         tracking_cache[f"AVWAP_INIT_{t}"] = True
@@ -169,20 +193,30 @@ async def scheduled_sniper_monitor(context):
                     target_base = base_map.get(t, t) 
                     ctx_data = tracking_cache.get(f"AVWAP_CTX_{t}")
                     if not ctx_data:
-                        try:
-                            ctx_data = await asyncio.wait_for(asyncio.to_thread(strategy.v_avwap_plugin.fetch_macro_context, target_base), timeout=10.0)
-                            if ctx_data: tracking_cache[f"AVWAP_CTX_{t}"] = ctx_data
-                        except Exception: pass
+                        for attempt in range(3):
+                            try:
+                                ctx_data = await asyncio.wait_for(asyncio.to_thread(strategy.v_avwap_plugin.fetch_macro_context, target_base), timeout=15.0)
+                                if ctx_data: 
+                                    tracking_cache[f"AVWAP_CTX_{t}"] = ctx_data
+                                    break
+                            except Exception:
+                                if attempt == 2: pass
+                                else: await asyncio.sleep(1.0 * (2 ** attempt))
                          
                     if not ctx_data: continue 
      
                     avwap_qty = tracking_cache.get(f"AVWAP_QTY_{t}", 0)
                     avwap_avg = tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
         
-                    try:
-                        exec_curr_p = float(await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=10.0) or 0.0)
-                        base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, target_base), timeout=10.0) or 0.0)
-                    except Exception: exec_curr_p, base_curr_p = 0.0, 0.0
+                    exec_curr_p, base_curr_p = 0.0, 0.0
+                    for attempt in range(3):
+                        try:
+                            exec_curr_p = float(await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=15.0) or 0.0)
+                            base_curr_p = float(await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, target_base), timeout=15.0) or 0.0)
+                            break
+                        except Exception:
+                            if attempt == 2: pass
+                            else: await asyncio.sleep(1.0 * (2 ** attempt))
                           
                     if exec_curr_p <= 0 or base_curr_p <= 0: continue
                     
@@ -195,48 +229,59 @@ async def scheduled_sniper_monitor(context):
                             except: pass
                             return 0.0
              
-                        try:
-                             fetched_open = float(await asyncio.wait_for(asyncio.to_thread(_fetch_open, target_base), timeout=10.0) or 0.0)
-                             if fetched_open > 0: tracking_cache[f"AVWAP_DAY_OPEN_{target_base}"] = fetched_open
-                        except Exception: pass
+                        for attempt in range(3):
+                            try:
+                                fetched_open = float(await asyncio.wait_for(asyncio.to_thread(_fetch_open, target_base), timeout=15.0) or 0.0)
+                                if fetched_open > 0: 
+                                    tracking_cache[f"AVWAP_DAY_OPEN_{target_base}"] = fetched_open
+                                    break
+                            except Exception: 
+                                if attempt == 2: pass
+                                else: await asyncio.sleep(1.0 * (2 ** attempt))
   
                     base_day_open = tracking_cache.get(f"AVWAP_DAY_OPEN_{target_base}", 0.0)
-                    prev_c, day_high, day_low, amp5, base_day_high, base_day_low = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+                    prev_c, day_high, day_low, amp5, base_day_high, base_day_low, ma_5day = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
                     df_1min_t, df_1min_base = None, None
                
-                    try:
-                        res_batch = await asyncio.wait_for(
-                            asyncio.gather(
-                                asyncio.to_thread(broker.get_previous_close, t),
-                                asyncio.to_thread(broker.get_amp_5d_data, t),
-                                asyncio.to_thread(broker.get_1min_candles_df, t),
-                                asyncio.to_thread(broker.get_1min_candles_df, target_base), 
-                                return_exceptions=True
-                            ), timeout=10.0
-                        )
-                        prev_c = float(res_batch[0]) if not isinstance(res_batch[0], Exception) and res_batch[0] else 0.0
-                        amp5 = float(res_batch[1]) if not isinstance(res_batch[1], Exception) and res_batch[1] else 0.0
-                        df_1min_t = res_batch[2] if not isinstance(res_batch[2], Exception) else None
-                        df_1min_base = res_batch[3] if not isinstance(res_batch[3], Exception) else None
-              
-                        if df_1min_t is not None and not df_1min_t.empty:
-                            df_t_copy = df_1min_t.copy()
-                            if 'time_est' in df_t_copy.columns and is_regular_session:
-                                df_t_copy = df_t_copy[(df_t_copy['time_est'] >= '093000') & (df_t_copy['time_est'] <= '155959')]
-                            if not df_t_copy.empty:
-                                day_high = float(df_t_copy['high'].astype(float).max())
-                                day_low = float(df_t_copy['low'].astype(float).min())
-                                tracking_cache[f"AVWAP_REG_H_{t}"] = day_high
-                                tracking_cache[f"AVWAP_REG_L_{t}"] = day_low
-            
-                        if df_1min_base is not None and not df_1min_base.empty:
-                            df_b_copy = df_1min_base.copy()
-                            if 'time_est' in df_b_copy.columns and is_regular_session:
-                                df_b_copy = df_b_copy[(df_b_copy['time_est'] >= '093000') & (df_b_copy['time_est'] <= '155959')]
-                            if not df_b_copy.empty:
-                                 base_day_high = float(df_b_copy['high'].astype(float).max())
-                                 base_day_low = float(df_b_copy['low'].astype(float).min())
-                    except Exception: pass
+                    for attempt in range(3):
+                        try:
+                            res_batch = await asyncio.wait_for(
+                                asyncio.gather(
+                                    asyncio.to_thread(broker.get_previous_close, t),
+                                    asyncio.to_thread(broker.get_amp_5d_data, t),
+                                    asyncio.to_thread(broker.get_1min_candles_df, t),
+                                    asyncio.to_thread(broker.get_1min_candles_df, target_base), 
+                                    asyncio.to_thread(broker.get_5day_ma, t),
+                                    return_exceptions=True
+                                ), timeout=15.0
+                            )
+                            prev_c = float(res_batch[0]) if not isinstance(res_batch[0], Exception) and res_batch[0] else 0.0
+                            amp5 = float(res_batch[1]) if not isinstance(res_batch[1], Exception) and res_batch[1] else 0.0
+                            df_1min_t = res_batch[2] if not isinstance(res_batch[2], Exception) else None
+                            df_1min_base = res_batch[3] if not isinstance(res_batch[3], Exception) else None
+                            ma_5day = float(res_batch[4]) if len(res_batch) > 4 and not isinstance(res_batch[4], Exception) and res_batch[4] else 0.0
+                  
+                            if df_1min_t is not None and not df_1min_t.empty:
+                                df_t_copy = df_1min_t.copy()
+                                if 'time_est' in df_t_copy.columns and is_regular_session:
+                                    df_t_copy = df_t_copy[(df_t_copy['time_est'] >= '093000') & (df_t_copy['time_est'] <= '155959')]
+                                if not df_t_copy.empty:
+                                    day_high = float(df_t_copy['high'].astype(float).max())
+                                    day_low = float(df_t_copy['low'].astype(float).min())
+                                    tracking_cache[f"AVWAP_REG_H_{t}"] = day_high
+                                    tracking_cache[f"AVWAP_REG_L_{t}"] = day_low
+                
+                            if df_1min_base is not None and not df_1min_base.empty:
+                                df_b_copy = df_1min_base.copy()
+                                if 'time_est' in df_b_copy.columns and is_regular_session:
+                                    df_b_copy = df_b_copy[(df_b_copy['time_est'] >= '093000') & (df_b_copy['time_est'] <= '155959')]
+                                if not df_b_copy.empty:
+                                     base_day_high = float(df_b_copy['high'].astype(float).max())
+                                     base_day_low = float(df_b_copy['low'].astype(float).min())
+                            break
+                        except Exception: 
+                            if attempt == 2: pass
+                            else: await asyncio.sleep(1.0 * (2 ** attempt))
      
                     avwap_state_dict = {
                         "strikes": tracking_cache.get(f"AVWAP_STRIKES_{t}", 0),
@@ -268,7 +313,7 @@ async def scheduled_sniper_monitor(context):
                         exec_curr_p=exec_curr_p, base_day_open=base_day_open, avg_price=avwap_avg,
                         qty=avwap_qty, alloc_cash=avwap_free_cash, context_data=ctx_data,
                         df_1min_base=df_1min_base, df_1min_exec=df_1min_t, now_est=now_est, avwap_state=avwap_state_dict,
-                        regime_data=None, prev_close=prev_c, day_high=day_high, day_low=day_low, amp5=amp5,
+                        regime_data=None, prev_close=prev_c, ma_5day=ma_5day, day_high=day_high, day_low=day_low, amp5=amp5,
                         base_day_high=base_day_high, base_day_low=base_day_low,
                         is_simulation=False,
                         sortie_mode=sortie_mode
@@ -371,14 +416,16 @@ async def scheduled_sniper_monitor(context):
                                 daily_b = tracking_cache.get(f"AVWAP_DAILY_BOUGHT_{t}", 0) + ccld_qty
                                 tracking_cache[f"AVWAP_DAILY_BOUGHT_{t}"] = daily_b
                      
-                                # MODIFIED: [결함 1 수술] AVWAP 익절 덫 타점 2.0% 하향 락온 적용
                                 trap_price = round(new_avg * 1.02, 2)
+                                
+                                # 🚨 MODIFIED: [Case 31 연계 미시구조 수술] 매수 체결 직후 KIS 잔고 편입 딜레이(Latency)로 인한 매도 덫 '증거금 부족' 리젝 방어를 위해 1.0초 대기 샌드위치 이식
+                                await asyncio.sleep(1.0)
+                                
                                 trap_res = await asyncio.to_thread(broker.send_order, t, "SELL", ccld_qty, trap_price, "LIMIT")
                                 trap_odno = trap_res.get('odno', '') if isinstance(trap_res, dict) else ''
                                 
                                 if trap_res and trap_res.get('rt_cd') == '0' and trap_odno:
                                     tracking_cache[f"AVWAP_TRAP_ODNO_{t}"] = trap_odno
-                                    # MODIFIED: [결함 1 수술] 텔레그램 타전 메시지 2.0% 팩트 교정 완료
                                     msg += f"\n\n🎯 <b>[투트랙 엑시트 장전]</b>\n▫️ +2.0% 수익 타점(<b>${trap_price:.2f}</b>)에 익절 덫을 즉시 자동 장전했습니다."
                                 else:
                                     trap_err = html.escape(trap_res.get('msg1', '오류') if isinstance(trap_res, dict) else '통신 장애')
@@ -424,10 +471,15 @@ async def scheduled_sniper_monitor(context):
                             remaining_qty = max(0, qty - trap_filled_qty)
 
                             if remaining_qty > 0:
-                                try:
-                                    bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=5.0)
-                                    bid_price = float(bid_price_val or 0.0)
-                                except Exception: bid_price = 0.0
+                                bid_price = 0.0
+                                for attempt in range(3):
+                                    try:
+                                        bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=10.0)
+                                        bid_price = float(bid_price_val or 0.0)
+                                        break
+                                    except Exception: 
+                                        if attempt == 2: bid_price = 0.0
+                                        else: await asyncio.sleep(1.0 * (2**attempt))
                 
                                 fallback_price = price if price > 0.0 else exec_curr_p
                                 exec_price = bid_price if bid_price > 0 else fallback_price
@@ -564,14 +616,18 @@ async def scheduled_sniper_monitor(context):
                 sniper_buy_locked = await asyncio.to_thread(getattr(cfg, 'get_sniper_buy_locked', lambda x: False), t)
                 sniper_sell_locked = await asyncio.to_thread(getattr(cfg, 'get_sniper_sell_locked', lambda x: False), t)
 
-                try:
-                    curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=10.0)
-                    curr_p = float(curr_p_val or 0.0)
-                except asyncio.TimeoutError:
-                    logging.warning(f"⚠️ [{t}] 현재가 스캔 타임아웃. 0.0 폴백.")
-                    curr_p = 0.0
-                except Exception:
-                    curr_p = 0.0
+                curr_p = 0.0
+                for attempt in range(3):
+                    try:
+                        curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=15.0)
+                        curr_p = float(curr_p_val or 0.0)
+                        break
+                    except asyncio.TimeoutError:
+                        if attempt == 2: logging.warning(f"⚠️ [{t}] 현재가 스캔 타임아웃. 0.0 폴백.")
+                        else: await asyncio.sleep(1.0 * (2**attempt))
+                    except Exception:
+                        if attempt == 2: curr_p = 0.0
+                        else: await asyncio.sleep(1.0 * (2**attempt))
                     
                 if curr_p <= 0: continue
 
@@ -604,10 +660,15 @@ async def scheduled_sniper_monitor(context):
                         
                         if has_unfilled: continue
                         
-                        try:
-                             bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_ask_price, t), timeout=5.0)
-                             ask_price = float(bid_price_val or 0.0)
-                        except Exception: ask_price = 0.0
+                        ask_price = 0.0
+                        for attempt in range(3):
+                            try:
+                                bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_ask_price, t), timeout=10.0)
+                                ask_price = float(bid_price_val or 0.0)
+                                break
+                            except Exception: 
+                                if attempt == 2: ask_price = 0.0
+                                else: await asyncio.sleep(1.0 * (2**attempt))
                         exec_price = ask_price if ask_price > 0 else limit_p
 
                         order_res = await asyncio.to_thread(broker.send_order, t, "BUY", qty, exec_price, "LIMIT")
@@ -689,10 +750,15 @@ async def scheduled_sniper_monitor(context):
                 
                         if has_unfilled: continue
       
-                        try:
-                             bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=5.0)
-                             bid_price = float(bid_price_val or 0.0)
-                        except Exception: bid_price = 0.0
+                        bid_price = 0.0
+                        for attempt in range(3):
+                            try:
+                                bid_price_val = await asyncio.wait_for(asyncio.to_thread(broker.get_bid_price, t), timeout=10.0)
+                                bid_price = float(bid_price_val or 0.0)
+                                break
+                            except Exception:
+                                if attempt == 2: bid_price = 0.0
+                                else: await asyncio.sleep(1.0 * (2**attempt))
                         exec_price = bid_price if bid_price > 0 else limit_p
                 
                         order_res = await asyncio.to_thread(broker.send_order, t, "SELL", qty, exec_price, "LIMIT")
@@ -740,6 +806,6 @@ async def scheduled_sniper_monitor(context):
                             await context.bot.send_message(chat_id=chat_id, text=reject_msg, parse_mode='HTML')
 
     try:
-        await asyncio.wait_for(_do_sniper(), timeout=90.0)
+        await asyncio.wait_for(_do_sniper(), timeout=120.0)
     except Exception as e:
         logging.error(f"🚨 스나이퍼 타임아웃 에러: {e}", exc_info=True)

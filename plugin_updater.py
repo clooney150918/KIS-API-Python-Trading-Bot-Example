@@ -4,11 +4,13 @@
 # 🚨 MODIFIED: [V44.53 제1헌법 및 16계명 절대 락온] 달력 API(mcal) 스캔을 비동기(to_thread) 래핑
 # 🚨 MODIFIED: [V75.05 레드존 팩트 교정] 제9경고에 따라 불필요한 레드존을 진공 압축하여 15:12 ~ 15:31 EST 구간으로 정밀 락온 완료.
 # 🚨 MODIFIED: [Case 14 절대 헌법 준수] 달력 API 타임아웃 5.0초를 10.0초로 팩트 교정하여 타임아웃 헌법 일원화.
+# 🚨 NEW: [Case 33 절대 규칙] 3단 지수 백오프 및 Fail-Safe 기반 휴장일 판별 로직 이식
 # ==========================================================
 import logging
 import asyncio
 import subprocess
 import os
+import time
 import datetime
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -18,15 +20,9 @@ class SystemUpdater:
         self.remote_branch = "origin/main"
         
         load_dotenv()
-        # 🚨 [AI 에이전트 절대 주의] systemd 데몬 이름은 OS의 .service 파일 내 Environment 속성 다이렉트 주입
         self.daemon_name = os.getenv("daemon_name") or os.getenv("DAEMON_NAME", "mybot")
 
-    # 🚨 [제1헌법 준수] 동기 I/O 차단을 위해 async 격상
     async def is_update_allowed(self):
-        """
-        현재 시간이 업데이트 금지 시간대(레드존)인지 검사합니다.
-        기준: 15:12 EST ~ 15:31 EST (VWAP 가동 및 장마감 정산 보호)
-        """
         est = ZoneInfo('America/New_York')
         now_est = datetime.datetime.now(est)
         
@@ -39,15 +35,25 @@ class SystemUpdater:
             schedule = nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
             return schedule.empty
 
-        try:
-            # MODIFIED: [Case 14 절대 헌법 준수] 타임아웃 10.0초로 팩트 교정
-            is_holiday = await asyncio.wait_for(asyncio.to_thread(_check_holiday), timeout=10.0)
-            if is_holiday:
-                return True, ""
-        except asyncio.TimeoutError:
-            logging.error("⚠️ [Updater] 달력 API 타임아웃. 휴장일 판별을 건너뛰고 시간 검사 강제 진행 (Fail-Open).")
-        except Exception as e:
-            logging.debug(f"업데이트 락다운 달력 스캔 에러 (무시하고 시간 검사 진행): {e}")
+        is_holiday = False
+        # NEW: [Case 33] 3단 지수 백오프 이식
+        for attempt in range(3):
+            try:
+                is_holiday = await asyncio.wait_for(asyncio.to_thread(_check_holiday), timeout=10.0)
+                break
+            except asyncio.TimeoutError:
+                if attempt == 2:
+                    logging.error("⚠️ [Updater] 달력 API 타임아웃. Fail-Open 평일 강제 검사 진행.")
+                else:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+            except Exception as e:
+                if attempt == 2:
+                    logging.debug(f"업데이트 락다운 달력 스캔 에러 (무시하고 시간 검사 진행): {e}")
+                else:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+
+        if is_holiday:
+            return True, ""
 
         curr_time = now_est.time()
         

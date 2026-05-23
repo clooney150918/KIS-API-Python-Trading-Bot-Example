@@ -4,7 +4,10 @@
 # 🚨 MODIFIED: [V72.01 V-REV 예산 뻥튀기(Double Spending) 맹점 100% 소각]
 # 🚨 MODIFIED: [V73.10 확정 정산 16:05 EST 전진 배치 및 시각적 디커플링 해체]
 # 🚨 MODIFIED: [Case 27 절대 위반 교정] 에스크로(Escrow) 로직 전면 소각 및 예산 분배망 진공 압축 완료
+# 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
+# 🚨 MODIFIED: [Case 26 절대 헌법 준수] 텔레그램 HTML 파서 런타임 붕괴 방어용 html 모듈 팩트 이식
 # ==========================================================
+import html # 🚨 NEW: [Case 26] 텔레그램 HTML 파서 붕괴 방어망 주입
 import os
 import logging
 import datetime
@@ -18,35 +21,49 @@ import json
 import tempfile
 from zoneinfo import ZoneInfo
 
-def is_market_open():
-    try:
-        est = ZoneInfo('America/New_York')
-        today = datetime.datetime.now(est)
-        if today.weekday() >= 5: 
-            return False
-            
-        nyse = mcal.get_calendar('NYSE')
-        schedule = nyse.schedule(start_date=today.date(), end_date=today.date())
-        
-        if not schedule.empty:
-            return True
-        else:
-            logging.info("💤 [is_market_open] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
-            return False
-    except Exception as e:
-        logging.error(f"⚠️ 달력 라이브러리 에러 발생. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다: {e}")
-        est = ZoneInfo('America/New_York')
-        return datetime.datetime.now(est).weekday() < 5
+# 🚨 NEW: [Case 33] 3단 지수 백오프 및 무중단 Fallback 래퍼 코루틴 이식
+async def async_retry(func, *args, default=None, timeout=10.0, **kwargs):
+    """ 네트워크 지연 발생 시 지수 대기(Exponential Backoff)를 통해 최대 3회 재시도하는 멱등성 엔진 """
+    for attempt in range(3):
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(func, *args, **kwargs), timeout=timeout)
+        except asyncio.TimeoutError:
+            if attempt < 2: await asyncio.sleep(1.0 * (2 ** attempt))
+            else: return default
+        except Exception as e:
+            if attempt < 2: await asyncio.sleep(1.0 * (2 ** attempt))
+            else: return default
 
-# MODIFIED: [Case 27] 에스크로 연관 연산 전면 적출 및 V-REV 1일 고정 예산 분배망 진공 압축 완료
+def is_market_open():
+    # 🚨 NEW: [Case 33] 달력 API 3단 지수 백오프
+    for attempt in range(3):
+        try:
+            time.sleep(0.06) # 🚨 NEW: [Case 32] TPS 캡핑
+            est = ZoneInfo('America/New_York')
+            today = datetime.datetime.now(est)
+            if today.weekday() >= 5: 
+                return False
+                
+            nyse = mcal.get_calendar('NYSE')
+            schedule = nyse.schedule(start_date=today.date(), end_date=today.date())
+            
+            if not schedule.empty:
+                return True
+            else:
+                logging.info("💤 [is_market_open] 달력 API 빈 데이터 반환. 금일은 미국 증시 휴장일입니다.")
+                return False
+        except Exception as e:
+            if attempt == 2:
+                logging.error(f"⚠️ 달력 라이브러리 에러 발생. 스케줄 증발 방어를 위해 평일 강제 개장(Fail-Open) 처리합니다: {e}")
+                est = ZoneInfo('America/New_York')
+                return datetime.datetime.now(est).weekday() < 5
+            time.sleep(1.0 * (2 ** attempt))
+
 def get_budget_allocation(cash, tickers, cfg):
     sorted_tickers = sorted(tickers, key=lambda x: 0 if x == "SOXL" else (1 if x == "TQQQ" else 2))
     allocated = {}
     
     safe_cash = float(cash) if cash is not None else 0.0
-    
-    # 🚨 MODIFIED: [Case 27 절대 위반 수술] 에스크로(vrev_virtual_escrow) 삭감 로직 100% 영구 소각
-    # 타임라인이 완벽히 분리되었으므로 V14의 가용 예산을 100% 개방함
     free_cash = safe_cash
     
     for tx in sorted_tickers:
@@ -107,7 +124,7 @@ async def scheduled_token_check(context):
     logging.info(f"🔑 [API 토큰 갱신] 서버 동시 접속 부하 방지를 위해 {jitter_seconds}초 대기 후 발급을 시작합니다.")
     await asyncio.sleep(jitter_seconds)
     
-    await asyncio.to_thread(context.job.data['broker']._get_access_token, force=True)
+    await async_retry(context.job.data['broker']._get_access_token, force=True)
     logging.info("🔑 [API 토큰 갱신] 토큰 갱신이 안전하게 완료되었습니다.")
 
 async def scheduled_force_reset(context):
@@ -118,11 +135,22 @@ async def scheduled_force_reset(context):
         return
 
     async def _do_force_reset():
-        try:
-            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
-        except asyncio.TimeoutError:
-            logging.error("⚠️ [force_reset] is_market_open 달력 API 타임아웃. 평일 강제 개장 처리합니다.")
-            is_open = now_est.weekday() < 5
+        is_open = False
+        for attempt in range(3):
+            try:
+                is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+                break
+            except asyncio.TimeoutError:
+                if attempt == 2:
+                    logging.error("⚠️ [force_reset] 달력 API 타임아웃. 평일 강제 개장 처리.")
+                    is_open = now_est.weekday() < 5
+                else:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
+            except Exception:
+                if attempt == 2:
+                    is_open = now_est.weekday() < 5
+                else:
+                    await asyncio.sleep(1.0 * (2 ** attempt))
 
         if not is_open:
             await context.bot.send_message(chat_id=context.job.chat_id, text="⛔ <b>오늘은 미국 증시 휴장일입니다. 금일 시스템 매매 잠금 해제 및 정규장 주문 스케줄을 모두 건너뜁니다.</b>", parse_mode='HTML')
@@ -146,8 +174,15 @@ async def scheduled_force_reset(context):
                     pass
                 return
              
+            holdings = None
             async with tx_lock:
-                _, holdings = await asyncio.to_thread(broker.get_account_balance)
+                for attempt in range(3):
+                    try:
+                        _, holdings = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=10.0)
+                        break
+                    except Exception:
+                        if attempt == 2: holdings = {}
+                        else: await asyncio.sleep(1.0 * (2 ** attempt))
                 
             if holdings is None:
                 holdings = {}
@@ -156,23 +191,29 @@ async def scheduled_force_reset(context):
             
             active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
             for t in active_tickers:
+                await asyncio.sleep(0.06)
+                
                 version = await asyncio.to_thread(cfg.get_version, t)
                 rev_state = await asyncio.to_thread(cfg.get_reverse_state, t)
                 
                 if version == "V_REV":
                     actual_avg = float(holdings.get(t, {'avg': 0})['avg'])
-                    try:
-                        curr_p_val = await asyncio.wait_for(
-                             asyncio.to_thread(broker.get_current_price, t),
-                             timeout=10.0
-                        )
-                        curr_p = float(curr_p_val or 0.0)
-                    except asyncio.TimeoutError:
-                        logging.error(f"⚠️ [{t}] 현재가 조회 타임아웃 (10초). 0.0으로 폴백합니다.")
-                        curr_p = 0.0
-                    except Exception as e:
-                        logging.error(f"⚠️ [{t}] 현재가 조회 실패: {e}")
-                        curr_p = 0.0
+                    curr_p = 0.0
+                    for attempt in range(3):
+                        try:
+                            curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=10.0)
+                            curr_p = float(curr_p_val or 0.0)
+                            break
+                        except asyncio.TimeoutError:
+                            if attempt == 2:
+                                logging.error(f"⚠️ [{t}] 현재가 조회 타임아웃 (10초). 0.0으로 폴백합니다.")
+                                curr_p = 0.0
+                            else: await asyncio.sleep(1.0 * (2 ** attempt))
+                        except Exception as e:
+                            if attempt == 2:
+                                logging.error(f"⚠️ [{t}] 현재가 조회 실패: {e}")
+                                curr_p = 0.0
+                            else: await asyncio.sleep(1.0 * (2 ** attempt))
                     
                     if curr_p > 0 and actual_avg > 0:
                         curr_ret = (curr_p - actual_avg) / actual_avg * 100.0
@@ -200,7 +241,9 @@ async def scheduled_force_reset(context):
             await context.bot.send_message(chat_id=chat_id, text=final_msg, parse_mode='HTML')
             
         except Exception as e:
-            await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> {e}", parse_mode='HTML')
+            # 🚨 MODIFIED: [Case 26 절대 헌법 준수] 텔레그램 HTML 파서 런타임 붕괴 방어용 예외 쉴드 강제 주입
+            safe_err = html.escape(str(e))
+            await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> <code>{safe_err}</code>", parse_mode='HTML')
 
     try:
         await asyncio.wait_for(_do_force_reset(), timeout=180.0)
@@ -241,7 +284,7 @@ async def scheduled_auto_sync(context):
 
         return True, today_est
 
-    can_run, today_est = await asyncio.to_thread(_check_and_set_lock)
+    can_run, today_est = await async_retry(_check_and_set_lock, default=(False, ""))
     
     if not can_run:
         logging.info(f"⏳ [정산 멱등성 락온] 오늘({today_est} EST)의 16:05 확정 정산이 이미 완료되었습니다. 중복 실행 및 다중 렌더링을 100% 차단합니다.")
@@ -254,13 +297,22 @@ async def scheduled_auto_sync(context):
     success_tickers = []
     active_tickers = await asyncio.to_thread(context.job.data['cfg'].get_active_tickers)
     for t in active_tickers:
+        await asyncio.sleep(0.06)
         res = await bot.sync_engine.process_auto_sync(t, chat_id, context, silent_ledger=True)
         if res == "SUCCESS":
             success_tickers.append(t)
             
     if success_tickers:
         async with context.job.data['tx_lock']:
-            _, holdings = await asyncio.to_thread(context.job.data['broker'].get_account_balance)
+            holdings = None
+            for attempt in range(3):
+                try:
+                    _, holdings = await asyncio.wait_for(asyncio.to_thread(context.job.data['broker'].get_account_balance), timeout=10.0)
+                    break
+                except Exception:
+                    if attempt == 2: holdings = {}
+                    else: await asyncio.sleep(1.0 * (2 ** attempt))
+                    
         await bot.sync_engine._display_ledger(success_tickers[0], chat_id, context, message_obj=status_msg, pre_fetched_holdings=holdings)
     else:
         await status_msg.edit_text(f"📝 <b>[16:05 EST] 장부 동기화 완료</b> (표시할 진행 중인 장부가 없습니다)", parse_mode='HTML')

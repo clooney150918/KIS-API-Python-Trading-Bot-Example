@@ -2,6 +2,7 @@
 # FILE: telegram_sync_engine.py
 # ==========================================================
 # 🚨 MODIFIED: [Case 27 절대 위반 교정] 에스크로 동기화(_sync_escrow_cash) 코루틴 및 호출부 전면 영구 소각 완료
+# 🚨 NEW: [Case 33 절대 규칙] 3단 지수 백오프 및 KIS 외부 API 연산망 전면 이식 완료
 # ==========================================================
 import logging
 import datetime
@@ -26,8 +27,6 @@ class TelegramSyncEngine:
         self.tx_lock = tx_lock
         self.sync_locks = sync_locks
 
-    # 🚨 MODIFIED: [Case 27] _sync_escrow_cash 메서드 100% 영구 소각
-
     async def process_auto_sync(self, ticker, chat_id, context, silent_ledger=False):
         if ticker not in self.sync_locks:
             self.sync_locks[ticker] = asyncio.Lock()
@@ -37,13 +36,19 @@ class TelegramSyncEngine:
         async with self.sync_locks[ticker]:
             async with self.tx_lock:
                 last_split_date = await asyncio.to_thread(self.cfg.get_last_split_date, ticker)
-                try:
-                    split_ratio, split_date = await asyncio.wait_for(
-                        asyncio.to_thread(self.broker.get_recent_stock_split, ticker, last_split_date), timeout=10.0
-                    )
-                except asyncio.TimeoutError:
-                    split_ratio, split_date = 0.0, ""
-                    logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 액면분할 조회 타임아웃 (10초 초과), 이번 싱크에서 스킵")
+                split_ratio, split_date = 0.0, ""
+                # 🚨 MODIFIED: [Case 33] 3단 지수 백오프
+                for attempt in range(3):
+                    try:
+                        split_ratio, split_date = await asyncio.wait_for(
+                            asyncio.to_thread(self.broker.get_recent_stock_split, ticker, last_split_date), timeout=15.0
+                        )
+                        break
+                    except Exception:
+                        if attempt == 2:
+                            split_ratio, split_date = 0.0, ""
+                            logging.warning(f"⚠️ [{ticker}] 야후 파이낸스 액면분할 조회 타임아웃, 이번 싱크에서 스킵")
+                        else: await asyncio.sleep(1.0 * (2 ** attempt))
                 
                 if split_ratio > 0.0 and split_date != "":
                     await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
@@ -61,15 +66,29 @@ class TelegramSyncEngine:
                     schedule = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
                     return schedule
 
-                try:
-                    schedule = await asyncio.wait_for(asyncio.to_thread(_get_last_trade_date), timeout=10.0)
-                    if not schedule.empty:
-                        last_trade_date = schedule.index[-1]
-                        target_ledger_str = last_trade_date.strftime('%Y-%m-%d')
-                    else: target_ledger_str = now_est.strftime('%Y-%m-%d')
-                except Exception: target_ledger_str = now_est.strftime('%Y-%m-%d')
+                schedule = pd.DataFrame()
+                for attempt in range(3):
+                    try:
+                        schedule = await asyncio.wait_for(asyncio.to_thread(_get_last_trade_date), timeout=15.0)
+                        break
+                    except Exception:
+                        if attempt == 2: pass
+                        else: await asyncio.sleep(1.0 * (2**attempt))
+                        
+                if not schedule.empty:
+                    last_trade_date = schedule.index[-1]
+                    target_ledger_str = last_trade_date.strftime('%Y-%m-%d')
+                else: target_ledger_str = now_est.strftime('%Y-%m-%d')
 
-                _, holdings = await asyncio.to_thread(self.broker.get_account_balance)
+                holdings = None
+                for attempt in range(3):
+                    try:
+                        _, holdings = await asyncio.wait_for(asyncio.to_thread(self.broker.get_account_balance), timeout=15.0)
+                        break
+                    except Exception:
+                        if attempt == 2: holdings = None
+                        else: await asyncio.sleep(1.0 * (2**attempt))
+                        
                 if holdings is None:
                     await context.bot.send_message(chat_id, f"❌ <b>[{ticker}] API 오류</b>\n잔고를 불러오지 못했습니다.", parse_mode='HTML')
                     return "ERROR"
@@ -121,7 +140,15 @@ class TelegramSyncEngine:
                     prev_sold_today = -1
                     stable_cnt = 0
                     for attempt in range(max_retries):
-                        raw_execs = await asyncio.to_thread(self.broker.get_execution_history, ticker, kis_search_start, query_end_dt)
+                        raw_execs = None
+                        for inner_attempt in range(3):
+                            try:
+                                raw_execs = await asyncio.wait_for(asyncio.to_thread(self.broker.get_execution_history, ticker, kis_search_start, query_end_dt), timeout=15.0)
+                                break
+                            except Exception:
+                                if inner_attempt == 2: raw_execs = []
+                                else: await asyncio.sleep(1.0 * (2**inner_attempt))
+                                
                         target_execs = filter_to_est(raw_execs)
                         sold_today = sum(int(float(ex.get('ft_ccld_qty') or '0')) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01")
                         
@@ -136,7 +163,13 @@ class TelegramSyncEngine:
                             logging.info(f"⏳ [{ticker}] 체결 원장 지연(Lag) 감지. 데이터 안정화 및 EST 매핑 검증 중... ({attempt+1}/{max_retries})")
                             await asyncio.sleep(2.0)
                 else:
-                    raw_execs = await asyncio.to_thread(self.broker.get_execution_history, ticker, kis_search_start, query_end_dt)
+                    for inner_attempt in range(3):
+                        try:
+                            raw_execs = await asyncio.wait_for(asyncio.to_thread(self.broker.get_execution_history, ticker, kis_search_start, query_end_dt), timeout=15.0)
+                            break
+                        except Exception:
+                            if inner_attempt == 2: raw_execs = []
+                            else: await asyncio.sleep(1.0 * (2**inner_attempt))
                     target_execs = filter_to_est(raw_execs)
 
                 if target_execs:
@@ -368,8 +401,15 @@ class TelegramSyncEngine:
                             total_invested = sum(float(item.get("qty", 0)) * float(item.get("price", 0)) for item in q_data_before)
                             q_avg_price = total_invested / vrev_ledger_qty if vrev_ledger_qty > 0 else 0.0
 
-                            try: curr_p = await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, ticker), timeout=10.0)
-                            except asyncio.TimeoutError: curr_p = 0.0
+                            curr_p = 0.0
+                            for attempt in range(3):
+                                try:
+                                    curr_p_val = await asyncio.wait_for(asyncio.to_thread(self.broker.get_current_price, ticker), timeout=15.0)
+                                    curr_p = float(curr_p_val or 0.0)
+                                    break
+                                except Exception:
+                                    if attempt == 2: curr_p = 0.0
+                                    else: await asyncio.sleep(1.0 * (2**attempt))
                             
                             clear_price = actual_clear_price if actual_clear_price > 0.0 else (curr_p if curr_p and curr_p > 0 else q_avg_price * 1.006)
                             snapshot = await asyncio.to_thread(self.strategy.capture_vrev_snapshot, ticker, clear_price, q_avg_price, vrev_ledger_qty)
@@ -422,7 +462,6 @@ class TelegramSyncEngine:
                         else:
                             await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} V-REV 0주 강제 정산 완료]</b>\n▫️ 0주를 확인하여 큐를 안전하게 비웠으나 통신 지연으로 졸업 카드는 생략되었습니다.", parse_mode='HTML')
                             
-                        # 🚨 MODIFIED: [Case 27] 에스크로 동기화 영구 적출 완료
                         return "SUCCESS"
                      
                     if adjusted_actual_qty == vrev_ledger_qty: pass
@@ -487,7 +526,6 @@ class TelegramSyncEngine:
                                 await context.bot.send_message(chat_id, f"🔧 <b>[{ticker}] V-REV 큐(Queue) 수동 매수 편입 완료!</b>\n▫️ KIS 실잔고에 맞춰 신규 지층(<b>{gap_qty}주</b>, 추정단가 ${real_buy_price})을 정밀 추가했습니다.", parse_mode='HTML')
                             except Exception: pass
                 
-                    # 🚨 MODIFIED: [Case 27 절대 위반 수술] 에스크로 캐싱 소각 완료
                     return "SUCCESS"
 
                 if not is_rev:
@@ -496,9 +534,15 @@ class TelegramSyncEngine:
                     
                     if actual_qty == 0 and (ledger_qty > 0 or sold_today_v14 > 0):
                         today_est_str = now_est.strftime('%Y-%m-%d')
-                        try:
-                            prev_c = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, ticker), timeout=10.0)
-                        except asyncio.TimeoutError: prev_c = 0.0
+                        prev_c = 0.0
+                        for attempt in range(3):
+                            try:
+                                prev_c_val = await asyncio.wait_for(asyncio.to_thread(self.broker.get_previous_close, ticker), timeout=15.0)
+                                prev_c = float(prev_c_val or 0.0)
+                                break
+                            except Exception:
+                                if attempt == 2: prev_c = 0.0
+                                else: await asyncio.sleep(1.0 * (2**attempt))
                 
                         try:
                             new_hist, added_seed = await asyncio.to_thread(self.cfg.archive_graduation, ticker, today_est_str, prev_c)
@@ -526,10 +570,8 @@ class TelegramSyncEngine:
                                 await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} 강제 정산 완료]</b>\n잔고가 0주이나 마이너스 수익 상태이므로 명예의 전당 박제 없이 장부를 비우고 새출발 타점을 장전합니다.", parse_mode='HTML')
                         except Exception: pass
 
-                    # 🚨 MODIFIED: [Case 27 절대 위반 수술] 에스크로 캐싱 소각 완료
                     return "SUCCESS"
 
-                # 🚨 MODIFIED: [Case 27 절대 위반 수술] 에스크로 캐싱 소각 완료
                 return "SUCCESS"
 
     async def _display_ledger(self, ticker, chat_id, context, query=None, message_obj=None, pre_fetched_holdings=None):

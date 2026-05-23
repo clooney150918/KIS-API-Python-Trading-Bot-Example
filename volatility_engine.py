@@ -16,6 +16,7 @@
 # 🚨 MODIFIED: [V61.04 들여쓰기 붕괴 방어] 런타임 즉사(IndentationError)를 유발하던 스페이스 오차 100% 팩트 교정 완료.
 # 🚨 MODIFIED: [제4경고 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
 # 🚨 MODIFIED: [결함 3 수술] ATR14 연산 내 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온 팩트 결속
+# 🚨 NEW: [Case 32, Case 33] yfinance 타임아웃 3단 지수 백오프 및 TPS 캡핑 방어막 전면 이식 완료
 # ==========================================================
 import yfinance as yf
 import pandas as pd
@@ -25,22 +26,20 @@ import json
 import tempfile
 import logging
 import asyncio
+import time
 from zoneinfo import ZoneInfo
 from datetime import datetime
 
 CACHE_FILE = "data/volatility_cache.json"
 
-# 🚨 [수술 완료] 블랙스완/극저변동성 발생 시 계좌 직사 및 API Reject를 막기 위한 가중치 절대 상/하한선
 WEIGHT_MIN = 0.5   
 WEIGHT_MAX = 2.0   
 
-# 🚨 [수술 완료] 구조적 시장 변화에 대응하기 위한 기준 ATR 상수화
 QQQ_DEFAULT_ATR_PCT  = 1.65   
 SOXX_DEFAULT_ATR_PCT = 2.93   
 MIN_ATR_ROWS = 14  
 
 def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """ 🚨 [수술 완료] 야후 파이낸스 API 업데이트로 인한 MultiIndex 순서 붕괴 방어 """
     if isinstance(df.columns, pd.MultiIndex):
         if 'Ticker' in df.columns.names:
             df.columns = df.columns.droplevel('Ticker')
@@ -52,7 +51,6 @@ def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def _load_cache(key, default_val):
-    """ 🛡️ 통신 장애 시 직전 영업일의 1년 평균값을 로드하는 1차 방어막 """
     if os.path.exists(CACHE_FILE):
         try:
             with open(CACHE_FILE, 'r') as f:
@@ -65,7 +63,6 @@ def _load_cache(key, default_val):
     return default_val
 
 def _save_cache(key, value):
-    """ 🛡️ 원자적 쓰기(fsync)를 통해 무결성이 보장된 로컬 캐시 저장 """
     data = {}
     if os.path.exists(CACHE_FILE):
         try:
@@ -80,7 +77,6 @@ def _save_cache(key, value):
     if dir_name and not os.path.exists(dir_name):
         os.makedirs(dir_name, exist_ok=True)
          
-    # 🚨 [수술 완료] 에러 시 임시 파일 찌꺼기(Disk Leak) 영구 소각 방어막 이식
     fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -95,232 +91,234 @@ def _save_cache(key, value):
             pass
         logging.error(f"⚠️ [Engine] 캐시 저장 실패 및 임시 파일 소각: {e}")
 
+# 🚨 MODIFIED: [Case 33] 3단 지수 백오프 이식
 def _calculate_1y_atr(ticker, cache_key, default_atr):
-    """ 💡 기초지수의 최근 1년(252일) ATR14 평균값을 동적으로 연산하여 반환 """
-    try:
-        df = yf.download(ticker, period="2y", interval="1d", progress=False, timeout=5)
-        if df.empty:
-            return _load_cache(cache_key, default_atr)
-            
-        df = _flatten_columns(df)
+    for attempt in range(3):
+        try:
+            time.sleep(0.06) # 🚨 MODIFIED: [Case 32] TPS 캡핑
+            df = yf.download(ticker, period="2y", interval="1d", progress=False, timeout=5)
+            if df.empty:
+                if attempt < 2:
+                    time.sleep(1.0 * (2 ** attempt))
+                    continue
+                return _load_cache(cache_key, default_atr)
                 
-        df['Prev_Close'] = df['Close'].shift(1)
-        
-        tr1 = df['High'] - df['Low']
-        tr2 = (df['High'] - df['Prev_Close']).abs()
-        tr3 = (df['Low'] - df['Prev_Close']).abs()
-        
-        df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        df['ATR14'] = df['TR'].rolling(window=14).mean()
-        
-        # MODIFIED: [결함 3 수술] 분모 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온
-        df['Close'] = df['Close'].replace(0, np.nan)
-        df['ATR14_pct'] = (df['ATR14'] / df['Close']) * 100
-        
-        df_valid = df.dropna(subset=['ATR14_pct'])
-        df_1y = df_valid.tail(252)
-        
-        # 🚨 [수술 완료] 최소 14일 이상의 데이터가 보장되지 않으면 캐시 폴백
-        if df_1y.empty or len(df_1y) < MIN_ATR_ROWS:
-            logging.warning(f"⚠️ [Engine] {ticker} ATR 데이터 부족 ({len(df_1y)}행 < {MIN_ATR_ROWS}): 캐시/기본값 사용")
-            return _load_cache(cache_key, default_atr)
+            df = _flatten_columns(df)
+                    
+            df['Prev_Close'] = df['Close'].shift(1)
             
-        atr_1y_avg = float(df_1y['ATR14_pct'].mean())
-        if pd.isna(atr_1y_avg) or atr_1y_avg <= 0:
-            raise ValueError("Invalid ATR")
+            tr1 = df['High'] - df['Low']
+            tr2 = (df['High'] - df['Prev_Close']).abs()
+            tr3 = (df['Low'] - df['Prev_Close']).abs()
             
-        _save_cache(cache_key, atr_1y_avg)
-        return atr_1y_avg
-        
-    except Exception as e:
-        logging.error(f"⚠️ [Engine] {ticker} ATR 연산 오류: {e}")
-        return _load_cache(cache_key, default_atr)
+            df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            df['ATR14'] = df['TR'].rolling(window=14).mean()
+            
+            df['Close'] = df['Close'].replace(0, np.nan)
+            df['ATR14_pct'] = (df['ATR14'] / df['Close']) * 100
+            
+            df_valid = df.dropna(subset=['ATR14_pct'])
+            df_1y = df_valid.tail(252)
+            
+            if df_1y.empty or len(df_1y) < MIN_ATR_ROWS:
+                logging.warning(f"⚠️ [Engine] {ticker} ATR 데이터 부족 ({len(df_1y)}행 < {MIN_ATR_ROWS}): 캐시/기본값 사용")
+                return _load_cache(cache_key, default_atr)
+                
+            atr_1y_avg = float(df_1y['ATR14_pct'].mean())
+            if pd.isna(atr_1y_avg) or atr_1y_avg <= 0:
+                raise ValueError("Invalid ATR")
+                
+            _save_cache(cache_key, atr_1y_avg)
+            return atr_1y_avg
+            
+        except Exception as e:
+            logging.debug(f"⚠️ [Engine] {ticker} ATR 연산 오류 (시도 {attempt+1}/3): {e}")
+            if attempt < 2: time.sleep(1.0 * (2 ** attempt))
+    return _load_cache(cache_key, default_atr)
 
 def get_tqqq_target_drop_full():
-    """ 💡 [텔레그램 UI 표시용] TQQQ 상세 데이터 반환 (4개 파라미터 리턴) """
-    try:
-        vxn_data = yf.download("^VXN", period="2y", interval="1d", progress=False, timeout=5)
-        
-        if vxn_data.empty: 
-            fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
-            return 0.0, 1.0, fallback_amp, fallback_amp
-            
-        vxn_data = _flatten_columns(vxn_data)
-                
-        valid_closes = vxn_data['Close'].dropna()
-        valid_closes_1y = valid_closes.tail(252)
-        
-        if valid_closes_1y.empty:
-            fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
-            return 0.0, 1.0, fallback_amp, fallback_amp
-             
-        current_vxn = float(valid_closes_1y.iloc[-1])
-        
+    for attempt in range(3):
         try:
-            mean_vxn = float(valid_closes_1y.mean())
-            if pd.isna(mean_vxn) or mean_vxn <= 0:
-                raise ValueError("Invalid Mean")
-            _save_cache("VXN_MEAN", mean_vxn)
-        except Exception:
-            mean_vxn = _load_cache("VXN_MEAN", 20.0)
+            time.sleep(0.06)
+            vxn_data = yf.download("^VXN", period="2y", interval="1d", progress=False, timeout=5)
             
-        # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온
-        if mean_vxn <= 0:
-            weight = 1.0
-        else:
-            raw_weight = current_vxn / mean_vxn
-            weight = max(WEIGHT_MIN, min(WEIGHT_MAX, raw_weight))
-        
-        qqq_1y_atr = _calculate_1y_atr("QQQ", "QQQ_ATR_1Y", QQQ_DEFAULT_ATR_PCT)
-        base_amp = round(-(qqq_1y_atr * 3), 2)
-        target_drop = base_amp
-        
-        return current_vxn, weight, target_drop, base_amp
-        
-    except Exception as e:
-        logging.error(f"❌ VXN 상세 스캔 오류: {e}")
-        fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
-        return 0.0, 1.0, fallback_amp, fallback_amp
+            if vxn_data.empty: 
+                if attempt < 2:
+                    time.sleep(1.0 * (2 ** attempt))
+                    continue
+                fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
+                return 0.0, 1.0, fallback_amp, fallback_amp
+                
+            vxn_data = _flatten_columns(vxn_data)
+                    
+            valid_closes = vxn_data['Close'].dropna()
+            valid_closes_1y = valid_closes.tail(252)
+            
+            if valid_closes_1y.empty:
+                if attempt < 2:
+                    time.sleep(1.0 * (2 ** attempt))
+                    continue
+                fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
+                return 0.0, 1.0, fallback_amp, fallback_amp
+                 
+            current_vxn = float(valid_closes_1y.iloc[-1])
+            
+            try:
+                mean_vxn = float(valid_closes_1y.mean())
+                if pd.isna(mean_vxn) or mean_vxn <= 0:
+                    raise ValueError("Invalid Mean")
+                _save_cache("VXN_MEAN", mean_vxn)
+            except Exception:
+                mean_vxn = _load_cache("VXN_MEAN", 20.0)
+                
+            if mean_vxn <= 0:
+                weight = 1.0
+            else:
+                raw_weight = current_vxn / mean_vxn
+                weight = max(WEIGHT_MIN, min(WEIGHT_MAX, raw_weight))
+            
+            qqq_1y_atr = _calculate_1y_atr("QQQ", "QQQ_ATR_1Y", QQQ_DEFAULT_ATR_PCT)
+            base_amp = round(-(qqq_1y_atr * 3), 2)
+            target_drop = base_amp
+            
+            return current_vxn, weight, target_drop, base_amp
+            
+        except Exception as e:
+            if attempt == 2:
+                logging.error(f"❌ VXN 상세 스캔 오류: {e}")
+                fallback_amp = round(-(QQQ_DEFAULT_ATR_PCT * 3), 2)
+                return 0.0, 1.0, fallback_amp, fallback_amp
+            time.sleep(1.0 * (2 ** attempt))
 
 def get_soxl_target_drop_full():
-    """ 💡 [텔레그램 UI 표시용] SOXL 상세 데이터 반환 (4개 파라미터 리턴) """
-    try:
-        soxx_data = yf.download("SOXX", period="2y", interval="1d", progress=False, timeout=5)
-        if soxx_data.empty or len(soxx_data) < 21: 
-            fallback_amp = round(-(SOXX_DEFAULT_ATR_PCT * 3), 2)
-            return 0.0, 1.0, fallback_amp, fallback_amp
-        
-        soxx_data = _flatten_columns(soxx_data)
-                
-        closes = soxx_data['Close'].dropna()
-        log_returns = np.log(closes / closes.shift(1))
-        hv_20d = log_returns.rolling(window=20).std() * np.sqrt(252) * 100
-        
-        valid_hvs = hv_20d.dropna()
-        valid_hvs_1y = valid_hvs.tail(252)
-        
-        if valid_hvs_1y.empty:
-            fallback_amp = round(-(SOXX_DEFAULT_ATR_PCT * 3), 2)
-            return 0.0, 1.0, fallback_amp, fallback_amp
-            
-        latest_hv = float(valid_hvs_1y.iloc[-1])
-         
+    for attempt in range(3):
         try:
-            mean_hv = float(valid_hvs_1y.mean())
-            if pd.isna(mean_hv) or mean_hv <= 0:
-                raise ValueError("Invalid Mean")
-            _save_cache("SOXX_HV_MEAN", mean_hv)
-        except Exception:
-            mean_hv = _load_cache("SOXX_HV_MEAN", 25.0)
-         
-        # 🚨 [수술 완료] 블랙스완 가중치 무한대 폭주 락온
-        if mean_hv <= 0:
-            weight = 1.0
-        else:
-            raw_weight = latest_hv / mean_hv
-            weight = max(WEIGHT_MIN, min(WEIGHT_MAX, raw_weight))
-        
-        soxx_1y_atr = _calculate_1y_atr("SOXX", "SOXX_ATR_1Y", SOXX_DEFAULT_ATR_PCT)
-        base_amp = round(-(soxx_1y_atr * 3), 2)
-        target_drop = base_amp
-        
-        return latest_hv, weight, target_drop, base_amp
-        
-    except Exception as e:
-        logging.error(f"❌ SOXX HV 상세 연산 오류: {e}")
-        fallback_amp = round(-(SOXX_DEFAULT_ATR_PCT * 3), 2)
-        return 0.0, 1.0, fallback_amp, fallback_amp
-
-# 🚨 [V40.XX 옴니 매트릭스 전면 수술] 이평선 제거 & 동행 지표(VWAP) 스위칭 엔진 교체
-def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
-    """
-    기초자산(SOXX)의 '전일 최종 VWAP'과 '당일 실시간 VWAP'을 비교하고, 
-    동시에 당일 시가(Open) 대비 종가(Close)의 양봉/음봉 방향성까지 스캔하여 
-    기관 자금의 '진짜 쏠림 방향'을 동행 지표(Coincident Indicator)로 판별합니다.
-    """
-    try:
-        # 야후 파이낸스에서 가장 최근 1일 1분봉 데이터로 시가/현재가를 추출 (양봉/음봉 판별용)
-        ticker = yf.Ticker("SOXX")
-        df = ticker.history(period="1d", interval="1m", prepost=False, timeout=5)
-        
-        if df.empty:
-            return {"status": "error", "msg": "YF 실시간 1분봉 데이터 부재"}
+            time.sleep(0.06)
+            soxx_data = yf.download("SOXX", period="2y", interval="1d", progress=False, timeout=5)
+            if soxx_data.empty or len(soxx_data) < 21: 
+                if attempt < 2:
+                    time.sleep(1.0 * (2 ** attempt))
+                    continue
+                fallback_amp = round(-(SOXX_DEFAULT_ATR_PCT * 3), 2)
+                return 0.0, 1.0, fallback_amp, fallback_amp
             
-        df = _flatten_columns(df)
-        
-        # API 결측치(None) 방어 락온
-        day_open = float(df['Open'].iloc[0]) if not pd.isna(df['Open'].iloc[0]) else 0.0
-        current_price = float(df['Close'].iloc[-1]) if not pd.isna(df['Close'].iloc[-1]) else 0.0
-        
-        if day_open == 0.0 or current_price == 0.0:
-            return {"status": "error", "msg": "결측치(NaN) 유입으로 시가/현재가 연산 불가"}
-
-        # broker.py의 1분봉 누적 VWAP 파싱 엔진을 호출하여 전일/당일 VWAP 데이터 수혈
-        # (비동기 래퍼 내부에서 실행되므로, broker_instance가 없어도 자체 생성이 불가피함)
-        if broker_instance is not None:
-            prev_vwap, curr_vwap = broker_instance.get_daily_vwap_info("SOXX")
-        else:
-            # broker 인스턴스가 넘어오지 않았을 경우를 대비한 독립 엔진 가동 (Fail-safe)
-            from broker import KoreaInvestmentBroker
-            # 계좌 정보 없이 순수 YF 데이터만 빼오기 위한 임시 인스턴스 (Mocking)
-            temp_broker = KoreaInvestmentBroker("MOCK", "MOCK", "MOCK")
-            prev_vwap, curr_vwap = temp_broker.get_daily_vwap_info("SOXX")
-
-        if prev_vwap == 0.0 or curr_vwap == 0.0:
-            return {"status": "error", "msg": "VWAP 파싱 실패 (결측치 유입)"}
-
-        # 🚨 [ 옴니 매트릭스 앱솔루트 락온 룰 (Absolute Lock-on Rule) ]
-        # 1. 당일 VWAP이 전일 VWAP보다 상승 (기관이 어제보다 비싸게 롱을 삼)
-        # 2. 당일 현재가가 시가보다 높음 (양봉: 단타 자금도 롱에 쏠림)
-        if curr_vwap > prev_vwap and current_price > day_open:
-            regime = "BULL"
-            target_ticker = "SOXL"
-            msg_desc = "상승장 (VWAP 상승 & 양봉)"
+            soxx_data = _flatten_columns(soxx_data)
+                    
+            closes = soxx_data['Close'].dropna()
+            log_returns = np.log(closes / closes.shift(1))
+            hv_20d = log_returns.rolling(window=20).std() * np.sqrt(252) * 100
+            
+            valid_hvs = hv_20d.dropna()
+            valid_hvs_1y = valid_hvs.tail(252)
+            
+            if valid_hvs_1y.empty:
+                if attempt < 2:
+                    time.sleep(1.0 * (2 ** attempt))
+                    continue
+                fallback_amp = round(-(SOXX_DEFAULT_ATR_PCT * 3), 2)
+                return 0.0, 1.0, fallback_amp, fallback_amp
+                
+            latest_hv = float(valid_hvs_1y.iloc[-1])
              
-        # 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각]
-        # 1. 당일 VWAP이 전일 VWAP보다 하락 (기관이 어제보다 싸게 롱을 던짐)
-        # 2. 당일 현재가가 시가보다 낮음 (음봉: 단타 자금도 매도에 쏠림)
-        elif curr_vwap < prev_vwap and current_price < day_open:
-            regime = "BEAR"
-            target_ticker = "NONE" # 숏(SOXS) 타격 영구 소각
-            msg_desc = "하락장 (VWAP 하락 & 음봉) - 숏 타격 영구 소각"
+            try:
+                mean_hv = float(valid_hvs_1y.mean())
+                if pd.isna(mean_hv) or mean_hv <= 0:
+                    raise ValueError("Invalid Mean")
+                _save_cache("SOXX_HV_MEAN", mean_hv)
+            except Exception:
+                mean_hv = _load_cache("SOXX_HV_MEAN", 25.0)
+             
+            if mean_hv <= 0:
+                weight = 1.0
+            else:
+                raw_weight = latest_hv / mean_hv
+                weight = max(WEIGHT_MIN, min(WEIGHT_MAX, raw_weight))
             
-        # 수급과 캔들의 방향이 불일치하는 구간 (기관의 눈치 싸움 및 휩소 구간)
-        else:
-            regime = "SIDEWAYS"
-            # MODIFIED: [제4경고 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
-            target_ticker = "SOXL"
-            msg_desc = "횡보장 (VWAP과 캔들 방향 충돌)"
+            soxx_1y_atr = _calculate_1y_atr("SOXX", "SOXX_ATR_1Y", SOXX_DEFAULT_ATR_PCT)
+            base_amp = round(-(soxx_1y_atr * 3), 2)
+            target_drop = base_amp
             
-        return {
-            "status": "success",
-            "regime": regime,
-            "target_ticker": target_ticker,
-            "close": current_price,
-            "prev_vwap": prev_vwap,
-            "curr_vwap": curr_vwap,
-            "day_open": day_open,
-            "desc": msg_desc
-        }
-        
-    except Exception as e:
-        return {"status": "error", "msg": str(e)}
+            return latest_hv, weight, target_drop, base_amp
+            
+        except Exception as e:
+            if attempt == 2:
+                logging.error(f"❌ SOXX HV 상세 연산 오류: {e}")
+                fallback_amp = round(-(SOXX_DEFAULT_ATR_PCT * 3), 2)
+                return 0.0, 1.0, fallback_amp, fallback_amp
+            time.sleep(1.0 * (2 ** attempt))
 
-# 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] 독스트링 내 SOXS 환각 텍스트 100% 영구 적출 완료
+def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
+    for attempt in range(3):
+        try:
+            time.sleep(0.06)
+            ticker = yf.Ticker("SOXX")
+            df = ticker.history(period="1d", interval="1m", prepost=False, timeout=5)
+            
+            if df.empty:
+                if attempt == 2: return {"status": "error", "msg": "YF 실시간 1분봉 데이터 부재"}
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+                
+            df = _flatten_columns(df)
+            
+            day_open = float(df['Open'].iloc[0]) if not pd.isna(df['Open'].iloc[0]) else 0.0
+            current_price = float(df['Close'].iloc[-1]) if not pd.isna(df['Close'].iloc[-1]) else 0.0
+            
+            if day_open == 0.0 or current_price == 0.0:
+                if attempt == 2: return {"status": "error", "msg": "결측치(NaN) 유입으로 시가/현재가 연산 불가"}
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+
+            if broker_instance is not None:
+                prev_vwap, curr_vwap = broker_instance.get_daily_vwap_info("SOXX")
+            else:
+                from broker import KoreaInvestmentBroker
+                temp_broker = KoreaInvestmentBroker("MOCK", "MOCK", "MOCK")
+                prev_vwap, curr_vwap = temp_broker.get_daily_vwap_info("SOXX")
+
+            if prev_vwap == 0.0 or curr_vwap == 0.0:
+                if attempt == 2: return {"status": "error", "msg": "VWAP 파싱 실패 (결측치 유입)"}
+                time.sleep(1.0 * (2 ** attempt))
+                continue
+
+            if curr_vwap > prev_vwap and current_price > day_open:
+                regime = "BULL"
+                target_ticker = "SOXL"
+                msg_desc = "상승장 (VWAP 상승 & 양봉)"
+            elif curr_vwap < prev_vwap and current_price < day_open:
+                regime = "BEAR"
+                target_ticker = "NONE" 
+                msg_desc = "하락장 (VWAP 하락 & 음봉) - 숏 타격 영구 소각"
+            else:
+                regime = "SIDEWAYS"
+                target_ticker = "SOXL"
+                msg_desc = "횡보장 (VWAP과 캔들 방향 충돌)"
+                
+            return {
+                "status": "success",
+                "regime": regime,
+                "target_ticker": target_ticker,
+                "close": current_price,
+                "prev_vwap": prev_vwap,
+                "curr_vwap": curr_vwap,
+                "day_open": day_open,
+                "desc": msg_desc
+            }
+            
+        except Exception as e:
+            logging.debug(f"⚠️ 옴니 매트릭스 에러 (시도 {attempt+1}/3): {e}")
+            if attempt == 2: return {"status": "error", "msg": str(e)}
+            time.sleep(1.0 * (2 ** attempt))
+
 async def determine_market_regime(broker_instance=None) -> dict:
-    """
-    비동기 데드락 원천 차단 방어막이 씌워진 VWAP 모멘텀 시장 국면 판별 함수.
-    매일 특정 스케줄에 호출되어 당일의 운명(SOXL/NONE)을 락온합니다.
-    """
     try:
-        # 최대 10초 무한 대기 족쇄(Timeout) 가동
         result = await asyncio.wait_for(
             asyncio.to_thread(_fetch_vwap_momentum_regime_sync, broker_instance),
-            timeout=10.0
+            timeout=15.0
         )
         return result
     except asyncio.TimeoutError:
-        return {"status": "error", "msg": "YF 통신 타임아웃 (10초 초과)"}
+        return {"status": "error", "msg": "YF 통신 타임아웃 (15초 초과)"}
     except Exception as e:
         return {"status": "error", "msg": f"비동기 래핑 오류: {str(e)}"}
 
@@ -329,10 +327,6 @@ class VolatilityEngine:
         pass
         
     def calculate_weight(self, ticker):
-        """ 
-        main.py의 scheduled_volatility_scan 함수가 호출하는 공통 인터페이스.
-        기존 0.85/1.15 하드코딩을 대체하여 팩트 기반의 가중치를 반환합니다.
-        """
         try:
             if ticker == "TQQQ":
                 _, weight, _, _ = get_tqqq_target_drop_full()
@@ -341,7 +335,6 @@ class VolatilityEngine:
             else:
                 weight = 1.0
 
-            # 🚨 [수술 완료] 최종 안전망: 메인 관제탑으로 넘어가기 전 한 번 더 강력한 Clamp 적용
             clamped = max(WEIGHT_MIN, min(WEIGHT_MAX, float(weight)))
             return {'weight': clamped}
 

@@ -3,6 +3,8 @@
 # ==========================================================
 # 🚨 MODIFIED: [V73.15 타임라인 디커플링 대통합] 17:05 KST V14 선제 타격 및 V-REV 스냅샷 분리 락온
 # 🚨 MODIFIED: [Case 20 준수] b_start = max(b_start, s_start) 연산 100% 동기화 적용
+# 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
+# 🚨 MODIFIED: [Case 14 절대 헌법 준수] is_market_open 비동기 호출 타임아웃 10.0초 하드코딩 완료
 # ==========================================================
 import logging
 import datetime
@@ -13,14 +15,24 @@ import html
 
 from scheduler_core import is_market_open, get_budget_allocation
 
-# 🚨 NEW: 17:05 KST 기상 - V14 실전 장전 및 V-REV 스냅샷 분리 궤도
 async def scheduled_early_regular_trade(context):
-    try:
-        is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
-    except asyncio.TimeoutError:
-        logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
-        est = ZoneInfo('America/New_York')
-        is_open = datetime.datetime.now(est).weekday() < 5
+    is_open = False
+    for attempt in range(3):
+        try:
+            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            break
+        except asyncio.TimeoutError:
+            if attempt == 2:
+                logging.error("⚠️ is_market_open 달력 API 타임아웃. 평일이므로 강제 개장 처리합니다.")
+                est = ZoneInfo('America/New_York')
+                is_open = datetime.datetime.now(est).weekday() < 5
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
+        except Exception:
+            if attempt == 2:
+                est = ZoneInfo('America/New_York')
+                is_open = datetime.datetime.now(est).weekday() < 5
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
         return
@@ -50,12 +62,17 @@ async def scheduled_early_regular_trade(context):
         curr_est = datetime.datetime.now(est_z)
         
         async with tx_lock:
-            try:
-                cash, holdings = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=10.0)
-            except asyncio.TimeoutError:
-                return False, "잔고 조회 타임아웃"
-            except Exception as e:
-                return False, f"잔고 조회 오류: {html.escape(str(e))}"
+            cash, holdings = 0.0, None
+            for attempt in range(3):
+                try:
+                    cash, holdings = await asyncio.wait_for(asyncio.to_thread(broker.get_account_balance), timeout=15.0)
+                    break
+                except asyncio.TimeoutError:
+                    if attempt == 2: return False, "잔고 조회 타임아웃"
+                    else: await asyncio.sleep(1.0 * (2 ** attempt))
+                except Exception as e:
+                    if attempt == 2: return False, f"잔고 조회 오류: {html.escape(str(e))}"
+                    else: await asyncio.sleep(1.0 * (2 ** attempt))
             
             if holdings is None:
                 return False, "❌ 계좌 정보를 불러오지 못했습니다."
@@ -68,6 +85,8 @@ async def scheduled_early_regular_trade(context):
             all_success_map = {t: True for t in sorted_tickers}
 
             for t in sorted_tickers:
+                await asyncio.sleep(0.06) # 🚨 NEW: [Case 32]
+                
                 version = await asyncio.to_thread(cfg.get_version, t)
                 is_locked = await asyncio.to_thread(cfg.check_lock, t, "REG")
                 if is_locked:
@@ -82,24 +101,25 @@ async def scheduled_early_regular_trade(context):
                 curr_p, prev_c = 0.0, 0.0
                 for _api_retry in range(3):
                     try:
-                        curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=10.0)
+                        curr_p_val = await asyncio.wait_for(asyncio.to_thread(broker.get_current_price, t), timeout=15.0)
                         curr_p = float(curr_p_val or 0.0)
-                    except Exception: curr_p = 0.0
-                        
-                    try:
-                        prev_c_val = await asyncio.wait_for(asyncio.to_thread(broker.get_previous_close, t), timeout=10.0)
+                        prev_c_val = await asyncio.wait_for(asyncio.to_thread(broker.get_previous_close, t), timeout=15.0)
                         prev_c = float(prev_c_val or 0.0)
-                    except Exception: prev_c = 0.0
-                        
-                    if curr_p > 0 and prev_c > 0: break
-                    await asyncio.sleep(2.0)
+                        if curr_p > 0 and prev_c > 0: break
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1.0 * (2**_api_retry))
 
-                try:
-                    ma_5day_val = await asyncio.wait_for(asyncio.to_thread(broker.get_5day_ma, t), timeout=10.0)
-                    ma_5day = float(ma_5day_val or 0.0)
-                except Exception: ma_5day = 0.0
+                ma_5day = 0.0
+                for attempt in range(3):
+                    try:
+                        ma_5day_val = await asyncio.wait_for(asyncio.to_thread(broker.get_5day_ma, t), timeout=15.0)
+                        ma_5day = float(ma_5day_val or 0.0)
+                        break
+                    except Exception: 
+                        if attempt == 2: ma_5day = 0.0
+                        else: await asyncio.sleep(1.0 * (2**attempt))
                 
-                # V14는 실전 타격 및 팩트 박제 동시 진행, V-REV는 스냅샷 박제만
                 plan = await asyncio.to_thread(
                     strategy.get_plan, t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash.get(t, 0.0), is_snapshot_mode=True
                 )
@@ -107,7 +127,6 @@ async def scheduled_early_regular_trade(context):
                 if version == "V14":
                     msgs[t] += f"💎 <b>[{t}] V14 오리지널 정규장 실전 덫 장전 완료 (17:05 KST 타격망)</b>\n"
                     
-                    # MODIFIED: [Case 20] KST 동적 시프트 및 180초 지터 타임라인 수학적 락온
                     b_start = curr_est.replace(hour=15, minute=26, second=0, microsecond=0)
                     s_start = curr_est + datetime.timedelta(minutes=3)
                     b_start = max(b_start, s_start)
@@ -148,7 +167,7 @@ async def scheduled_early_regular_trade(context):
                         await asyncio.to_thread(cfg.set_lock, t, "REG")
                         msgs[t] += "\n🔒 <b>V14 필수 덫 KIS 실원장 전송 완료 (잠금 설정됨)</b>"
                 
-                else: # V-REV 모드
+                else: 
                     msgs[t] += f"🔄 <b>[{t}] V-REV 역추세 덫 모의 장전 및 스냅샷 박제</b>\n"
                     target_orders = plan.get('core_orders', plan.get('orders', []))
                     for o in target_orders:
@@ -197,13 +216,23 @@ async def scheduled_early_regular_trade(context):
     await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급 에러] 17:05 스케줄 통신 복구 최종 실패. 수동 점검 요망!</b>", parse_mode='HTML')
 
 
-# 🚨 15:26 EST 기상 - V-REV 지연 실전 장전 (V14는 패스)
 async def scheduled_regular_trade_delayed(context):
-    try:
-        is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
-    except asyncio.TimeoutError:
-        est = ZoneInfo('America/New_York')
-        is_open = datetime.datetime.now(est).weekday() < 5
+    is_open = False
+    for attempt in range(3):
+        try:
+            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            break
+        except asyncio.TimeoutError:
+            if attempt == 2:
+                est = ZoneInfo('America/New_York')
+                is_open = datetime.datetime.now(est).weekday() < 5
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
+        except Exception:
+            if attempt == 2:
+                est = ZoneInfo('America/New_York')
+                is_open = datetime.datetime.now(est).weekday() < 5
+            else: await asyncio.sleep(1.0 * (2 ** attempt))
 
     if not is_open:
         return
@@ -249,9 +278,11 @@ async def scheduled_regular_trade_delayed(context):
             dyn_end_t = b_end.astimezone(kst_z).strftime("%H%M%S")
 
             for t in active_tickers_list:
+                await asyncio.sleep(0.06) # 🚨 NEW: [Case 32]
+                
                 version = await asyncio.to_thread(cfg.get_version, t)
                 if version == "V14":
-                    continue # V14는 이미 17:05 KST에 장전 완료
+                    continue 
                     
                 is_locked = await asyncio.to_thread(cfg.check_lock, t, "REG")
                 if is_locked:
