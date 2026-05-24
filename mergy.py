@@ -11,7 +11,6 @@ TARGET_FILES = [
     "broker.py",
     "config.py",
     "main.py",
-    "manual_ledger.py",
     "plugin_updater.py",
     "queue_ledger.py",
     "scheduler_core.py",
@@ -29,7 +28,7 @@ TARGET_FILES = [
     "telegram_states.py",
     "telegram_sync_engine.py",
     "telegram_view.py",
-    "version_history.py",
+    # "version_history.py",
     "volatility_engine.py",
 ]
 

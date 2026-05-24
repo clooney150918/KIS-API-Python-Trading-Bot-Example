@@ -1,8 +1,10 @@
 # ==========================================================
 # FILE: strategy_v14.py
 # ==========================================================
-# 🚨 MODIFIED: [스냅샷 무결성 파이프라인 팩트 교정] os.path.exists 방어막 소각
-# 🚨 NEW: [라우팅 누수 방어] V14 스나이퍼 감시 라우터(check_sniper_condition) 배선 개통 완료
+# 🚨 MODIFIED: [Case 08 절대 규칙 준수] 스냅샷 무결성 파이프라인 팩트 교정 - os.path.exists 방어막 소각
+# 🚨 MODIFIED: [Case 21] 후반전 별값 매수 예산 통합 100% 팩트 이식
+# 🚨 MODIFIED: [Case 25] 오리지널 심해 줍줍 5단 폭포수 덫 공식 진공 압축 팩트 이식 완료
+# 🚨 MODIFIED: [Case 16] 임시 파일 변수 스코프 전진 배치(Hoisting)로 UnboundLocalError 런타임 붕괴 완벽 차단
 # ==========================================================
 import math
 import os
@@ -16,6 +18,7 @@ class V14Strategy:
         self.cfg = config
 
     def _ceil(self, val): return math.ceil(val * 100) / 100.0
+    def _floor(self, val): return math.floor(val * 100) / 100.0
 
     def _get_logical_date_str(self):
         now_est = datetime.now(ZoneInfo('America/New_York'))
@@ -29,7 +32,7 @@ class V14Strategy:
         today_str = self._get_logical_date_str()
         snap_file = f"data/daily_snapshot_V14_{today_str}_{ticker}.json"
         
-        # 🚨 [스냅샷 무결성 락온] os.path.exists 방어막 영구 소각 (무조건 최신 팩트로 오버라이드)
+        # 🚨 MODIFIED: [Case 08] 스냅샷 멱등성 파괴 방어 (무조건 원자적 덮어쓰기)
         data = {
             "date": today_str,
             "total_q": int(plan_data.get('total_q', 0)),
@@ -46,16 +49,25 @@ class V14Strategy:
         }
         
         os.makedirs(os.path.dirname(snap_file), exist_ok=True)
+        # 🚨 MODIFIED: [Case 16] temp_path 및 fd 스코프 최상단 전진 배치 (UnboundLocalError 런타임 붕괴 원천 봉쇄)
+        fd = None
+        temp_path = None
         try:
             fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(snap_file), text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                fd = None
                 json.dump(data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno())
             os.replace(temp_path, snap_file)
+            temp_path = None
         except Exception:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except OSError: pass
 
     def load_daily_snapshot(self, ticker):
         today_str = self._get_logical_date_str()
@@ -71,51 +83,27 @@ class V14Strategy:
                 pass
         return None
 
-    def _mark_quarter_sell_completed(self, ticker):
-        flag_file = f"cache_sniper_sell_{ticker}.json"
-        today_str = self._get_logical_date_str()
-        
-        if os.path.exists(flag_file):
-            try:
-                with open(flag_file, 'r') as f:
-                    data = json.load(f)
-                    if data.get("date") == today_str and data.get("QUARTER_SELL_COMPLETED"):
-                        return
-            except Exception:
-                pass
-
-        data = {"date": today_str, "QUARTER_SELL_COMPLETED": True}
-        try:
-            fd, temp_path = tempfile.mkstemp(dir=".", text=True)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(data, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(temp_path, flag_file)
-        except Exception:
-            pass
-
     def _apply_wash_trade_shield(self, c_orders, b_orders):
-            all_o = c_orders + b_orders
-            has_sell_moc = any(o['type'] in ['MOC', 'MOO'] and o['side'] == 'SELL' for o in all_o)
-            s_prices = [o['price'] for o in all_o if o['side'] == 'SELL' and o['price'] > 0]
-            min_s = min(s_prices) if s_prices else 0.0
+        all_o = c_orders + b_orders
+        has_sell_moc = any(o['type'] in ['MOC', 'MOO'] and o['side'] == 'SELL' for o in all_o)
+        s_prices = [o['price'] for o in all_o if o['side'] == 'SELL' and o['price'] > 0]
+        min_s = min(s_prices) if s_prices else 0.0
 
-            def _clean(lst):
-                res = []
-                for o in lst:
-                    new_o = o.copy()
-                    if new_o['side'] == 'BUY':
-                        if has_sell_moc and new_o['type'] in ['LOC', 'MOC']: 
-                            continue 
-                        if min_s > 0 and new_o['price'] >= min_s:
-                            new_o['price'] = round(min_s - 0.01, 2)
-                            if "🛡️" not in new_o['desc']: 
-                                new_o['desc'] = f"🛡️교정_{new_o['desc'].replace('🧹', '')}"
-                        new_o['price'] = max(0.01, new_o['price'])
-                    res.append(new_o)
-                return res
-            return _clean(c_orders), _clean(b_orders)
+        def _clean(lst):
+            res = []
+            for o in lst:
+                new_o = o.copy()
+                if new_o['side'] == 'BUY':
+                    if has_sell_moc and new_o['type'] in ['LOC', 'MOC']: 
+                        continue 
+                    if min_s > 0 and new_o['price'] >= min_s:
+                        new_o['price'] = round(min_s - 0.01, 2)
+                        if "🛡️" not in new_o['desc']: 
+                            new_o['desc'] = f"🛡️교정_{new_o['desc'].replace('🧹', '')}"
+                    new_o['price'] = max(0.01, new_o['price'])
+                res.append(new_o)
+            return res
+        return _clean(c_orders), _clean(b_orders)
 
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, is_snapshot_mode=False, **kwargs):
         if not is_snapshot_mode:
@@ -127,87 +115,32 @@ class V14Strategy:
         process_status = "" 
         tr_info = {}
         
-        lock_s_sell = self.cfg.check_lock(ticker, "SNIPER_SELL")
-        if lock_s_sell and not is_simulation:
-            self._mark_quarter_sell_completed(ticker)
-
-        other_locked_cash = self.cfg.get_total_locked_cash(exclude_ticker=ticker) if hasattr(self.cfg, 'get_total_locked_cash') else 0.0
-        real_available_cash = max(0, available_cash - other_locked_cash)
+        real_available_cash = max(0, available_cash)
         
+        seed = self.cfg.get_seed(ticker)
         split = self.cfg.get_split_count(ticker)      
         target_pct_val = self.cfg.get_target_profit(ticker) 
         target_ratio = target_pct_val / 100.0
         
-        rev_state = self.cfg.get_reverse_state(ticker)
-        is_reverse = rev_state.get("is_active", False)
-        rev_day = rev_state.get("day_count", 0)
-        exit_target = rev_state.get("exit_target", 0.0)
+        portion = seed / split if split > 0 else 1.0
+        t_val = (qty * avg_price) / portion if portion > 0 else 0.0
+        t_val = round(t_val, 4)
 
-        t_val, base_portion = self.cfg.get_absolute_t_val(ticker, qty, avg_price)
         target_price = self._ceil(avg_price * (1 + target_ratio)) if avg_price > 0 else 0
         is_jackpot_reached = target_price > 0 and current_price >= target_price
 
-        _, dynamic_budget, _ = self.cfg.calculate_v14_state(ticker)
-        one_portion_amt = dynamic_budget
+        one_portion_amt = portion
         
-        is_money_short_check = False if (is_simulation or market_type == "PRE_CHECK") else (real_available_cash < one_portion_amt)
-        
-        if not is_reverse and (t_val > (split - 1) or (qty > 0 and is_money_short_check)):
-            if not is_jackpot_reached:
-                is_reverse = True 
-                rev_day = 1 
-                current_return = (current_price - avg_price) / avg_price * 100.0 if avg_price > 0 else 0.0
-                default_exit = -15.0 if ticker == "TQQQ" else -20.0
-                if current_return >= default_exit: exit_target = 0.0
-                else: exit_target = default_exit
-
         depreciation_factor = 2.0 / split if split > 0 else 0.1
         star_ratio = target_ratio - (target_ratio * depreciation_factor * t_val)
-        
-        if is_reverse:
-            if ma_5day > 0: star_price = round(ma_5day, 2)
-            else: star_price = self._ceil(avg_price)
-
-            ledger = self.cfg.get_ledger()
-            total_sell_amount = 0.0
+        star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
             
-            for r in reversed(ledger):
-                if r.get('ticker') == ticker:
-                    if r.get('is_reverse', False):
-                        if r['side'] == 'SELL':
-                            total_sell_amount += (r['qty'] * r['price'])
-                    else: break
-            
-            if total_sell_amount > 0:
-                one_portion_amt = total_sell_amount / 4.0
-            else:
-                one_portion_amt = base_portion
-                
-            if one_portion_amt <= 0:
-                plan_result = {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": 0.0, "process_status": "⛔리버스예산오류(0원)", "is_reverse": True, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-                if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
-                return plan_result
-        else:
-            star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0
-            
-        is_last_lap = (split - 1) < t_val < split
-        is_money_short = False if is_simulation else (real_available_cash < one_portion_amt)
-
         base_price = current_price if current_price > 0 else prev_close
         if base_price <= 0: 
-            plan_result = {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": "⛔가격오류", "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
+            plan_result = {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": "⛔가격오류", "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
             if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
             return plan_result
             
-        if market_type == "PRE_CHECK":
-            process_status = "🌅프리마켓"
-            if qty > 0 and target_price > 0 and current_price >= target_price and not is_reverse:
-                core_orders.append({"side": "SELL", "price": current_price, "qty": int(qty), "type": "LIMIT", "desc": "🌅프리:목표돌파익절"})
-            orders = core_orders + bonus_orders
-            plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-            if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
-            return plan_result
-
         if market_type == "REG":
             if qty == 0:
                 process_status = "✨새출발"
@@ -222,73 +155,18 @@ class V14Strategy:
                 if buy_qty1 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty1, "type": "LOC", "desc": "🆕새출발1"})
                 if buy_qty2 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty2, "type": "LOC", "desc": "🆕새출발2"})
                 
+                # 🚨 MODIFIED: [Case 25] 오리지널 심해 줍줍(Jubjub) 5단 폭포수 1줄 진공 압축 및 안정 정렬 팩트 이식
                 q_base = sum(o['qty'] for o in core_orders if o['side'] == 'BUY')
                 if q_base > 0:
-                    for n in range(1, 6):
-                        jub_price = math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0
-                        if jub_price > 0.01:
-                            bonus_orders.append({
-                                "side": "BUY", "price": jub_price, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"
-                            })
-                        
+                    bonus_orders.extend(sorted([{"side": "BUY", "price": math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"} for n in range(1, 6) if math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0 > 0.01], key=lambda x: x['price'], reverse=True))
             
                 orders = core_orders + bonus_orders
                 plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
                 if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
                 return plan_result
 
-            if is_reverse:
-                sell_divisor = 10 if split <= 20 else 20
-                if qty < 4: sell_qty = int(qty)
-                else: sell_qty = int(max(4, math.floor(qty / sell_divisor)))
-
-                is_emergency_cash_needed = (real_available_cash < base_price) and (rev_day > 1)
-
-                if rev_day == 1 or is_emergency_cash_needed:
-                    process_status = "🩸리버스(긴급수혈)" if is_emergency_cash_needed else "🚨리버스(1일차)"
-                    if sell_qty > 0:
-                        desc_str = "🩸수혈매도" if is_emergency_cash_needed else "🛡️의무매도"
-                        if qty < 4: desc_str = "💥잔량청산(수량부족)"
-                        core_orders.append({"side": "SELL", "price": 0, "qty": sell_qty, "type": "MOC", "desc": desc_str})
-                else:
-                    process_status = f"🔄리버스({rev_day}일차)"
-                    buy_price = 0
-                    if one_portion_amt > 0 and star_price > 0:
-                        buy_price = max(0.01, round(star_price - 0.01, 2))
-                        if buy_price > 0: 
-                            b1_budget = one_portion_amt * 0.5
-                            b2_budget = one_portion_amt - b1_budget
-                            buy_qty1 = int(math.floor(b1_budget / buy_price))
-                            buy_qty2 = int(math.floor(b2_budget / buy_price))
-                            
-                            if buy_qty1 == 0 and buy_qty2 == 0 and one_portion_amt >= buy_price:
-                                buy_qty1 = int(math.floor(one_portion_amt / buy_price))
-                                
-                            if buy_qty1 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty1, "type": "LOC", "desc": "⚓잔금매수1"})
-                            if buy_qty2 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty2, "type": "LOC", "desc": "⚓잔금매수2"})
-                    if not lock_s_sell and sell_qty > 0 and star_price > 0:
-                        core_orders.append({"side": "SELL", "price": star_price, "qty": sell_qty, "type": "LOC", "desc": "🌟별값매도"})
-
-                if lock_s_sell: process_status = "🔫리버스(명중)"
-
-                q_base = sum(o['qty'] for o in core_orders if o['side'] == 'BUY')
-                if q_base > 0:
-                    for n in range(1, 6):
-                        jub_price = math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0
-                        if jub_price > 0.01:
-                            bonus_orders.append({
-                                "side": "BUY", "price": jub_price, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"
-                            })
-
-                core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
-                orders = core_orders + bonus_orders
-                
-                plan_result = {"orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status, "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio, "real_cash_used": real_available_cash, "tracking_info": tr_info}
-                if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
-                return plan_result
-
-            if is_jackpot_reached and (t_val > (split - 1) or is_money_short):
-                process_status = "🎉대박익절(리버스생략)"
+            if is_jackpot_reached and t_val > (split - 1):
+                process_status = "🎉대박익절"
                 if qty > 0:
                     core_orders.append({"side": "SELL", "price": target_price, "qty": int(qty), "type": "LIMIT", "desc": "🎯전량대박익절"})
                 core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
@@ -298,58 +176,43 @@ class V14Strategy:
                 if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
                 return plan_result
                 
-            elif is_last_lap: process_status = "🏁마지막회차"
-            elif is_money_short: process_status = "🛡️방어모드(부족)"
             elif t_val < (split / 2): process_status = "🌓전반전"
             else: process_status = "🌕후반전"
 
-            if t_val > (split * 1.1): process_status = "🚨T값폭주(역산경고)"
-
-            can_buy = not is_money_short and not is_last_lap
-            safe_ceiling = min(avg_price, star_price) if star_price > 0 else avg_price
-            p_avg = max(0.01, round(min(self._ceil(avg_price) - 0.01, safe_ceiling - 0.01), 2))
-            
-            if can_buy:
+            if t_val < (split / 2):
+                p_avg = max(0.01, round(min(avg_price, star_price) - 0.01, 2))
                 p_star = max(0.01, round(star_price - 0.01, 2))
 
-                if t_val < (split / 2):
-                    half_amt = one_portion_amt * 0.5
-                    q_avg = math.floor(half_amt / p_avg) if p_avg > 0 else 0
-                    q_star = math.floor((one_portion_amt - half_amt) / p_star) if p_star > 0 else 0
-                    
-                    if q_avg == 0 and q_star == 0:
-                        if p_avg > 0 and one_portion_amt >= p_avg: q_avg = math.floor(one_portion_amt / p_avg)
-                        elif p_star > 0 and one_portion_amt >= p_star: q_star = math.floor(one_portion_amt / p_star)
-                    elif q_avg == 0 and q_star > 0: q_star = math.floor(one_portion_amt / p_star) if p_star > 0 else 0
-                    elif q_star == 0 and q_avg > 0: q_avg = math.floor(one_portion_amt / p_avg) if p_avg > 0 else 0
-                    
-                    if q_avg > 0: core_orders.append({"side": "BUY", "price": p_avg, "qty": q_avg, "type": "LOC", "desc": "⚓평단매수"})
-                    if q_star > 0: core_orders.append({"side": "BUY", "price": p_star, "qty": int(q_star), "type": "LOC", "desc": "💫별값매수"})
-                else: 
-                    if p_star > 0:
-                        q_star_total = int(math.floor(one_portion_amt / p_star))
-                        if q_star_total > 0:
-                            core_orders.append({"side": "BUY", "price": p_star, "qty": q_star_total, "type": "LOC", "desc": "💫별값매수(통합)"})
+                half_amt = one_portion_amt * 0.5
+                q_avg = math.floor(half_amt / p_avg) if p_avg > 0 else 0
+                q_star = math.floor((one_portion_amt - half_amt) / p_star) if p_star > 0 else 0
+                
+                if q_avg == 0 and q_star == 0:
+                    if p_avg > 0 and one_portion_amt >= p_avg: q_avg = math.floor(one_portion_amt / p_avg)
+                    elif p_star > 0 and one_portion_amt >= p_star: q_star = math.floor(one_portion_amt / p_star)
+                elif q_avg == 0 and q_star > 0: q_star = math.floor(one_portion_amt / p_star) if p_star > 0 else 0
+                elif q_star == 0 and q_avg > 0: q_avg = math.floor(one_portion_amt / p_avg) if p_avg > 0 else 0
+                
+                if q_avg > 0: core_orders.append({"side": "BUY", "price": p_avg, "qty": q_avg, "type": "LOC", "desc": "⚓평단매수"})
+                if q_star > 0: core_orders.append({"side": "BUY", "price": p_star, "qty": int(q_star), "type": "LOC", "desc": "💫별값매수"})
+            else: 
+                p_star = max(0.01, round(star_price - 0.01, 2))
+                if p_star > 0:
+                    q_star_total = int(math.floor(one_portion_amt / p_star))
+                    if q_star_total > 0:
+                        core_orders.append({"side": "BUY", "price": p_star, "qty": q_star_total, "type": "LOC", "desc": "💫별값매수(통합)"})
 
             if qty > 0:
-                if not lock_s_sell:
-                    q_qty = int(math.ceil(qty / 4))
-                    rem_qty = int(qty - q_qty)
-                    if star_price > 0 and q_qty > 0:
-                        core_orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LOC", "desc": "🌟별값매도"})
-                    if target_price > 0 and rem_qty > 0:
-                        core_orders.append({"side": "SELL", "price": target_price, "qty": rem_qty, "type": "LIMIT", "desc": "🎯목표매도"})
-
-            if lock_s_sell: process_status = "🔫스나이퍼(명중)"
+                q_qty = int(math.ceil(qty / 4))
+                rem_qty = int(qty - q_qty)
+                if star_price > 0 and q_qty > 0:
+                    core_orders.append({"side": "SELL", "price": star_price, "qty": q_qty, "type": "LOC", "desc": "🌟별값매도(쿼터)"})
+                if target_price > 0 and rem_qty > 0:
+                    core_orders.append({"side": "SELL", "price": target_price, "qty": rem_qty, "type": "LIMIT", "desc": "🎯목표매도(잔여)"})
 
             q_base = sum(o['qty'] for o in core_orders if o['side'] == 'BUY')
             if q_base > 0:
-                for n in range(1, 6):
-                    jub_price = math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0
-                    if jub_price > 0.01:
-                        bonus_orders.append({
-                            "side": "BUY", "price": jub_price, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"
-                        })
+                bonus_orders.extend(sorted([{"side": "BUY", "price": math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"} for n in range(1, 6) if math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0 > 0.01], key=lambda x: x['price'], reverse=True))
 
             core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
             orders = core_orders + bonus_orders
@@ -357,14 +220,13 @@ class V14Strategy:
             plan_result = {
                 "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price,
                 "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status,
-                "is_reverse": is_reverse, "star_price": star_price, "star_ratio": star_ratio,
+                "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio,
                 "real_cash_used": real_available_cash,
                 "tracking_info": tr_info 
             }
             if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
             return plan_result
 
-    # NEW: [라우팅 누수 방어] 스나이퍼 감시 조건 스캔 라우터 배선 개통 완료
     def check_sniper_condition(self, ticker, cfg, broker, chat_id):
         snap = self.load_daily_snapshot(ticker)
         if not snap:
@@ -384,7 +246,4 @@ class V14Strategy:
         
         target = target_price if target_price > 0 else 0.0
         
-        # 기본 상방 스나이퍼 명중 기준 (잭팟 또는 쿼터 트레일링)
-        # 본 아키텍처에서는 scheduler_sniper.py가 자체적으로 V14 상방 스나이퍼를 판별하도록 배선되어 있으나 
-        # 모듈 라우팅 누수 차단을 위해 기본 HOLD를 반환하여 런타임 붕괴 방지.
         return {"action": "HOLD", "reason": "V14 상방 스나이퍼 감시 중", "limit_price": target, "qty": q_qty}

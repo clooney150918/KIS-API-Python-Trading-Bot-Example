@@ -1,11 +1,13 @@
 # ==========================================================
 # FILE: main.py
 # ==========================================================
+# 🚨 MODIFIED: [Case 34 전역 GC 락온] 디스크 용량 고갈 붕괴 방어를 위해 `TimedRotatingFileHandler` 이식 및 7일 초과 로그 자동 영구 소각 배선 개통
 # 🚨 MODIFIED: [V73.15 타임라인 디커플링 대통합] 17:05 KST V14 선제 타격 및 V-REV 스냅샷 분리 락온
 # 🚨 MODIFIED: [맹점 4 수술] 서머타임 래핑 타임 패러독스 차단 및 KST 네이티브 위임 락온
 # ==========================================================
 import os
 import logging
+from logging.handlers import TimedRotatingFileHandler # 🚨 NEW: [Case 34] 로깅 로테이션 모듈 전진 배치
 import datetime
 import asyncio
 import math 
@@ -64,13 +66,15 @@ if not all([TELEGRAM_TOKEN, APP_KEY, APP_SECRET, CANO, ADMIN_CHAT_ID]):
     exit(1)
 
 est_zone = ZoneInfo('America/New_York')
-log_filename = f"logs/bot_app_{datetime.datetime.now(est_zone).strftime('%Y%m%d')}.log"
+
+# 🚨 MODIFIED: [Case 34] 로그명 단일화 및 TimedRotatingFileHandler 주입 (7일치 백업 유지, 이전 영구 소각)
+log_filename = "logs/bot_app.log"
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
     level=logging.INFO,
     handlers=[
-        logging.FileHandler(log_filename, encoding='utf-8'),
+        TimedRotatingFileHandler(log_filename, when="midnight", interval=1, backupCount=7, encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -175,7 +179,7 @@ def main():
     latest_version = cfg.get_latest_version() 
     
     print("=" * 60)
-    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V77.34 팩트 교정본)")
+    print(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V79.50 팩트 교정본)")
     print("=" * 60)
     
     perform_self_cleaning()

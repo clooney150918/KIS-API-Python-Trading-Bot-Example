@@ -1,22 +1,11 @@
 # ==========================================================
-# [volatility_engine.py] - 🌟 100% 통합 무결점 완성본 🌟
-# ⚠️ V3.2 패치: 기초지수 1년 ATR 절대 진폭 고정 및 공포지수 방향타 스위치 엔진 탑재
-# 💡 [V24.09 패치] 야후 파이낸스 교착(Deadlock) 방어용 timeout=5 전면 이식 완료
-# 💡 [V24.11 패치] 클래스 래퍼(VolatilityEngine) 구조 도입 및 calculate_weight 공통 인터페이스 신설
-# 🚨 [PEP 8 포맷팅 패치] 미사용 변수(weight) 100% 소각 (Ruff F841 교정 완료)
-# 🚨 [V27.17 그랜드 수술] 코파일럿 합작 - 가중치 무제한 폭주(Black Swan) 락온 방어(0.5~2.0), 
-# UnboundLocalError 런타임 즉사 교정, 임시 파일 찌꺼기(Disk Leak) 소각, 
-# 야후 파이낸스 다중인덱스(MultiIndex) 붕괴 스마트 우회 엔진 및 ATR 최소 데이터 검증망 이식
-# 🚨 MODIFIED: [V40.XX 옴니 매트릭스 전면 수술] 후행성 60MA/120MA 엔진 전면 소각 및
-# 전일 VWAP vs 당일 실시간 VWAP 동행 지표(Coincident Indicator) 듀얼 모멘텀 엔진으로 100% 교체.
-# 🚨 MODIFIED: [V61.00 숏(SOXS) 전면 소각 작전 지시서 적용]
-# _fetch_vwap_momentum_regime_sync 내부의 하락장(BEAR, SOXS) 판별 블록 전면 소각 및 하락장 시 NONE 타겟 락온으로 간소화.
-# 🚨 MODIFIED: [V61.01 숏(SOXS) 전면 소각 작전 지시서 적용] determine_market_regime 독스트링 내 SOXS 환각 텍스트 100% 영구 적출 완료.
-# 🚨 MODIFIED: [V61.03 데드코드 소각] 시스템 전역에서 호출되지 않는 레거시 함수 get_tqqq_target_drop, get_soxl_target_drop 영구 적출 완료.
-# 🚨 MODIFIED: [V61.04 들여쓰기 붕괴 방어] 런타임 즉사(IndentationError)를 유발하던 스페이스 오차 100% 팩트 교정 완료.
-# 🚨 MODIFIED: [제4경고 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
-# 🚨 MODIFIED: [결함 3 수술] ATR14 연산 내 ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온 팩트 결속
-# 🚨 NEW: [Case 32, Case 33] yfinance 타임아웃 3단 지수 백오프 및 TPS 캡핑 방어막 전면 이식 완료
+# FILE: volatility_engine.py
+# ==========================================================
+# 🚨 MODIFIED: [Insight 25] np.inf 수학적 예외 차단. log_returns 연산 중 발생하는 무한대 값을 np.nan으로 치환하여 ZeroDivision 크래시를 완벽 차단.
+# 🚨 MODIFIED: [V40.XX 옴니 매트릭스 전면 수술] 후행성 60MA/120MA 엔진 전면 소각 및 동행 지표(Coincident Indicator) 듀얼 모멘텀 엔진 100% 교체.
+# 🚨 MODIFIED: [Case 04 절대 헌법 준수] 횡보장 락다운 영구 소각 및 롱(SOXL) 진입 무조건 허용 락온
+# 🚨 MODIFIED: [Case 05] ZeroDivision 런타임 붕괴 방어용 replace(0, np.nan) 락온 결속
+# 🚨 NEW: [Case 32 & 33] yfinance 타임아웃 3단 지수 백오프 및 TPS 캡핑 방어막 전면 이식 완료
 # ==========================================================
 import yfinance as yf
 import pandas as pd
@@ -62,6 +51,7 @@ def _load_cache(key, default_val):
             pass
     return default_val
 
+# 🚨 MODIFIED: [제4헌법 준수] 원자적 쓰기(Atomic Write) 강제 락온
 def _save_cache(key, value):
     data = {}
     if os.path.exists(CACHE_FILE):
@@ -91,11 +81,11 @@ def _save_cache(key, value):
             pass
         logging.error(f"⚠️ [Engine] 캐시 저장 실패 및 임시 파일 소각: {e}")
 
-# 🚨 MODIFIED: [Case 33] 3단 지수 백오프 이식
+# 🚨 NEW: [Case 33] 3단 지수 백오프 이식
 def _calculate_1y_atr(ticker, cache_key, default_atr):
     for attempt in range(3):
         try:
-            time.sleep(0.06) # 🚨 MODIFIED: [Case 32] TPS 캡핑
+            time.sleep(0.06) # 🚨 NEW: [Case 32] TPS 캡핑
             df = yf.download(ticker, period="2y", interval="1d", progress=False, timeout=5)
             if df.empty:
                 if attempt < 2:
@@ -114,10 +104,11 @@ def _calculate_1y_atr(ticker, cache_key, default_atr):
             df['TR'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
             df['ATR14'] = df['TR'].rolling(window=14).mean()
             
+            # 🚨 MODIFIED: [Case 05] ZeroDivision 런타임 붕괴 방어 및 Infinity(무한대) 예외 차단
             df['Close'] = df['Close'].replace(0, np.nan)
             df['ATR14_pct'] = (df['ATR14'] / df['Close']) * 100
             
-            df_valid = df.dropna(subset=['ATR14_pct'])
+            df_valid = df.replace([np.inf, -np.inf], np.nan).dropna(subset=['ATR14_pct'])
             df_1y = df_valid.tail(252)
             
             if df_1y.empty or len(df_1y) < MIN_ATR_ROWS:
@@ -204,11 +195,13 @@ def get_soxl_target_drop_full():
             
             soxx_data = _flatten_columns(soxx_data)
                     
-            closes = soxx_data['Close'].dropna()
-            log_returns = np.log(closes / closes.shift(1))
+            closes = soxx_data['Close'].replace(0, np.nan).dropna()
+            
+            # 🚨 MODIFIED: [Insight 25] np.inf 수학적 예외 차단
+            log_returns = np.log(closes / closes.shift(1)).replace([np.inf, -np.inf], np.nan)
             hv_20d = log_returns.rolling(window=20).std() * np.sqrt(252) * 100
             
-            valid_hvs = hv_20d.dropna()
+            valid_hvs = hv_20d.replace([np.inf, -np.inf], np.nan).dropna()
             valid_hvs_1y = valid_hvs.tail(252)
             
             if valid_hvs_1y.empty:
@@ -286,10 +279,12 @@ def _fetch_vwap_momentum_regime_sync(broker_instance=None) -> dict:
                 target_ticker = "SOXL"
                 msg_desc = "상승장 (VWAP 상승 & 양봉)"
             elif curr_vwap < prev_vwap and current_price < day_open:
+                # 🚨 MODIFIED: [Case 04] SOXS 운용 영구 소각, NONE 타겟 락온
                 regime = "BEAR"
                 target_ticker = "NONE" 
                 msg_desc = "하락장 (VWAP 하락 & 음봉) - 숏 타격 영구 소각"
             else:
+                # 🚨 MODIFIED: [Case 04] 횡보장 락다운 영구 소각, SOXL 진입 무조건 허용
                 regime = "SIDEWAYS"
                 target_ticker = "SOXL"
                 msg_desc = "횡보장 (VWAP과 캔들 방향 충돌)"

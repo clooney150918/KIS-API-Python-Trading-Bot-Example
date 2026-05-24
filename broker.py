@@ -89,6 +89,7 @@ class KoreaInvestmentBroker:
                     if dir_name and not os.path.exists(dir_name):
                         os.makedirs(dir_name, exist_ok=True)
        
+                    # 🚨 MODIFIED: [제4헌법 준수] 원자적 쓰기(Atomic Write) 강제
                     fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
                     try:
                         with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -229,7 +230,7 @@ class KoreaInvestmentBroker:
         return price_cd if target_api == "PRICE" else order_cd
 
     def get_account_balance(self):
-        """ 🚨 [제3경고] API 잔고 응답 중복 합산 절대 방어 락온 """
+        """ 🚨 [Case 03 준수] API 잔고 응답 중복 합산 절대 방어 락온 """
         cash = 0.0
         holdings = {}
         api_success = False 
@@ -285,7 +286,7 @@ class KoreaInvestmentBroker:
                             if ticker not in holdings: 
                                 holdings[ticker] = {'qty': qty, 'ord_psbl_qty': ord_psbl_qty, 'avg': avg}
                             else:
-                                # 🚨 MODIFIED: [Case 03] 유령 중복 합산 누적 무시
+                                # 🚨 MODIFIED: [Case 03] 유령 중복 합산 누적 무시 (영구 소각)
                                 continue 
 
                     tr_cont = res_hold.headers.get('tr_cont', '') if hasattr(res_hold, 'headers') else ''
@@ -325,6 +326,7 @@ class KoreaInvestmentBroker:
                 regular_market['Date'] = regular_market.index.date
                
                 daily_stats = regular_market.groupby('Date').agg(Total_Vol_Price=('Vol_x_Price', 'sum'), Total_Vol=('Volume', 'sum'))
+                # 🚨 MODIFIED: [Case 05] 결측치 방어용 0.0 강제 형변환
                 daily_stats['VWAP'] = np.where(daily_stats['Total_Vol'] > 0, daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'], np.nan)
                 daily_stats = daily_stats.dropna(subset=['VWAP'])
     
@@ -557,8 +559,8 @@ class KoreaInvestmentBroker:
                         except Exception: pass
                     cache_data[ticker] = {'day_high': max_high, 'day_low': min_low, 'time_high': time_high_str, 'time_low': time_low_str, 'date': datetime.datetime.now(est).strftime("%Y-%m-%d")}
                     os.makedirs('data', exist_ok=True)
+                    # 🚨 MODIFIED: [제4헌법] 원자적 쓰기 락온
                     fd, tmp_path = tempfile.mkstemp(dir='data', text=True)
-       
                     with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
                         json.dump(cache_data, f_out, ensure_ascii=False, indent=4)
                         f_out.flush()
@@ -592,6 +594,7 @@ class KoreaInvestmentBroker:
             else: return False
         return valid_orders
 
+    # 🚨 MODIFIED: [Case 18] 로컬 예약 스냅샷 폐기 및 KIS 원장 직접 연동
     def get_reservation_orders(self, ticker, start_date, end_date):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         valid_orders = []

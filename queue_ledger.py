@@ -1,16 +1,9 @@
 # ==========================================================
+# FILE: queue_ledger.py
+# ==========================================================
 # [queue_ledger.py]
 # ⚠️ 신규 역추세 엔진(V_REV) 전용 LIFO 로트(Lot) 장부 관리 모듈
-# 💡 [핵심 수술] 수량 동기화(CALIB) 및 Pop 차감 로직 내 Safe Casting (None 방어) 전면 이식 완료
-# 🚨 [V27.02 핫픽스] 동일 일자(Same Day) 로트(Lot) 파편화 방지 및 자동 병합(Merge) 엔진 탑재
-# 🚨 [V27.02 핫픽스] CALIB_ADD (보정 추가) 시 평단가 $0.00 붕괴 버그 원천 차단
-# 🚨 [V27.14 그랜드 수술] 코파일럿 합작 - Atomic Write(장부 증발 방어), Thread Lock(동시접근 덮어쓰기 차단), 유령 로트(0주) 무한루프 소각, EST 타임존 병합 통일 및 백업 자가 치유(Self-Healing) 파이프라인 완벽 구축
-# 🚨 [V27.15 핫픽스] 초기화 Torn Write 방어, add_lot $0.00 주입 차단, pop_lots 미달 차감 감사 추적 및 sync_with_broker 런타임 붕괴 방어막 이식
-# MODIFIED: [V30.09 핫픽스] pytz 영구 적출 및 ZoneInfo('America/New_York') 이식으로 LMT 버그 차단
-# 🚨 MODIFIED: [V55.00 오퍼레이션 SSOT - 텔레그램 다이렉트 I/O 병목 및 동시성 오염 원천 차단]
-# 외부 모듈(telegram_callbacks, telegram_states, telegram_sync_engine)이 
-# 파일 I/O를 직접 수행하며 발생하는 락(Lock) 우회 맹점을 차단하기 위한 4대 스레드 세이프 전용 메서드 신설.
-# 🚨 MODIFIED: [V77.29 데드코드 영구 소각] 타 모듈에서 직접 연산하므로 방치된 get_total_qty 100% 영구 적출 완료.
+# 🚨 NEW: [멱등성 수술] 액면분할 시 큐 장부까지 정밀 소급 반영하는 apply_stock_split 이식 완료
 # ==========================================================
 import os
 import json
@@ -43,7 +36,6 @@ class QueueLedger:
         return datetime.now(est).strftime("%Y-%m-%d")
 
     def _load_unsafe(self):
-        """Must be called while holding self._lock."""
         last_exc = None
         for _ in range(3):
             try:
@@ -72,9 +64,7 @@ class QueueLedger:
         
         raise RuntimeError(f"🚨 [FATAL ERROR] {self.file_path} 장부 파일 읽기 실패. 데이터 유실 방지를 위해 시스템을 중단합니다. 원인: {last_exc}")
 
-    # MODIFIED: [V44.49 tempfile 기반 멱등성 보장 원자적 쓰기 락온]
     def _save_unsafe(self, data):
-        """Must be called while holding self._lock."""
         dir_name = os.path.dirname(self.file_path) or '.'
         if not os.path.exists(dir_name):
             os.makedirs(dir_name, exist_ok=True)
@@ -107,6 +97,25 @@ class QueueLedger:
                 time.sleep(0.1)
                 
         logging.error(f"🚨 [QueueLedger] 장부 저장 최종 실패: {self.file_path} — 데이터 유실 위험!")
+
+    # 🚨 NEW: [멱등성 수술] V-REV 큐 장부 액면분할 정밀 소급 적용
+    def apply_stock_split(self, ticker, ratio):
+        if ratio <= 0: return
+        with self._lock:
+            data = self._load_unsafe()
+            q = data.get(ticker, [])
+            changed = False
+            for lot in q:
+                raw_new_qty = float(lot.get("qty", 0)) * ratio
+                new_qty = math.floor(raw_new_qty + 0.5)
+                if new_qty > 0:
+                    lot["qty"] = new_qty
+                    old_price = float(lot.get("price", 0.0))
+                    lot["price"] = round(old_price / ratio, 4)
+                    changed = True
+            if changed:
+                data[ticker] = q
+                self._save_unsafe(data)
 
     def get_queue(self, ticker):
         with self._lock:
@@ -258,9 +267,7 @@ class QueueLedger:
             self._save_unsafe(data)
             return True
 
-    # NEW: [V55.00 오퍼레이션 SSOT - 텔레그램 전용 스레드 세이프 메서드 4종 신설]
     def delete_lot(self, ticker, target_date):
-        """특정 날짜(target_date)의 지층을 핀셋으로 도려내어 삭제합니다."""
         with self._lock:
             data = self._load_unsafe()
             q = data.get(ticker, [])
@@ -269,7 +276,6 @@ class QueueLedger:
             self._save_unsafe(data)
 
     def edit_lot(self, ticker, target_date, qty, price):
-        """특정 날짜(target_date)의 지층 수량과 평단가를 정밀 수정합니다."""
         qty_int = int(float(qty or 0))
         price_f = float(price or 0.0)
         with self._lock:
@@ -284,15 +290,14 @@ class QueueLedger:
             self._save_unsafe(data)
 
     def clear_queue(self, ticker):
-        """해당 종목의 큐 장부를 100% 완전 소각(초기화)합니다."""
         with self._lock:
             data = self._load_unsafe()
             data[ticker] = []
             self._save_unsafe(data)
 
     def overwrite_queue(self, ticker, q_data):
-        """수동 매수(MANUAL_SYNC) 등 팩트 지층 배열을 강제 주입(덮어쓰기)합니다."""
         with self._lock:
             data = self._load_unsafe()
-            data[ticker] = q_data
+            sorted_q = sorted(q_data, key=lambda x: str(x.get('date', '0000-00-00')))
+            data[ticker] = sorted_q
             self._save_unsafe(data)

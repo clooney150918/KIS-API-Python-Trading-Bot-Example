@@ -2,12 +2,7 @@
 # FILE: config.py
 # ==========================================================
 # MODIFIED: [V54.03 JSON 락온(Mutex) 방어막 전면 이식]
-# 🚨 MODIFIED: [V77.29 데드코드 영구 소각] 중복 선언된 get_version_history 라우터를 전면 적출하고 get_full_version_history로 단일 진실 공급원(SSOT) 락온 완료
-# 🚨 NEW: [Case 11] AVWAP 다중 출격(Multi-Sortie) 모드 데이터 영속성 맵핑 및 락온
-# 🚨 MODIFIED: [Case 27 절대 위반 수술] 에스크로(Escrow) 엔진 100% 영구 적출 및 잔재 코드(Reset Locks) 소각 완료
-# 🚨 NEW: [데이터 기아 방어] V-REV 및 AVWAP 갭 스위칭 임계치 제어 파라미터 맵핑 100% 팩트 이식 완료
-# 🚨 MODIFIED: [맹점 2 수술] AVWAP vs V-REV 갭 임계치 메모리 충돌 원천 차단 (상태 오염 방어)
-# 🚨 MODIFIED: [제4헌법 준수] 파일 I/O 원자적 쓰기 스코프 누수(f.flush, os.fsync) 팩트 교정 및 ValueError 런타임 붕괴 완벽 차단
+# 🚨 NEW: [Case 34] 락온 센티널 파일 고아화(Orphan Lock) 맹점 영구 소각
 # ==========================================================
 
 import json
@@ -70,7 +65,6 @@ class ConfigManager:
             "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
             "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",       
             "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json",
-            # NEW: [맹점 2] 상태 오염(Coupling) 원천 차단을 위해 AVWAP 갭 임계치 전용 파일 경로 신설
             "AVWAP_GAP_THRESH_CFG": "data/avwap_gap_thresh.json"
         }
         
@@ -109,6 +103,12 @@ class ConfigManager:
                 finally:
                     if fcntl:
                         fcntl.flock(lf, fcntl.LOCK_UN)
+                    # 🚨 NEW: [Case 34] 락 해제 후 센티널 파일 영구 소각 (Orphan Lock 패러독스 방어)
+                    try:
+                        if os.path.exists(sentinel):
+                            os.remove(sentinel)
+                    except Exception:
+                        pass
 
     def _load_json(self, filename, default=None):
         if os.path.exists(filename):
@@ -171,7 +171,6 @@ class ConfigManager:
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 fd = None
                 f.write(str(content))
-                # MODIFIED: [제4헌법 준수] 파일 스트림 스코프 이탈 전 플러시 및 디스크 동기화 강제 배치 (ValueError 방어)
                 f.flush()
                 os.fsync(f.fileno()) 
             
@@ -204,7 +203,6 @@ class ConfigManager:
             d[ticker] = bool(v)
             self._save_json(self.FILES["VREV_GAP_SWITCH_CFG"], d)
             
-    # MODIFIED: [맹점 2 수술] AVWAP 전용 임계치 상태 격리 및 디커플링 팩트 교정
     def get_avwap_gap_threshold(self, ticker):
         return float(self._load_json(self.FILES["AVWAP_GAP_THRESH_CFG"], {}).get(ticker, -0.67))
 

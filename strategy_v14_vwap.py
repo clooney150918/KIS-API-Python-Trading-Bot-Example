@@ -1,7 +1,9 @@
 # ==========================================================
 # FILE: strategy_v14_vwap.py
 # ==========================================================
-# 🚨 MODIFIED: [스냅샷 무결성 파이프라인 팩트 교정] os.path.exists 방어막 소각
+# 🚨 MODIFIED: [Case 08 절대 규칙 준수] 스냅샷 무결성 파이프라인 팩트 교정 - os.path.exists 방어막 소각
+# 🚨 MODIFIED: [제4헌법 준수] 원자적 쓰기(Atomic Write) 강제 락온
+# 🚨 MODIFIED: [Case 16 위반 교정] 원자적 쓰기 실패 시 UnboundLocalError 연쇄 붕괴를 막기 위한 temp_path 스코프 전진 배치
 # ==========================================================
 import math
 import logging
@@ -69,39 +71,60 @@ class V14VwapStrategy:
                 "SELL_QTY": int(self.executed.get("SELL_QTY", {}).get(ticker, 0))
             }
         }
+        # 🚨 MODIFIED: [Case 16] 변수 스코프 최상단 전진 배치
+        fd = None
+        temp_path = None
         try:
             dir_name = os.path.dirname(state_file)
             if dir_name and not os.path.exists(dir_name):
                 os.makedirs(dir_name, exist_ok=True) 
             fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                fd = None
                 json.dump(data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno()) 
             os.replace(temp_path, state_file)
+            temp_path = None
         except Exception as e:
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except OSError: pass
             logging.critical(f"🚨 [STATE SAVE FAILED] {ticker} 상태 저장 실패. 봇 기억상실 위험! 원인: {e}")
 
     def save_daily_snapshot(self, ticker, plan_data):
         today_str = self._get_logical_date_str()
         snap_file = self._get_snapshot_file(ticker)
         
-        # 🚨 [스냅샷 무결성 락온] os.path.exists 방어막 영구 소각 (무조건 최신 팩트로 오버라이드)
         data = {
             "date": today_str,
             "plan": plan_data
         }
+        # 🚨 MODIFIED: [Case 16] 변수 스코프 최상단 전진 배치
+        fd = None
+        temp_path = None
         try:
             dir_name = os.path.dirname(snap_file)
             if dir_name and not os.path.exists(dir_name):
                 os.makedirs(dir_name, exist_ok=True)
             fd, temp_path = tempfile.mkstemp(dir=dir_name or '.', text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                fd = None
                 json.dump(data, f, ensure_ascii=False, indent=4)
                 f.flush()
                 os.fsync(f.fileno()) 
             os.replace(temp_path, snap_file)
+            temp_path = None
         except Exception as e:
+            if fd is not None:
+                try: os.close(fd)
+                except OSError: pass
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except OSError: pass
             logging.critical(f"🚨 [SNAPSHOT SAVE FAILED] {ticker} 스냅샷 저장 실패. 지시서 보존 불가! 원인: {e}")
 
     def load_daily_snapshot(self, ticker):
@@ -276,21 +299,3 @@ class V14VwapStrategy:
         
         self.save_daily_snapshot(ticker, plan_data=plan_result)
         return plan_result
-
-    def get_dynamic_plan(self, ticker, current_price, prev_close, current_weight, min_idx, alloc_cash, qty, avg_price, market_type="REG"):
-        self._load_state_if_needed(ticker)
-        cached_plan = self.load_daily_snapshot(ticker)
-        if cached_plan:
-            return cached_plan
-        else:
-            return self.get_plan(
-                ticker=ticker,
-                current_price=current_price,
-                avg_price=avg_price,
-                qty=qty,
-                prev_close=prev_close,
-                available_cash=alloc_cash,
-                is_simulation=True,
-                is_snapshot_mode=True,
-                market_type=market_type
-            )

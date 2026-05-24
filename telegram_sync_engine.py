@@ -1,8 +1,10 @@
 # ==========================================================
 # FILE: telegram_sync_engine.py
 # ==========================================================
-# 🚨 MODIFIED: [Case 27 절대 위반 교정] 에스크로 동기화(_sync_escrow_cash) 코루틴 및 호출부 전면 영구 소각 완료
-# 🚨 NEW: [Case 33 절대 규칙] 3단 지수 백오프 및 KIS 외부 API 연산망 전면 이식 완료
+# 🚨 MODIFIED: [V-REV 및 AVWAP 디커플링 누수 차단] 액면분할 감지 시 모든 장부 소급 보정
+# 🚨 MODIFIED: [제1헌법 준수] 비동기 함수 내 QueueLedger 인스턴스화 격리
+# 🚨 MODIFIED: [제1헌법 준수] os.path.exists 및 open() 동기 파일 I/O 뇌관 비동기 래핑 100% 완료
+# 🚨 MODIFIED: [네임스페이스 결측 붕괴 교정] pandas 모듈 전진 배치(import pandas as pd)로 NameError 원천 봉쇄
 # ==========================================================
 import logging
 import datetime
@@ -14,6 +16,7 @@ import json
 import tempfile
 import traceback
 import yfinance as yf
+import pandas as pd # 🚨 NEW: [네임스페이스 누락 팩트 교정]
 import pandas_market_calendars as mcal
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -37,9 +40,9 @@ class TelegramSyncEngine:
             async with self.tx_lock:
                 last_split_date = await asyncio.to_thread(self.cfg.get_last_split_date, ticker)
                 split_ratio, split_date = 0.0, ""
-                # 🚨 MODIFIED: [Case 33] 3단 지수 백오프
                 for attempt in range(3):
                     try:
+                        await asyncio.sleep(0.06)
                         split_ratio, split_date = await asyncio.wait_for(
                             asyncio.to_thread(self.broker.get_recent_stock_split, ticker, last_split_date), timeout=15.0
                         )
@@ -51,10 +54,23 @@ class TelegramSyncEngine:
                         else: await asyncio.sleep(1.0 * (2 ** attempt))
                 
                 if split_ratio > 0.0 and split_date != "":
+                    est = ZoneInfo('America/New_York')
+                    now_est = datetime.datetime.now(est)
                     await asyncio.to_thread(self.cfg.apply_stock_split, ticker, split_ratio)
+                    
+                    if not getattr(self, 'queue_ledger', None):
+                        from queue_ledger import QueueLedger
+                        self.queue_ledger = await asyncio.to_thread(QueueLedger)
+                        
+                    if getattr(self, 'queue_ledger', None):
+                        await asyncio.to_thread(self.queue_ledger.apply_stock_split, ticker, split_ratio)
+                        
+                    if hasattr(self.strategy, 'v_avwap_plugin'):
+                        await asyncio.to_thread(self.strategy.v_avwap_plugin.apply_stock_split, ticker, split_ratio, now_est)
+                        
                     await asyncio.to_thread(self.cfg.set_last_split_date, ticker, split_date)
                     split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
-                    await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 장부의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
+                    await context.bot.send_message(chat_id, f"✂️ <b>[{ticker}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {split_date})\n▫️ 봇이 기존 V14 장부, V-REV 큐 장부, AVWAP 상태 캐시의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
                  
                 kst = ZoneInfo('Asia/Seoul')
                 now_kst = datetime.datetime.now(kst)
@@ -62,9 +78,10 @@ class TelegramSyncEngine:
                 now_est = datetime.datetime.now(est)
                 
                 def _get_last_trade_date():
+                    time.sleep(0.06)
                     nyse = mcal.get_calendar('NYSE')
-                    schedule = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
-                    return schedule
+                    schedule_data = nyse.schedule(start_date=(now_est - datetime.timedelta(days=10)).date(), end_date=now_est.date())
+                    return schedule_data
 
                 schedule = pd.DataFrame()
                 for attempt in range(3):
@@ -106,7 +123,7 @@ class TelegramSyncEngine:
                 if is_rev:
                     if not getattr(self, 'queue_ledger', None):
                         from queue_ledger import QueueLedger
-                        self.queue_ledger = QueueLedger()
+                        self.queue_ledger = await asyncio.to_thread(QueueLedger)
                     
                     q_data_check = await asyncio.to_thread(self.queue_ledger.get_queue, ticker)
                     vrev_ledger_qty_for_check = sum(int(float(item.get("qty") or 0)) for item in q_data_check)
@@ -454,10 +471,14 @@ class TelegramSyncEngine:
                                         yield_pct=snapshot['realized_pnl_pct'], invested=snapshot['avg_price'] * snapshot['cleared_qty'], 
                                         revenue=snapshot['clear_price'] * snapshot['cleared_qty'], end_date=cap_dt_str[:10]
                                     )
-                                    if img_path and os.path.exists(img_path):
-                                        with open(img_path, 'rb') as f_out:
-                                            if img_path.lower().endswith('.gif'): await context.bot.send_animation(chat_id=chat_id, animation=f_out)
-                                            else: await context.bot.send_photo(chat_id=chat_id, photo=f_out)
+                                    # 🚨 MODIFIED: [제1헌법] os.path.exists 비동기 격리 락온
+                                    is_img_exist = await asyncio.to_thread(os.path.exists, img_path) if img_path else False
+                                    if img_path and is_img_exist:
+                                        def _read_img2(p):
+                                            with open(p, 'rb') as f_in: return f_in.read()
+                                        img_bytes2 = await asyncio.to_thread(_read_img2, img_path)
+                                        if img_path.lower().endswith('.gif'): await context.bot.send_animation(chat_id=chat_id, animation=img_bytes2)
+                                        else: await context.bot.send_photo(chat_id=chat_id, photo=img_bytes2)
                                 except Exception: pass
                         else:
                             await context.bot.send_message(chat_id, f"⚠️ <b>[{ticker} V-REV 0주 강제 정산 완료]</b>\n▫️ 0주를 확인하여 큐를 안전하게 비웠으나 통신 지연으로 졸업 카드는 생략되었습니다.", parse_mode='HTML')
@@ -469,7 +490,10 @@ class TelegramSyncEngine:
                         if adjusted_actual_qty > 0 and adjusted_actual_qty < vrev_ledger_qty:
                             gap_qty = vrev_ledger_qty - adjusted_actual_qty
                             vwap_state_file = f"data/vwap_state_REV_{ticker}.json"
-                            if os.path.exists(vwap_state_file):
+                            
+                            # 🚨 MODIFIED: [제1헌법] os.path.exists 비동기 격리 락온
+                            v_state_exists = await asyncio.to_thread(os.path.exists, vwap_state_file)
+                            if v_state_exists:
                                 try:
                                     def _read_v_state(f_path):
                                         with open(f_path, 'r', encoding='utf-8') as vf: return json.load(vf)
@@ -558,10 +582,14 @@ class TelegramSyncEngine:
                                         ticker=ticker, profit=new_hist['profit'], yield_pct=new_hist['yield'],
                                         invested=new_hist['invested'], revenue=new_hist['revenue'], end_date=new_hist['end_date']
                                     )
-                                    if img_path and os.path.exists(img_path):
-                                        with open(img_path, 'rb') as f_out:
-                                            if img_path.lower().endswith('.gif'): await context.bot.send_animation(chat_id=chat_id, animation=f_out)
-                                            else: await context.bot.send_photo(chat_id=chat_id, photo=f_out)
+                                    # 🚨 MODIFIED: [제1헌법] os.path.exists 비동기 격리 락온
+                                    is_img_exist = await asyncio.to_thread(os.path.exists, img_path) if img_path else False
+                                    if img_path and is_img_exist:
+                                        def _read_img3(p):
+                                            with open(p, 'rb') as f_in: return f_in.read()
+                                        img_bytes3 = await asyncio.to_thread(_read_img3, img_path)
+                                        if img_path.lower().endswith('.gif'): await context.bot.send_animation(chat_id=chat_id, animation=img_bytes3)
+                                        else: await context.bot.send_photo(chat_id=chat_id, photo=img_bytes3)
                                 except Exception: pass
                             else:
                                 full_ledger2 = await asyncio.to_thread(self.cfg.get_ledger)

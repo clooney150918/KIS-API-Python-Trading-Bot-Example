@@ -1,10 +1,7 @@
 # ==========================================================
 # FILE: strategy_v_avwap.py
 # ==========================================================
-# 🚨 MODIFIED: [V78.00 팩트 교정] AVWAP 오프셋 연산 50% -> 45% 하향 락온 적용.
-# 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 TPS 캡핑 방어망 전면 이식
-# 🚨 NEW: [Case 11 타임 슬라이싱 차단벽] 13:00 EST 도달 시 신규 진입 덫 장전을 원천 차단(SHUTDOWN)하는 절대 금지선(Time-Guillotine) 이식 완료
-# 🚨 MODIFIED: [V79.50 MA5 앵커 스위칭] 기존 시간 기반 동적 오프셋을 전면 폐기하고 MA5(5일 평균 종가) 베이스 앵커로 락온. 결측 시 전일종가(PrevClose)로 Safe Fallback.
+# 🚨 NEW: [멱등성 수술] 액면분할 시 AVWAP 캐시 팩트를 정밀 보정하는 apply_stock_split 이식 완료
 # ==========================================================
 import logging
 import datetime
@@ -14,6 +11,7 @@ import random
 import time 
 import yfinance as yf
 import pandas as pd
+import numpy as np 
 import json
 import os
 import tempfile
@@ -41,9 +39,12 @@ class VAvwapHybridPlugin:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                
+                if not isinstance(data, dict):
+                    data = {}
 
                 if data.get('date') != today_str:
-                    qty = data.get('qty', 0)
+                    qty = int(float(str(data.get('qty') or 0).replace(',', ''))) 
                     if qty > 0:
                         data['bought'] = True
                         data['shutdown'] = False
@@ -61,6 +62,7 @@ class VAvwapHybridPlugin:
                         data['limit_order_placed'] = False
                         data['placed_target_th'] = 0.0
                         data['trap_placed_time'] = ""
+                        data['buy_odno'] = ""  
 
                     data['PM_H'] = 0.0
                     data['PM_L'] = 0.0
@@ -74,16 +76,17 @@ class VAvwapHybridPlugin:
                     data['date'] = today_str
                     self.save_state(ticker, now_est, data)
                 
-                data['PM_H'] = float(data.get('PM_H', 0.0))
-                data['PM_L'] = float(data.get('PM_L', 0.0))
-                data['T_H'] = float(data.get('T_H', 0.0))
-                data['T_L'] = float(data.get('T_L', 0.0))
-                data['offset'] = float(data.get('offset', 0.0))
-                data['executed_buy'] = bool(data.get('executed_buy', False))
+                data['PM_H'] = float(str(data.get('PM_H') or 0.0).replace(',', ''))
+                data['PM_L'] = float(str(data.get('PM_L') or 0.0).replace(',', ''))
+                data['T_H'] = float(str(data.get('T_H') or 0.0).replace(',', ''))
+                data['T_L'] = float(str(data.get('T_L') or 0.0).replace(',', ''))
+                data['offset'] = float(str(data.get('offset') or 0.0).replace(',', ''))
+                data['executed_buy'] = bool(data.get('executed_buy'))
                 
-                data['limit_order_placed'] = bool(data.get('limit_order_placed', False))
-                data['placed_target_th'] = float(data.get('placed_target_th', 0.0))
-                data['trap_placed_time'] = str(data.get('trap_placed_time', ""))
+                data['limit_order_placed'] = bool(data.get('limit_order_placed'))
+                data['placed_target_th'] = float(str(data.get('placed_target_th') or 0.0).replace(',', ''))
+                data['trap_placed_time'] = str(data.get('trap_placed_time') or "")
+                data['buy_odno'] = str(data.get('buy_odno') or "") 
 
                 return data
             except Exception:
@@ -94,7 +97,7 @@ class VAvwapHybridPlugin:
             "avg_price": 0.0, "daily_bought_qty": 0, "daily_sold_qty": 0, 
             "dump_jitter_sec": random.randint(0, 180),
             "PM_H": 0.0, "PM_L": 0.0, "T_H": 0.0, "T_L": 0.0, "offset": 0.0,
-            "limit_order_placed": False, "placed_target_th": 0.0, "trap_placed_time": ""
+            "limit_order_placed": False, "placed_target_th": 0.0, "trap_placed_time": "", "buy_odno": ""
         }
 
     def save_state(self, ticker, now_est, state_data):
@@ -106,6 +109,8 @@ class VAvwapHybridPlugin:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     merged_data = json.load(f)
+                if not isinstance(merged_data, dict):
+                    merged_data = {}
             except Exception:
                 pass
 
@@ -116,23 +121,45 @@ class VAvwapHybridPlugin:
         merged_data['date'] = today_str
 
         try:
-            dir_name = os.path.dirname(file_path)
-            if dir_name and not os.path.exists(dir_name):
+            dir_name = os.path.dirname(file_path) or '.'
+            if not os.path.exists(dir_name):
                 os.makedirs(dir_name, exist_ok=True)
 
             fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(merged_data, f, ensure_ascii=False, indent=4)
                 f.flush()
-                os.fsync(f.fileno())
+                os.fsync(f.fileno()) 
             os.replace(temp_path, file_path)
         except Exception as e:
             logging.error(f"🚨 [V_AVWAP] 상태 저장 실패 (원자적 쓰기 에러): {e}")
 
+    # 🚨 NEW: [멱등성 수술] AVWAP 암살자 상태 캐시 액면분할 정밀 소급 적용
+    def apply_stock_split(self, ticker, ratio, now_est):
+        if ratio <= 0: return
+        state = self.load_state(ticker, now_est)
+        qty = int(float(str(state.get("qty", 0)).replace(',', '')))
+        if qty > 0:
+            new_qty = math.floor((qty * ratio) + 0.5)
+            old_avg = float(str(state.get("avg_price", 0.0)).replace(',', ''))
+            state["qty"] = new_qty
+            state["avg_price"] = round(old_avg / ratio, 4)
+            
+            daily_bought = int(float(str(state.get("daily_bought_qty", 0)).replace(',', '')))
+            daily_sold = int(float(str(state.get("daily_sold_qty", 0)).replace(',', '')))
+            state["daily_bought_qty"] = math.floor((daily_bought * ratio) + 0.5)
+            state["daily_sold_qty"] = math.floor((daily_sold * ratio) + 0.5)
+            
+            placed_target_th = float(str(state.get("placed_target_th", 0.0)).replace(',', ''))
+            if placed_target_th > 0:
+                state["placed_target_th"] = round(placed_target_th / ratio, 2)
+            
+            self.save_state(ticker, now_est, state)
+
     def fetch_macro_context(self, base_ticker):
         for attempt in range(3):
             try:
-                time.sleep(0.06)
+                time.sleep(0.06) 
                 tkr = yf.Ticker(base_ticker)
                 df_1m = tkr.history(period="5d", interval="1m", prepost=False, timeout=5)
     
@@ -161,7 +188,7 @@ class VAvwapHybridPlugin:
                         df_prev_day = df_prev_day.between_time('09:30', '15:59')
     
                         if not df_prev_day.empty:
-                            prev_close = float(df_prev_day['Close'].iloc[-1])
+                            prev_close = float(np.nan_to_num(df_prev_day['Close'].iloc[-1], nan=0.0))
                             df_prev_day['tp'] = (df_prev_day['High'].astype(float) + df_prev_day['Low'].astype(float) + df_prev_day['Close'].astype(float)) / 3.0
                             df_prev_day['vol'] = df_prev_day['Volume'].astype(float)
                             df_prev_day['vol_tp'] = df_prev_day['tp'] * df_prev_day['vol']
@@ -185,9 +212,9 @@ class VAvwapHybridPlugin:
                     past_first_30m = first_30m[first_30m.index.date < today_est]
     
                     if len(past_first_30m) >= 20:
-                        avg_vol_20 = float(past_first_30m['Volume'].tail(20).mean())
+                        avg_vol_20 = float(np.nan_to_num(past_first_30m['Volume'].tail(20).mean(), nan=0.0))
                     elif len(past_first_30m) > 0:
-                        avg_vol_20 = float(past_first_30m['Volume'].mean())
+                        avg_vol_20 = float(np.nan_to_num(past_first_30m['Volume'].mean(), nan=0.0))
     
                 if prev_vwap == 0.0:
                     prev_vwap = prev_close
@@ -204,6 +231,12 @@ class VAvwapHybridPlugin:
                 time.sleep(1.0 * (2 ** attempt))
 
     def get_decision(self, base_ticker=None, exec_ticker=None, base_curr_p=0.0, exec_curr_p=0.0, base_day_open=0.0, avwap_avg_price=0.0, avwap_qty=0, avwap_alloc_cash=0.0, context_data=None, df_1min_base=None, df_1min_exec=None, now_est=None, avwap_state=None, regime_data=None, is_simulation=False, sortie_mode="SINGLE", **kwargs):
+        is_holiday = kwargs.get('is_holiday', False)
+        now_est = now_est or datetime.datetime.now(ZoneInfo('America/New_York'))
+        
+        if now_est.weekday() >= 5:
+            is_holiday = True
+
         avwap_qty = avwap_qty if avwap_qty != 0 else kwargs.get('current_qty', 0)
         exec_curr_p = exec_curr_p if exec_curr_p > 0 else kwargs.get('exec_curr_p', 0.0)
         avwap_avg_price = avwap_avg_price if avwap_avg_price > 0 else kwargs.get('avwap_avg_price', kwargs.get('avg_price', 0.0))
@@ -213,7 +246,6 @@ class VAvwapHybridPlugin:
         prev_c = float(kwargs.get('prev_close', 0.0))
         ma_5day = float(kwargs.get('ma_5day', 0.0))
         
-        # 🚨 NEW: 5일 평균 종가 앵커 스위칭 (결측 시 prev_c 폴백)
         anchor_price = ma_5day if ma_5day > 0 else prev_c
         
         curr_pm_h = 0.0
@@ -225,31 +257,31 @@ class VAvwapHybridPlugin:
         curr_t_l = 0.0
         curr_candle_time_str = "" 
         
-        now_est = now_est or datetime.datetime.now(ZoneInfo('America/New_York'))
         curr_time = now_est.time()
         
         time_0400 = datetime.time(4, 0)
         time_0930 = datetime.time(9, 30)
-        time_1300 = datetime.time(13, 0) # 🚨 NEW: 13시 컷오프(Time-Guillotine)
+        time_1300 = datetime.time(13, 0)
 
         persistent_state = self.load_state(exec_ticker, now_est)
-        is_shutdown = persistent_state.get('shutdown', False)
-        executed_buy = persistent_state.get('executed_buy', False)
         
-        limit_order_placed = persistent_state.get('limit_order_placed', False)
-        placed_target_th = persistent_state.get('placed_target_th', 0.0)
-        trap_placed_time = avwap_state.get('trap_placed_time', "") if avwap_state else persistent_state.get('trap_placed_time', "")
+        is_shutdown = bool(persistent_state.get('shutdown'))
+        executed_buy = bool(persistent_state.get('executed_buy'))
+        limit_order_placed = bool(persistent_state.get('limit_order_placed'))
+        placed_target_th = float(str(persistent_state.get('placed_target_th') or 0.0).replace(',', ''))
         
-        dump_jitter_sec = persistent_state.get('dump_jitter_sec', 0)
+        trap_placed_time = str((avwap_state or {}).get('trap_placed_time') or persistent_state.get('trap_placed_time') or "")
+        
+        dump_jitter_sec = int(float(str(persistent_state.get('dump_jitter_sec') or 0).replace(',', '')))
+        pm_h = float(str(persistent_state.get('PM_H') or 0.0).replace(',', ''))
+        pm_l = float(str(persistent_state.get('PM_L') or 0.0).replace(',', ''))
+        t_h = float(str(persistent_state.get('T_H') or 0.0).replace(',', ''))
+        t_l = float(str(persistent_state.get('T_L') or 0.0).replace(',', ''))
+        offset = float(str(persistent_state.get('offset') or 0.0).replace(',', ''))
+        
         base_dump_dt = datetime.datetime.combine(now_est.date(), datetime.time(15, 20)).replace(tzinfo=ZoneInfo('America/New_York'))
         dynamic_dump_dt = base_dump_dt - datetime.timedelta(seconds=dump_jitter_sec)
         time_dynamic_dump = dynamic_dump_dt.time()
-        
-        pm_h = persistent_state.get('PM_H', 0.0)
-        pm_l = persistent_state.get('PM_L', 0.0)
-        t_h = persistent_state.get('T_H', 0.0)
-        t_l = persistent_state.get('T_L', 0.0)
-        offset = persistent_state.get('offset', 0.0)
 
         if curr_time >= time_0400:
             df_1m = df_1min_exec
@@ -264,16 +296,15 @@ class VAvwapHybridPlugin:
                     df_pm = df_1m[(df_1m['time_est'] >= '040000') & (df_1m['time_est'] <= slice_end_str)]
                     
                     if not df_pm.empty:
-                        curr_pm_h = float(df_pm['close'].max())
-                        curr_pm_l = float(df_pm['close'].min())
+                        curr_pm_h = float(np.nan_to_num(df_pm['close'].astype(float).max(), nan=0.0))
+                        curr_pm_l = float(np.nan_to_num(df_pm['close'].astype(float).min(), nan=0.0))
                     else:
                         curr_pm_h = 0.0
                         curr_pm_l = 0.0
 
-                    curr_c = float(df_today.iloc[-1]['close'])
-                    curr_l = float(df_today.iloc[-1]['low'])
+                    curr_c = float(np.nan_to_num(df_today.iloc[-1].get('close', 0.0), nan=0.0))
+                    curr_l = float(np.nan_to_num(df_today.iloc[-1].get('low', 0.0), nan=0.0))
                     
-                    # 🚨 MODIFIED: [MA5 앵커 스위칭] 타임라인 기반 스위칭 철거 및 MA5 앵커 오프셋 적용
                     curr_offset = anchor_price * amp5 * 0.45
                     
                     curr_t_h = curr_pm_h - curr_offset
@@ -302,7 +333,7 @@ class VAvwapHybridPlugin:
                 'target_price': target_price,
                 'vwap': 0.0,
                 'base_curr_p': base_curr_p,
-                'prev_vwap': context_data.get('prev_vwap', 0.0) if context_data else 0.0,
+                'prev_vwap': (context_data or {}).get('prev_vwap', 0.0) if isinstance(context_data, dict) else 0.0,
                 'PM_H': pm_h,
                 'PM_L': pm_l,
                 'T_H': t_h,
@@ -310,10 +341,15 @@ class VAvwapHybridPlugin:
                 'offset': offset,
                 'limit_order_placed': limit_order_placed,
                 'placed_target_th': placed_target_th,
-                'trap_placed_time': trap_placed_time if t_time is None else t_time 
+                'trap_placed_time': trap_placed_time if t_time is None else t_time,
+                'buy_odno': str(persistent_state.get('buy_odno') or "") 
             }
 
-        # 🚨 결측치 유입 시 T_H 하이재킹 차단 (Anchor Base 검증)
+        if is_holiday:
+            if avwap_qty > 0:
+                return _build_res('HOLD', '미국_증시_휴장일(보유물량_이월)')
+            return _build_res('WAIT', '미국_증시_휴장일(관측_중지)')
+
         if anchor_price <= 0 or amp5 <= 0:
             return _build_res('WAIT', '진입_평가용_필수데이터_결측_대기')
 
@@ -352,6 +388,7 @@ class VAvwapHybridPlugin:
             persistent_state["limit_order_placed"] = False
             persistent_state["placed_target_th"] = 0.0
             persistent_state["trap_placed_time"] = ""
+            persistent_state["buy_odno"] = ""  
             limit_order_placed = False
             placed_target_th = 0.0
             trap_placed_time = ""
@@ -362,19 +399,25 @@ class VAvwapHybridPlugin:
             logging.info(f"🛑 [09:30 기요틴 셧다운] 프리장 매수 체결 불발. 정규장 폭락 휩소를 회피하기 위해 당일 매매를 종료(퇴근)합니다.")
             return _build_res('SHUTDOWN', '09:30_기요틴_프리장미체결_정규장회피_당일퇴근')
 
-        # 🚨 NEW: 13:00 EST 신규 진입 원천 차단 (Time-Guillotine)
-        if avwap_qty == 0 and curr_time >= time_1300:
-            if limit_order_placed:
-                persistent_state["shutdown"] = True
-                if not is_simulation:
-                    self.save_state(exec_ticker, now_est, persistent_state)
-                return _build_res('SHUTDOWN', '13:00_타임오버_장전덫_파기_및_진입동결')
-            return _build_res('WAIT', '13:00_장마감3시간전_신규진입_타임라인_차단')
+        if avwap_qty == 0 and curr_time >= time_1300 and not limit_order_placed:
+            persistent_state["shutdown"] = True
+            persistent_state["limit_order_placed"] = False
+            persistent_state["placed_target_th"] = 0.0
+            persistent_state["trap_placed_time"] = ""
+            persistent_state["buy_odno"] = ""  
+            limit_order_placed = False
+            placed_target_th = 0.0
+            trap_placed_time = ""
+            
+            if not is_simulation:
+                self.save_state(exec_ticker, now_est, persistent_state)
+            
+            return _build_res('SHUTDOWN', '13:00_장마감3시간전_신규진입_타임라인_영구차단(SHUTDOWN)')
             
         if not limit_order_placed:
             if curr_l > 0 and curr_l <= t_h:
                 safe_budget = avwap_alloc_cash * 0.95
-                buy_qty = int(math.floor(safe_budget / t_h)) if t_h > 0 else 0
+                buy_qty = max(0, int(math.floor(safe_budget / t_h))) if t_h > 0 else 0 
                 
                 if buy_qty > 0:
                     persistent_state['limit_order_placed'] = True
@@ -387,7 +430,7 @@ class VAvwapHybridPlugin:
                     if not is_simulation:
                         self.save_state(exec_ticker, now_est, persistent_state)
                     
-                    logging.info(f"🚀 [V77.14 덫 장전] 1분봉 저가({curr_l:.2f}) T_H 순수 관통. 지정가({placed_target_th:.2f}) 타격 락온! (기준 캔들: {curr_candle_time_str})")
+                    logging.info(f"🚀 [V79.50 덫 장전] 1분봉 저가({curr_l:.2f}) T_H 순수 관통. 지정가({placed_target_th:.2f}) 타격 락온! (기준 캔들: {curr_candle_time_str})")
                     return _build_res('PLACE_TRAP', 'T_H순수관통_지정가_덫장전', qty=buy_qty, target_price=placed_target_th, t_time=curr_candle_time_str)
                 else:
                     return _build_res('WAIT', '조건_충족이나_예산부족(0주)_덫장전_보류')

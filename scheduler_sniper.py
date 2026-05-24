@@ -1,17 +1,7 @@
 # ==========================================================
 # FILE: scheduler_sniper.py
 # ==========================================================
-# 🚨 MODIFIED: [V77.12] 추격 매수(Negative Slippage) 원천 차단 및 순수 지정가(T_H) 절대 락온 타격 엔진 이식
-# 🚨 MODIFIED: [V77.20 조건 2 대통합] 정규장 고저가 관제탑 렌더링 파이프라인 직결 락온
-# 🚨 NEW: [Case 11] 다중 출격(Multi-Sortie) 모드 연동 및 덫 상태기계 원자적 초기화(Reset) 파이프라인 이식
-# 🚨 MODIFIED: [제2헌법 및 Case 26 절대 위반 교정] 중복 로컬 함수(get_actual_execution_price) 소각 및 벡터화 역산식 이식. KIS 에러 타전 HTML 파서 붕괴 방어막 강제 주입.
-# 🚨 MODIFIED: [맹점 1 수술] 다중 출격(Multi-Sortie) 기요틴 하극상 런타임 붕괴 원천 차단 및 셧다운 방어막 팩트 교정
-# 🚨 NEW: [Case 31] 1분봉 시차 패러독스(Latency Phantom Fill) 방어를 위한 캐시 수혈 및 다중출장 상태 초기화 배선 개통 완료.
-# 🚨 MODIFIED: [결함 1 수술] AVWAP 익절 덫 타점 2.0% 하향 락온 (타점 역전 패러독스 원천 소각 및 회전율 극대화)
-# 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
-# 🚨 MODIFIED: [V79.50] MA5 연산 비동기 병렬 스캔 및 get_decision 다이렉트 주입 배선 100% 개통
-# 🚨 MODIFIED: [Case 14 절대 헌법 준수] is_market_open 및 _get_market_hours 등 달력 API 타임아웃 10.0초 락온 완료
-# 🚨 MODIFIED: [Case 31 연계 미시구조 수술] 매수 체결 직후 KIS 잔고 편입 딜레이(Latency)로 인한 매도 덫 '증거금 부족' 리젝 방어를 위해 1.0초 대기 샌드위치 이식.
+# 🚨 MODIFIED: [Case 24] 관제탑 렌더링 무결성 사수 (is_regular_session 종속 제거 및 정규장 팩트 분리 필터링)
 # ==========================================================
 import logging
 import datetime
@@ -26,6 +16,7 @@ import tempfile
 import html  
 import yfinance as yf
 import pandas_market_calendars as mcal
+import time 
 
 from scheduler_core import is_market_open
 
@@ -57,6 +48,7 @@ async def scheduled_sniper_monitor(context):
         return
     
     def _get_market_hours():
+        time.sleep(0.06)
         nyse = mcal.get_calendar('NYSE')
         return nyse.schedule(start_date=now_est.date(), end_date=now_est.date())
 
@@ -223,6 +215,7 @@ async def scheduled_sniper_monitor(context):
                     if not tracking_cache.get(f"AVWAP_DAY_OPEN_{target_base}"):
                         def _fetch_open(tkr):
                             try:
+                                time.sleep(0.06)
                                 st = yf.Ticker(tkr)
                                 h = st.history(period="1d", interval="1m", prepost=False, timeout=5)
                                 if not h.empty: return float(h['Open'].dropna().iloc[0])
@@ -261,23 +254,24 @@ async def scheduled_sniper_monitor(context):
                             df_1min_base = res_batch[3] if not isinstance(res_batch[3], Exception) else None
                             ma_5day = float(res_batch[4]) if len(res_batch) > 4 and not isinstance(res_batch[4], Exception) and res_batch[4] else 0.0
                   
+                            # 🚨 MODIFIED: [Case 24] 관제탑 렌더링 무결성 사수 (is_regular_session 종속성 제거 및 순수 타임라인 필터링 락온)
                             if df_1min_t is not None and not df_1min_t.empty:
                                 df_t_copy = df_1min_t.copy()
-                                if 'time_est' in df_t_copy.columns and is_regular_session:
-                                    df_t_copy = df_t_copy[(df_t_copy['time_est'] >= '093000') & (df_t_copy['time_est'] <= '155959')]
-                                if not df_t_copy.empty:
-                                    day_high = float(df_t_copy['high'].astype(float).max())
-                                    day_low = float(df_t_copy['low'].astype(float).min())
-                                    tracking_cache[f"AVWAP_REG_H_{t}"] = day_high
-                                    tracking_cache[f"AVWAP_REG_L_{t}"] = day_low
+                                if 'time_est' in df_t_copy.columns:
+                                    df_t_reg = df_t_copy[(df_t_copy['time_est'] >= '093000') & (df_t_copy['time_est'] <= '155959')]
+                                    if not df_t_reg.empty:
+                                        day_high = float(df_t_reg['high'].astype(float).max())
+                                        day_low = float(df_t_reg['low'].astype(float).min())
+                                        tracking_cache[f"AVWAP_REG_H_{t}"] = day_high
+                                        tracking_cache[f"AVWAP_REG_L_{t}"] = day_low
                 
                             if df_1min_base is not None and not df_1min_base.empty:
                                 df_b_copy = df_1min_base.copy()
-                                if 'time_est' in df_b_copy.columns and is_regular_session:
-                                    df_b_copy = df_b_copy[(df_b_copy['time_est'] >= '093000') & (df_b_copy['time_est'] <= '155959')]
-                                if not df_b_copy.empty:
-                                     base_day_high = float(df_b_copy['high'].astype(float).max())
-                                     base_day_low = float(df_b_copy['low'].astype(float).min())
+                                if 'time_est' in df_b_copy.columns:
+                                    df_b_reg = df_b_copy[(df_b_copy['time_est'] >= '093000') & (df_b_copy['time_est'] <= '155959')]
+                                    if not df_b_reg.empty:
+                                         base_day_high = float(df_b_reg['high'].astype(float).max())
+                                         base_day_low = float(df_b_reg['low'].astype(float).min())
                             break
                         except Exception: 
                             if attempt == 2: pass
@@ -418,7 +412,6 @@ async def scheduled_sniper_monitor(context):
                      
                                 trap_price = round(new_avg * 1.02, 2)
                                 
-                                # 🚨 MODIFIED: [Case 31 연계 미시구조 수술] 매수 체결 직후 KIS 잔고 편입 딜레이(Latency)로 인한 매도 덫 '증거금 부족' 리젝 방어를 위해 1.0초 대기 샌드위치 이식
                                 await asyncio.sleep(1.0)
                                 
                                 trap_res = await asyncio.to_thread(broker.send_order, t, "SELL", ccld_qty, trap_price, "LIMIT")
