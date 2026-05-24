@@ -6,7 +6,6 @@
 # 🚨 MODIFIED: [V53.08 들여쓰기(Indentation) 붕괴 런타임 즉사 버그 완벽 수술]
 # 🚨 MODIFIED: [Case 30 & Case 26 절대 위반 교정] 갭 하이재킹 실패 시 텔레그램 에러 타전망 팩트 이식 완료
 # 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
-# 🚨 MODIFIED: [Case 14 절대 헌법 준수] is_market_open 및 달력 API 대기 타임아웃 10.0초 하드코딩 락온
 # ==========================================================
 import logging
 import datetime
@@ -31,8 +30,7 @@ async def scheduled_vwap_init_and_cancel(context):
     is_open = False
     for attempt in range(3):
         try:
-            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
-            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=15.0)
             break
         except asyncio.TimeoutError:
             if attempt == 2:
@@ -59,8 +57,7 @@ async def scheduled_vwap_init_and_cancel(context):
     schedule = None
     for attempt in range(3):
         try:
-            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
-            schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
+            schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=15.0)
             break
         except asyncio.TimeoutError:
             if attempt == 2: logging.error("⚠️ 장마감시간 달력 API 타임아웃. 평일 강제 마감시간(16:00 EST) 세팅.")
@@ -129,8 +126,7 @@ async def scheduled_vwap_trade(context):
     is_open = False
     for attempt in range(3):
         try:
-            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
-            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=15.0)
             break
         except asyncio.TimeoutError:
             if attempt == 2:
@@ -161,8 +157,7 @@ async def scheduled_vwap_trade(context):
     schedule = None
     for attempt in range(3):
         try:
-            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
-            schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=10.0)
+            schedule = await asyncio.wait_for(asyncio.to_thread(_get_market_close), timeout=15.0)
             break
         except asyncio.TimeoutError:
             if attempt == 2: logging.error("⚠️ 장마감시간 달력 API 타임아웃. 평일 강제 마감시간(16:00 EST) 세팅.")

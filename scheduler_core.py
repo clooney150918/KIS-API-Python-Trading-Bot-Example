@@ -1,15 +1,11 @@
 # ==========================================================
 # FILE: scheduler_core.py
 # ==========================================================
-# 🚨 MODIFIED: [Insight 26] 이중 증발(Double-Nuke) 및 레이스 컨디션 방어. os.stat() 호출을 try...except OSError 내부로 편입하여 파일 스캔과 삭제 사이의 찰나의 순간에 발생하는 FileNotFoundError 루프 붕괴 원천 차단.
-# 🚨 MODIFIED: [Case 34 전역 GC 락온] 디스크 용량 고갈 방어를 위해 화이트리스트 기반 정밀 타겟팅 비동기 소각 엔진 전면 이식 완료
 # 🚨 MODIFIED: [V72.01 V-REV 예산 뻥튀기(Double Spending) 맹점 100% 소각]
 # 🚨 MODIFIED: [V73.10 확정 정산 16:05 EST 전진 배치 및 시각적 디커플링 해체]
 # 🚨 MODIFIED: [Case 27 절대 위반 교정] 에스크로(Escrow) 로직 전면 소각 및 예산 분배망 진공 압축 완료
 # 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
-# 🚨 MODIFIED: [Case 26 절대 헌법 준수] 텔레그램 HTML 파서 런타임 붕괴 방어용 html 모듈 팩트 이식
 # ==========================================================
-import html 
 import os
 import logging
 import datetime
@@ -23,6 +19,7 @@ import json
 import tempfile
 from zoneinfo import ZoneInfo
 
+# 🚨 NEW: [Case 33] 3단 지수 백오프 및 무중단 Fallback 래퍼 코루틴 이식
 async def async_retry(func, *args, default=None, timeout=10.0, **kwargs):
     """ 네트워크 지연 발생 시 지수 대기(Exponential Backoff)를 통해 최대 3회 재시도하는 멱등성 엔진 """
     for attempt in range(3):
@@ -36,9 +33,10 @@ async def async_retry(func, *args, default=None, timeout=10.0, **kwargs):
             else: return default
 
 def is_market_open():
+    # 🚨 NEW: [Case 33] 달력 API 3단 지수 백오프
     for attempt in range(3):
         try:
-            time.sleep(0.06) 
+            time.sleep(0.06) # 🚨 NEW: [Case 32] TPS 캡핑
             est = ZoneInfo('America/New_York')
             today = datetime.datetime.now(est)
             if today.weekday() >= 5: 
@@ -86,48 +84,45 @@ def get_budget_allocation(cash, tickers, cfg):
     return sorted_tickers, allocated
 
 def perform_self_cleaning():
-    """ 🚨 MODIFIED: [Case 34] 전역 가비지 컬렉션(GC) 및 디스크 고갈 방어망 (화이트리스트 필터링) """
     try:
         now = time.time()
         seven_days = 7 * 24 * 3600
         one_day = 24 * 3600
         
-        target_patterns = [
-            ("logs/bot_app_*.log", seven_days),          
-            ("logs/bot_app.log.*", seven_days),          
-            ("data/daily_snapshot_*.json", seven_days),  
-            ("data/vwap_state_*.json", seven_days),      
-            ("data/profit_*.png", seven_days),           
-            ("data/profit_*.gif", seven_days),           
-            ("data/*.bak_*", seven_days),                
-            ("data/tmp*", one_day),                      
-            ("logs/tmp*", one_day)
-        ]
-        
-        for pattern, max_age in target_patterns:
-            for f in glob.glob(pattern):
-                # 🚨 MODIFIED: [Insight 26] 레이스 컨디션(os.stat 타임아웃/File Not Found) 붕괴 원천 차단
-                try:
-                    if os.path.isfile(f) and os.stat(f).st_mtime < now - max_age:
-                        os.remove(f)
-                except OSError:
-                    pass
-                        
+        for f in glob.glob("logs/*.log"):
+            if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
+                try: os.remove(f)
+                except: pass
+                
+        for f in glob.glob("data/*.bak_*"):
+            if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
+                try: os.remove(f)
+                except: pass
+   
+        for prefix in ["daily_snapshot_*", "vwap_state_*"]:
+            for f in glob.glob(f"data/{prefix}.json"):
+                if os.path.isfile(f) and os.stat(f).st_mtime < now - seven_days:
+                    try: os.remove(f)
+                    except: pass
+   
+        for directory in ["data", "logs"]:
+            for f in glob.glob(f"{directory}/tmp*"):
+                if os.path.isfile(f) and os.stat(f).st_mtime < now - one_day:
+                    try: os.remove(f)
+                    except: pass
     except Exception as e:
-        logging.error(f"🧹 자정(Self-Cleaning) 작업 중 시스템 오류 발생: {e}")
+        logging.error(f"🧹 자정(Self-Cleaning) 작업 중 오류 발생: {e}")
 
 async def scheduled_self_cleaning(context):
-    try:
-        await asyncio.wait_for(asyncio.to_thread(perform_self_cleaning), timeout=60.0)
-        logging.info("🧹 [시스템 자정 작업 완료] 7일 초과 낡은 로그/스냅샷 및 임시 파일 GC(소각) 완료")
-    except Exception as e:
-        logging.error(f"🚨 [Self-Cleaning] 가비지 컬렉션(GC) 타임아웃 또는 런타임 예외: {e}")
+    await asyncio.to_thread(perform_self_cleaning)
+    logging.info("🧹 [시스템 자정 작업 완료] 7일 초과 로그/백업 및 24시간 초과 임시 파일 소각 완료")
 
 async def scheduled_token_check(context):
     jitter_seconds = random.randint(0, 180)
     logging.info(f"🔑 [API 토큰 갱신] 서버 동시 접속 부하 방지를 위해 {jitter_seconds}초 대기 후 발급을 시작합니다.")
     await asyncio.sleep(jitter_seconds)
     
+    # 🚨 MODIFIED: [Case 33] 토큰 갱신 지수 백오프
     await async_retry(context.job.data['broker']._get_access_token, force=True)
     logging.info("🔑 [API 토큰 갱신] 토큰 갱신이 안전하게 완료되었습니다.")
 
@@ -140,6 +135,7 @@ async def scheduled_force_reset(context):
 
     async def _do_force_reset():
         is_open = False
+        # 🚨 MODIFIED: [Case 33] 3단 지수 백오프 이식
         for attempt in range(3):
             try:
                 is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
@@ -177,7 +173,8 @@ async def scheduled_force_reset(context):
                 except Exception:
                     pass
                 return
-            
+             
+            # 🚨 MODIFIED: [Case 33] 잔고 조회 지수 백오프
             holdings = None
             async with tx_lock:
                 for attempt in range(3):
@@ -195,6 +192,7 @@ async def scheduled_force_reset(context):
             
             active_tickers = await asyncio.to_thread(cfg.get_active_tickers)
             for t in active_tickers:
+                # 🚨 MODIFIED: [Case 32] 스케줄러 다중 스캔 루프 TPS 캡핑
                 await asyncio.sleep(0.06)
                 
                 version = await asyncio.to_thread(cfg.get_version, t)
@@ -245,8 +243,7 @@ async def scheduled_force_reset(context):
             await context.bot.send_message(chat_id=chat_id, text=final_msg, parse_mode='HTML')
             
         except Exception as e:
-            safe_err = html.escape(str(e))
-            await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> <code>{safe_err}</code>", parse_mode='HTML')
+            await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> {e}", parse_mode='HTML')
 
     try:
         await asyncio.wait_for(_do_force_reset(), timeout=180.0)
@@ -287,6 +284,7 @@ async def scheduled_auto_sync(context):
 
         return True, today_est
 
+    # 🚨 MODIFIED: [Case 33] 지수 백오프 래핑 적용
     can_run, today_est = await async_retry(_check_and_set_lock, default=(False, ""))
     
     if not can_run:
@@ -300,6 +298,7 @@ async def scheduled_auto_sync(context):
     success_tickers = []
     active_tickers = await asyncio.to_thread(context.job.data['cfg'].get_active_tickers)
     for t in active_tickers:
+        # 🚨 MODIFIED: [Case 32] 다중 스캔 루프 TPS 캡핑
         await asyncio.sleep(0.06)
         res = await bot.sync_engine.process_auto_sync(t, chat_id, context, silent_ledger=True)
         if res == "SUCCESS":

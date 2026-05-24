@@ -4,7 +4,6 @@
 # 🚨 MODIFIED: [V73.15 타임라인 디커플링 대통합] 17:05 KST V14 선제 타격 및 V-REV 스냅샷 분리 락온
 # 🚨 MODIFIED: [Case 20 준수] b_start = max(b_start, s_start) 연산 100% 동기화 적용
 # 🚨 NEW: [Case 32 & 33 절대 규칙] 3단 지수 백오프 및 스케줄러 루프 TPS 캡핑 이식 완료
-# 🚨 MODIFIED: [Case 14 절대 헌법 준수] is_market_open 비동기 호출 타임아웃 10.0초 하드코딩 완료
 # ==========================================================
 import logging
 import datetime
@@ -19,8 +18,7 @@ async def scheduled_early_regular_trade(context):
     is_open = False
     for attempt in range(3):
         try:
-            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
-            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=15.0)
             break
         except asyncio.TimeoutError:
             if attempt == 2:
@@ -220,8 +218,7 @@ async def scheduled_regular_trade_delayed(context):
     is_open = False
     for attempt in range(3):
         try:
-            # MODIFIED: [Case 14] 달력 API 타임아웃 10초 하드코딩 락온
-            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
+            is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=15.0)
             break
         except asyncio.TimeoutError:
             if attempt == 2:

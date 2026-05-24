@@ -6,7 +6,6 @@
 # 🚨 MODIFIED: [제2헌법 준수] yfinance 네임스페이스 오염을 유발하는 중복 임포트 영구 소각 및 단일화 락온
 # 🚨 NEW: [Case 32] 고성능 서버 KIS API 초당 20건 통신 제한(TPS) 완벽 방어를 위한 0.06초 캡핑 주입
 # 🚨 NEW: [Case 33] yfinance 및 외부 통신 타임아웃 대응 3단 지수 백오프(Exponential Backoff) 및 재시도 엔진 전면 이식
-# 🚨 MODIFIED: [Case 30 팩트 교정] 취소 주문(cancel_order) API 응답 객체 누락 맹점을 소각하고 return 배선 개통 완료.
 # ==========================================================
 
 import requests
@@ -89,7 +88,6 @@ class KoreaInvestmentBroker:
                     if dir_name and not os.path.exists(dir_name):
                         os.makedirs(dir_name, exist_ok=True)
        
-                    # 🚨 MODIFIED: [제4헌법 준수] 원자적 쓰기(Atomic Write) 강제
                     fd, temp_path = tempfile.mkstemp(dir=dir_name, text=True)
                     try:
                         with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -230,7 +228,7 @@ class KoreaInvestmentBroker:
         return price_cd if target_api == "PRICE" else order_cd
 
     def get_account_balance(self):
-        """ 🚨 [Case 03 준수] API 잔고 응답 중복 합산 절대 방어 락온 """
+        """ 🚨 [제3경고] API 잔고 응답 중복 합산 절대 방어 락온 """
         cash = 0.0
         holdings = {}
         api_success = False 
@@ -286,7 +284,7 @@ class KoreaInvestmentBroker:
                             if ticker not in holdings: 
                                 holdings[ticker] = {'qty': qty, 'ord_psbl_qty': ord_psbl_qty, 'avg': avg}
                             else:
-                                # 🚨 MODIFIED: [Case 03] 유령 중복 합산 누적 무시 (영구 소각)
+                                # 🚨 MODIFIED: [Case 03] 유령 중복 합산 누적 무시
                                 continue 
 
                     tr_cont = res_hold.headers.get('tr_cont', '') if hasattr(res_hold, 'headers') else ''
@@ -326,7 +324,6 @@ class KoreaInvestmentBroker:
                 regular_market['Date'] = regular_market.index.date
                
                 daily_stats = regular_market.groupby('Date').agg(Total_Vol_Price=('Vol_x_Price', 'sum'), Total_Vol=('Volume', 'sum'))
-                # 🚨 MODIFIED: [Case 05] 결측치 방어용 0.0 강제 형변환
                 daily_stats['VWAP'] = np.where(daily_stats['Total_Vol'] > 0, daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'], np.nan)
                 daily_stats = daily_stats.dropna(subset=['VWAP'])
     
@@ -559,8 +556,8 @@ class KoreaInvestmentBroker:
                         except Exception: pass
                     cache_data[ticker] = {'day_high': max_high, 'day_low': min_low, 'time_high': time_high_str, 'time_low': time_low_str, 'date': datetime.datetime.now(est).strftime("%Y-%m-%d")}
                     os.makedirs('data', exist_ok=True)
-                    # 🚨 MODIFIED: [제4헌법] 원자적 쓰기 락온
                     fd, tmp_path = tempfile.mkstemp(dir='data', text=True)
+       
                     with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
                         json.dump(cache_data, f_out, ensure_ascii=False, indent=4)
                         f_out.flush()
@@ -594,7 +591,6 @@ class KoreaInvestmentBroker:
             else: return False
         return valid_orders
 
-    # 🚨 MODIFIED: [Case 18] 로컬 예약 스냅샷 폐기 및 KIS 원장 직접 연동
     def get_reservation_orders(self, ticker, start_date, end_date):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         valid_orders = []
@@ -736,8 +732,7 @@ class KoreaInvestmentBroker:
         time.sleep(0.06)
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": "0", "OVRS_ORD_UNPR": "0", "ORD_SVR_DVSN_CD": "0"}
-        # 🚨 MODIFIED: [Case 30 팩트 교정] 취소 주문 API 응답 객체 반환 배선 강제 이식
-        return self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
+        self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
 
     def send_daytime_order(self, ticker, side, qty, price):
         time.sleep(0.06)
