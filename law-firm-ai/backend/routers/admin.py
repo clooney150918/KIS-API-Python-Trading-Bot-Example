@@ -2,7 +2,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 from models.user import User
 from models.message import Message, AllowedIP
 from database import get_db
@@ -82,9 +82,7 @@ async def reset_memory(
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다.")
     user.hermes_session_id = uuid.uuid4()
-    await db.execute(
-        Message.__table__.delete().where(Message.user_id == user_id)
-    )
+    await db.execute(delete(Message).where(Message.user_id == user_id))
     await db.commit()
     return {"ok": True}
 

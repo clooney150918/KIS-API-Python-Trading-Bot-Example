@@ -1,4 +1,5 @@
 import json
+import uuid as _uuid
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -7,13 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from models.user import User
 from models.message import Message
-from database import get_db
+from database import get_db, AsyncSessionLocal
 from middleware.auth import get_current_user
 from config import settings
 
 router = APIRouter(prefix="/api/chat")
 
-# 직책별 시스템 프롬프트
 ROLE_PROMPTS: dict[str, str] = {
     "변호사": (
         "당신은 법무법인 소속 변호사를 전문적으로 보조하는 AI 에이전트입니다. "
@@ -79,11 +79,10 @@ async def send_message(
         raise HTTPException(status_code=400, detail="메시지를 입력해 주세요.")
 
     # 사용자 메시지 저장
-    user_msg = Message(user_id=current_user.id, role="user", content=body.message)
-    db.add(user_msg)
+    db.add(Message(user_id=current_user.id, role="user", content=body.message))
     await db.commit()
 
-    # 최근 대화 히스토리 가져오기 (최대 50개)
+    # 최근 대화 히스토리 (최대 50개)
     result = await db.execute(
         select(Message)
         .where(Message.user_id == current_user.id)
@@ -92,18 +91,22 @@ async def send_message(
     )
     history = list(reversed(result.scalars().all()))
 
-    messages = [{"role": "system", "content": _get_system_prompt(current_user.job_title)}]
-    messages += [{"role": m.role, "content": m.content} for m in history]
+    payload_messages = [{"role": "system", "content": _get_system_prompt(current_user.job_title)}]
+    payload_messages += [{"role": m.role, "content": m.content} for m in history]
+
+    # 스트리밍 중 DB 세션이 닫히므로 필요한 값을 미리 추출
+    user_id: _uuid.UUID = current_user.id
+    session_id: str = str(current_user.hermes_session_id)
 
     async def stream_response():
-        assistant_content = []
+        assistant_parts: list[str] = []
         try:
             async with httpx.AsyncClient(timeout=120) as client:
                 async with client.stream(
                     "POST",
                     f"{settings.hermes_base_url}/v1/chat/completions",
-                    json={"model": "hermes", "messages": messages, "stream": True},
-                    headers={"X-Hermes-Session-Id": str(current_user.hermes_session_id)},
+                    json={"model": "hermes", "messages": payload_messages, "stream": True},
+                    headers={"X-Hermes-Session-Id": session_id},
                 ) as response:
                     async for line in response.aiter_lines():
                         if not line.startswith("data: "):
@@ -115,15 +118,16 @@ async def send_message(
                             chunk = json.loads(data)
                             delta = chunk["choices"][0]["delta"].get("content", "")
                             if delta:
-                                assistant_content.append(delta)
+                                assistant_parts.append(delta)
                                 yield f"data: {json.dumps({'content': delta})}\n\n"
                         except (json.JSONDecodeError, KeyError):
                             continue
         finally:
-            # 응답 전체를 DB에 저장
-            if assistant_content:
-                full_content = "".join(assistant_content)
-                async with db.begin():
-                    db.add(Message(user_id=current_user.id, role="assistant", content=full_content))
+            if assistant_parts:
+                full_content = "".join(assistant_parts)
+                # 스트리밍 완료 후 새 세션으로 저장
+                async with AsyncSessionLocal() as save_db:
+                    save_db.add(Message(user_id=user_id, role="assistant", content=full_content))
+                    await save_db.commit()
 
     return StreamingResponse(stream_response(), media_type="text/event-stream")
