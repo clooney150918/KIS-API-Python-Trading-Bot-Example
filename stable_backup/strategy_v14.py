@@ -188,14 +188,7 @@ class V14Strategy:
 
         rev_state = self.cfg.get_reverse_state(ticker)
         is_rev_active = rev_state.get('is_active', False)
-
-        # 전날 스냅샷에 리버스 기록이 있으면 리버스 상태로 간주
-        # (전날 리버스였다가 오늘 일반모드로 복귀한 경우 대비)
-        if not is_rev_active:
-            snap = self.load_daily_snapshot(ticker)
-            if snap and snap.get('is_reverse', False):
-                is_rev_active = True
-
+        
         if is_rev_active:
             loss_pct = ((current_price - avg_price) / avg_price * 100.0) if avg_price > 0 else 0.0
             escape_thresh = -15.0 if ticker == "TQQQ" else -20.0
@@ -205,8 +198,12 @@ class V14Strategy:
                 dynamic_t = self._safe_float(rev_state.get('dynamic_t', 0.0))
                 rem_cash = self._safe_float(rev_state.get('rem_cash', 0.0))
                 
-                # 리버스 탈출: seed 재설정·T 리셋 없음. T값 유지.
-                self.cfg.set_reverse_state(ticker, False, 0.0, 0.0, dynamic_t=dynamic_t, rem_cash=rem_cash, is_day_one=False)
+                safe_denom = max(1.0, split - dynamic_t)
+                new_portion = rem_cash / safe_denom if rem_cash > 0 else 1.0
+                new_seed = new_portion * split
+                
+                self.cfg.set_seed(ticker, new_seed)
+                self.cfg.set_reverse_state(ticker, False, 0, 0.0, dynamic_t=0.0, rem_cash=0.0, is_day_one=True)
                 is_rev_active = False
 
         seed = self._safe_float(self.cfg.get_seed(ticker))
@@ -214,11 +211,7 @@ class V14Strategy:
         target_ratio = target_pct_val / 100.0
         
         portion = seed / split if split > 0 else 1.0
-        # 스냅샷에 유효한 T값이 있으면 우선 사용, 없으면 원가 역산
-        if qty > 0 and snap and isinstance(snap, dict) and snap.get('t_val', 0.0) > 0:
-            t_val = float(snap.get('t_val', 0.0))
-        else:
-            t_val = (qty * avg_price) / portion if portion > 0 else 0.0
+        t_val = (qty * avg_price) / portion if portion > 0 else 0.0
         t_val = round(t_val, 4)
 
         target_price = self._ceil(avg_price * (1 + target_ratio)) if avg_price > 0 else 0.0
@@ -227,9 +220,8 @@ class V14Strategy:
         
         one_portion_amt = portion
         
-        # SOXL 20분할 원문 방법론: star_ratio = target% - 2*T (퍼센트 포인트 기준)
-        star_ratio_percent = target_pct_val - 2.0 * t_val
-        star_ratio = star_ratio_percent / 100.0
+        depreciation_factor = 2.0 / split if split > 0 else 0.1
+        star_ratio = target_ratio - (target_ratio * depreciation_factor * t_val)
         star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0.0
           
         if qty == 0:
@@ -264,8 +256,7 @@ class V14Strategy:
                 rem_cash = self._safe_float(rev_state.get('rem_cash', 0.0))
                 is_day_one = rev_state.get('is_day_one', True)
                 
-                # SOXL 20분할: floor(Q/20) — 원문 방법론 기준
-                N_div = int(split) if split > 0 else 20
+                N_div = 10 if split <= 20 else 20
                 sell_qty = math.floor(qty / N_div)
                 
                 if is_day_one:
@@ -273,10 +264,7 @@ class V14Strategy:
                         core_orders.append({"side": "SELL", "price": 0.0, "qty": sell_qty, "type": "MOC", "desc": "🩸리버스무조건매도(1일차)"})
                     process_status = "♻️리버스(1일차 진입)"
                 else:
-                    # 리버스 별지점: 직전 5거래일 확정 종가 평균 (ma_5day 대체)
-                    rev_star = self._safe_float(attr_data.get('close_5day_avg', 0.0))
-                    if rev_star <= 0:
-                        rev_star = prev_close if prev_close > 0 else current_price
+                    rev_star = ma_5day if ma_5day > 0 else (prev_close if prev_close > 0 else current_price)
                     buy_price = max(0.01, round(rev_star - 0.01, 2))
                     
                     buy_budget = rem_cash / 4.0
