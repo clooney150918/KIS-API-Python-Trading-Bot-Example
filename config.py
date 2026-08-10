@@ -52,29 +52,13 @@ class ConfigManager:
             "HISTORY": "data/manual_history.json", 
             "SPLIT": "data/split_config.json",
             "TICKER": "data/active_tickers.json",
-            "UPWARD_SNIPER": "data/upward_sniper.json", 
-            "SECRET_MODE": "data/secret_mode.dat",
             "PROFIT_CFG": "data/profit_config.json",
             "LOCKS": "data/trade_locks.json",
             "SEED_CFG": "data/seed_config.json",         
             "COMPOUND_CFG": "data/compound_config.json",
             "VERSION_CFG": "data/version_config.json",
-            "REVERSE_CFG": "data/reverse_config.json",
-            "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
-            "SPLIT_HISTORY": "data/split_history.json",
-            "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
-            "AVWAP_SORTIE_CFG": "data/avwap_sortie.json",
-            "MANUAL_VWAP_CFG": "data/manual_vwap_config.json",
             "FEE_CFG": "data/fee_config.json", 
-            "MASTER_SWITCH": "data/master_switch.json",
-            "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
-            "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
-            "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",     
-            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json",
-            "AVWAP_GAP_THRESH_CFG": "data/avwap_gap_thresh.json",
-            "AVWAP_ANCHOR_CFG": "data/avwap_anchor.json",
-            "AVWAP_BUDGET_CFG": "data/avwap_budget.json",         
-            "AVWAP_OVERNIGHT_CFG": "data/avwap_overnight.json"      
+            "SPLIT_HISTORY": "data/split_history.json",
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -872,82 +856,88 @@ class ConfigManager:
             self._save_json(self.FILES["SNIPER_MULTIPLIER_CFG"], d)
 
     def get_upward_sniper_mode(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_SNIPER"]):
-            return bool(self._load_json(self.FILES["UPWARD_SNIPER"], {}).get(ticker, False))
-         
-    def set_upward_sniper_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_SNIPER"]):
-             d = self._load_json(self.FILES["UPWARD_SNIPER"], {})
-             d[ticker] = bool(v)
-             self._save_json(self.FILES["UPWARD_SNIPER"], d)
-
-    def get_avwap_hybrid_mode(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
-            return bool(self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {}).get(ticker, False))
+        return False
     
+    def set_upward_sniper_mode(self, ticker, v):
+        pass
+
+    def get_avwap_hybrid_mode(self, ticker):
+        return False
+
     def set_avwap_hybrid_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
+        pass
 
     def get_avwap_sortie_mode(self, ticker):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_SORTIE_CFG"]):
-            return str(self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {}).get(ticker, "SINGLE"))
+        return "SINGLE"
         
     def set_avwap_sortie_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_SORTIE_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {})
-            d[ticker] = str(v)
-            self._save_json(self.FILES["AVWAP_SORTIE_CFG"], d)
+        pass
 
     def get_manual_vwap_mode(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
-            return bool(self._load_json(self.FILES["MANUAL_VWAP_CFG"], {}).get(ticker, False))
+        return False
         
     def set_manual_vwap_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
-            d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
+        pass
 
     def get_master_switch(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["MASTER_SWITCH"]):
-            return str(self._load_json(self.FILES["MASTER_SWITCH"], {}).get(ticker, "ALL"))
+        return "ALL"
         
     def set_master_switch(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["MASTER_SWITCH"]):
-            d = self._load_json(self.FILES["MASTER_SWITCH"], {})
-            d[ticker] = str(v)
-            self._save_json(self.FILES["MASTER_SWITCH"], d)
+        pass
 
     def get_sniper_buy_locked(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_BUY_LOCKED"]):
-            return bool(self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {}).get(ticker, False))
+        return False
         
     def set_sniper_buy_locked(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_BUY_LOCKED"]):
-            d = self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES["SNIPER_BUY_LOCKED"], d)
+        pass
 
     def get_sniper_sell_locked(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_SELL_LOCKED"]):
-            return bool(self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {}).get(ticker, False))
+        return False
         
     def set_sniper_sell_locked(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_SELL_LOCKED"]):
-            d = self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {})
-            d[ticker] = bool(v)
-            self._save_json(self.FILES["SNIPER_SELL_LOCKED"], d)
+        pass
+
+    def get_vrev_gap_switch(self, ticker): 
+        return False
+        
+    def set_vrev_gap_switch(self, ticker, v):
+        pass
+
+    def get_vrev_gap_thresh(self, ticker): 
+        return 0.0
+        
+    def set_vrev_gap_thresh(self, ticker, v):
+        pass
+
+    def get_avwap_gap_thresh(self, ticker): 
+        return 0.0
+        
+    def set_avwap_gap_thresh(self, ticker, v):
+        pass
+
+    def get_avwap_anchor(self, ticker): 
+        return 0.0
+        
+    def set_avwap_anchor(self, ticker, v):
+        pass
+
+    def get_avwap_budget(self, ticker): 
+        return 0.0
+        
+    def set_avwap_budget(self, ticker, v):
+        pass
+
+    def get_avwap_overnight(self, ticker): 
+        return False
+        
+    def set_avwap_overnight(self, ticker, v):
+        pass
 
     def get_secret_mode(self): 
-        with GlobalThrottle.get_file_lock(self.FILES["SECRET_MODE"]):
-            return self._load_file(self.FILES["SECRET_MODE"]) == 'True'
-         
+        return False
+        
     def set_secret_mode(self, v): 
-        with GlobalThrottle.get_file_lock(self.FILES["SECRET_MODE"]):
-            self._save_file(self.FILES["SECRET_MODE"], str(v))
+        pass
     
     def get_active_tickers(self): 
         with GlobalThrottle.get_file_lock(self.FILES["TICKER"]):

@@ -8,17 +8,11 @@ import pandas as pd
 import numpy as np
 from zoneinfo import ZoneInfo
 from strategy_v14 import V14Strategy
-from strategy_v_avwap import VAvwapHybridPlugin  
-from strategy_reversion import ReversionStrategy
-from strategy_v14_vwap import V14VwapStrategy
 
 class InfiniteStrategy:
     def __init__(self, config):
         self.cfg = config
         self.v14_plugin = V14Strategy(config)
-        self.v_avwap_plugin = VAvwapHybridPlugin()
-        self.v_rev_plugin = ReversionStrategy(config)
-        self.v14_vwap_plugin = V14VwapStrategy(config)
 
     def _safe_float(self, val):
         try:
