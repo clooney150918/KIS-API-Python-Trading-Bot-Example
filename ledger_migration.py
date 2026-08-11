@@ -158,7 +158,13 @@ def reconcile_legacy_history_to_kis(legacy_rows: Sequence[Mapping[str, Any]], ki
     return {"missing": missing, "extra": extra, "mismatches": mismatches}
 
 
-def calculate_net_position_fifo_avg(rows: Sequence[Mapping[str, Any]]) -> tuple[int, Decimal]:
+def calculate_net_position_remaining_weighted_avg(rows: Sequence[Mapping[str, Any]]) -> tuple[int, Decimal]:
+    """Return remaining quantity and weighted-average cost after sells.
+
+    This is deliberately *not* FIFO tax-lot accounting.  Sells remove cost at
+    the then-current weighted average so the result is suitable only for the
+    Task 6 migration invariant, not official cost-basis reporting.
+    """
     running_qty = 0
     running_cost = Decimal("0")
     for row in rows:
@@ -201,7 +207,7 @@ def migrate_legacy_history(kis_source_path: str | os.PathLike[str], legacy_outpu
     manual_after = _sha256(manual_ledger_path) if manual_ledger_path else ""
     if manual_ledger_path and manual_after != manual_before:
         raise LegacyLedgerError("manual ledger hash changed during migration")
-    net_qty, avg_price = calculate_net_position_fifo_avg(kis_rows)
+    net_qty, avg_price = calculate_net_position_remaining_weighted_avg(kis_rows)
     return {
         "row_count": len(legacy_rows),
         "reconciliation": report,
@@ -213,8 +219,12 @@ def migrate_legacy_history(kis_source_path: str | os.PathLike[str], legacy_outpu
 
 
 def reject_synthetic_official_event(record: Mapping[str, Any]) -> None:
-    exec_id = _text(record.get("exec_id") or record.get("event_type") or record.get("kis_order_no")).upper()
-    if any(exec_id.startswith(prefix) or f"_{prefix}" in exec_id for prefix in SYNTHETIC_PREFIXES):
+    identity_values = [
+        _text(record.get(field)).upper()
+        for field in ("exec_id", "event_type", "kis_order_no")
+        if _text(record.get(field))
+    ]
+    if any(value.startswith(prefix) or f"_{prefix}" in value for value in identity_values for prefix in SYNTHETIC_PREFIXES):
         raise LegacyLedgerError("synthetic CALIB/GENESIS/INIT events are blocked from the official pipeline")
     return None
 
@@ -258,6 +268,45 @@ class ExecutionLedger:
         self._append_jsonl(record)
         return record
 
+    def _stable_kis_key(self, record: Mapping[str, Any]) -> tuple[str, ...] | None:
+        fields = ("account_fingerprint", "ticker", "exchange", "trade_date", "kis_order_no", "execution_time", "side", "qty", "price")
+        values = [_text(record.get(field)) for field in fields]
+        if not all(values):
+            return None
+        return tuple(values)
+
+    def _load_existing_records(self, content: bytes) -> list[dict[str, Any]]:
+        if not content:
+            return []
+        records: list[dict[str, Any]] = []
+        for line_no, raw_line in enumerate(content.decode("utf-8").splitlines(), start=1):
+            if not raw_line.strip():
+                continue
+            try:
+                parsed = json.loads(raw_line)
+            except json.JSONDecodeError as exc:
+                raise LegacyLedgerError(f"invalid execution ledger JSONL at line {line_no}") from exc
+            if not isinstance(parsed, dict):
+                raise LegacyLedgerError(f"invalid execution ledger JSONL object at line {line_no}")
+            records.append(parsed)
+        return records
+
+    def _reject_duplicate(self, record: Mapping[str, Any], existing_records: Sequence[Mapping[str, Any]]) -> None:
+        fill_key = _text(record.get("fill_key"))
+        stable_key = self._stable_kis_key(record)
+        for existing in existing_records:
+            if fill_key and _text(existing.get("fill_key")) == fill_key:
+                raise LegacyLedgerError(f"duplicate execution fill_key: {fill_key}")
+            if stable_key is not None and self._stable_kis_key(existing) == stable_key:
+                raise LegacyLedgerError("duplicate execution stable KIS key")
+
+    def _fsync_parent_dir(self) -> None:
+        dir_fd = os.open(str(self.path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+
     def _append_jsonl(self, record: Mapping[str, Any]) -> None:
         payload = json.dumps(dict(record), ensure_ascii=False, separators=(",", ":")) + "\n"
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -267,6 +316,7 @@ class ExecutionLedger:
                 existing = b""
                 if self.path.exists():
                     existing = self.path.read_bytes()
+                self._reject_duplicate(record, self._load_existing_records(existing))
                 temp = self.path.with_name(f".{self.path.name}.tmp.{os.getpid()}")
                 fd = os.open(str(temp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                 try:
@@ -277,5 +327,6 @@ class ExecutionLedger:
                 finally:
                     os.close(fd)
                 os.replace(str(temp), str(self.path))
+                self._fsync_parent_dir()
             finally:
                 fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
