@@ -128,7 +128,18 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                             timeout=15.0,
                         )
                     else:
-                        res = await asyncio.wait_for(asyncio.to_thread(broker.send_reservation_order, ticker, o_side, o_qty, o_price, o_type), timeout=15.0)
+                        res = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                broker.send_reservation_order,
+                                ticker,
+                                o_side,
+                                o_qty,
+                                o_price,
+                                o_type,
+                                risk_reference_price=o.get('risk_reference_price'),
+                            ),
+                            timeout=15.0,
+                        )
 
                     break
                     

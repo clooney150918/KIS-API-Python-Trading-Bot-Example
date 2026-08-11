@@ -130,7 +130,11 @@ class V4Strategy:
                         new_o['price'] = round(min_s - 0.01, 2)
                     if "🛡️" not in str(new_o.get('desc', '')): 
                             new_o['desc'] = f"🛡️교정_{str(new_o.get('desc', '')).replace('🧹', '')}"
-                new_o['price'] = max(0.01, self._safe_float(new_o.get('price')))
+                # KIS market-on-close/open bodies must retain their zero wire price.
+                if new_o.get('type') in ['MOC', 'MOO']:
+                    new_o['price'] = 0.0
+                else:
+                    new_o['price'] = max(0.01, self._safe_float(new_o.get('price')))
                 res.append(new_o)
             return res
         return _clean(c_orders), _clean(b_orders)
@@ -281,9 +285,19 @@ class V4Strategy:
                 sell_qty = math.floor(qty / N_div)
                 
                 if is_day_one:
-                    if sell_qty > 0:
-                        core_orders.append({"side": "SELL", "price": 0.0, "qty": sell_qty, "type": "MOC", "desc": "🩸리버스무조건매도(1일차)"})
-                    process_status = "♻️리버스(1일차 진입)"
+                    # get_plan() already receives the current quote used for the
+                    # reverse loss decision. Reuse that trusted, caller-supplied
+                    # quote for MOC notional risk; never fetch or invent a fallback.
+                    if current_price <= 0.0:
+                        process_status = "⛔가격오류"
+                    else:
+                        if sell_qty > 0:
+                            core_orders.append({
+                                "side": "SELL", "price": 0.0, "qty": sell_qty,
+                                "type": "MOC", "risk_reference_price": current_price,
+                                "desc": "🩸리버스무조건매도(1일차)"
+                            })
+                        process_status = "♻️리버스(1일차 진입)"
                 else:
                     # 리버스 별지점: 직전 5거래일 확정 종가 평균 (ma_5day 대체)
                     rev_star = ma_5day if ma_5day > 0.0 else (prev_close if prev_close > 0.0 else current_price)

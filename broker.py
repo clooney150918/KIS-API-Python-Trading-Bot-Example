@@ -17,7 +17,15 @@ class KoreaInvestmentBroker(KisOrderEngine):
     """
     
     # 🚨 MODIFIED: [MRO 붕괴 수술] 4개의 식별 인자를 동적으로 받아 최상단 코어로 정확히 라우팅
-    def __init__(self, app_key, app_secret, cano, acnt_prdt_cd="01", runtime_safety_gate=None):
+    def __init__(
+        self,
+        app_key,
+        app_secret,
+        cano,
+        acnt_prdt_cd="01",
+        runtime_safety_gate=None,
+        shadow_intent_recorder=None,
+    ):
         # The facade owns the shared gate used again at the final KIS submission boundary.
         super().__init__(
             app_key,
@@ -25,4 +33,5 @@ class KoreaInvestmentBroker(KisOrderEngine):
             cano,
             acnt_prdt_cd,
             runtime_safety_gate=runtime_safety_gate,
+            shadow_intent_recorder=shadow_intent_recorder,
         )

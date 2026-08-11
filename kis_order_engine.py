@@ -20,12 +20,49 @@ import logging
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
 from runtime_safety import RuntimeSafetyGate, account_fingerprint, safety_block_result
+from shadow_intent import ShadowIntentRecorder
 
 class KisOrderEngine(MarketDataProvider):
 
-    def __init__(self, app_key, app_secret, cano, acnt_prdt_cd="01", runtime_safety_gate=None):
+    def __init__(
+        self,
+        app_key,
+        app_secret,
+        cano,
+        acnt_prdt_cd="01",
+        runtime_safety_gate=None,
+        shadow_intent_recorder=None,
+    ):
         super().__init__(app_key, app_secret, cano, acnt_prdt_cd)
         self.runtime_safety_gate = runtime_safety_gate or RuntimeSafetyGate()
+        self.shadow_intent_recorder = shadow_intent_recorder or ShadowIntentRecorder()
+
+    def _blocked_order_result(self, decision, ticker, side, qty, price, order_type):
+        """Durably record every KIS-bound SHADOW decision before returning."""
+        if decision.code == "SHADOW_ONLY":
+            recorder = getattr(self, "shadow_intent_recorder", None)
+            if recorder is None:
+                recorder = ShadowIntentRecorder()
+                self.shadow_intent_recorder = recorder
+            try:
+                recorder.record(
+                    ticker=ticker,
+                    side=side,
+                    quantity=qty,
+                    price=price,
+                    order_type=order_type,
+                    safety_revision=decision.revision,
+                )
+            except Exception:
+                decision = RuntimeSafetyGate.denied(
+                    "SHADOW_INTENT_RECORD_FAILED",
+                    "shadow intent could not be durably recorded",
+                    shadow_only=True,
+                    revision=decision.revision,
+                    ticker=str(ticker),
+                    side=str(side),
+                )
+        return safety_block_result(decision)
 
     def _authorize_order_submission(
         self, ticker, side, qty, price, *, order_type="LIMIT", risk_reference_price=None
@@ -75,7 +112,9 @@ class KisOrderEngine(MarketDataProvider):
             risk_reference_price=risk_reference_price,
         )
         if not decision.can_submit:
-            return safety_block_result(decision)
+            return self._blocked_order_result(
+                decision, ticker, side, qty, price, order_type
+            )
         return self._call_api(tr_id, path, "POST", body=body)
     
     def get_account_balance(self):
@@ -328,7 +367,9 @@ class KisOrderEngine(MarketDataProvider):
             risk_reference_price=risk_reference_price,
         )
         if not decision.can_submit:
-            return safety_block_result(decision)
+            return self._blocked_order_result(
+                decision, ticker, side, qty, price, order_type
+            )
 
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
@@ -418,7 +459,9 @@ class KisOrderEngine(MarketDataProvider):
     def send_daytime_order(self, ticker, side, qty, price):
         decision = self._authorize_order_submission(ticker, side, qty, price)
         if not decision.can_submit:
-            return safety_block_result(decision)
+            return self._blocked_order_result(
+                decision, ticker, side, qty, price, "LIMIT"
+            )
 
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [최종 무결성 수술] 수동 주문 시 Float 수량이 주입되어 KIS 서버에서 리젝되는 현상을 막기 위해 int 강제 형변환 쉴드 주입
@@ -459,10 +502,28 @@ class KisOrderEngine(MarketDataProvider):
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": safe_qty, "OVRS_ORD_UNPR": safe_price, "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0"}
         return self._call_api("TTTS6038U", "/uapi/overseas-stock/v1/trading/daytime-order-rvsecncl", "POST", body=body)
 
-    def send_reservation_order(self, ticker, side, qty, price, order_type="LIMIT"):
-        decision = self._authorize_order_submission(ticker, side, qty, price)
+    def send_reservation_order(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type="LIMIT",
+        *,
+        risk_reference_price=None,
+    ):
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+        )
         if not decision.can_submit:
-            return safety_block_result(decision)
+            return self._blocked_order_result(
+                decision, ticker, side, qty, price, order_type
+            )
 
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
@@ -494,6 +555,7 @@ class KisOrderEngine(MarketDataProvider):
             "/uapi/overseas-stock/v1/trading/order-resv",
             body,
             order_type=order_type,
+            risk_reference_price=risk_reference_price,
         )
         if 'safety_decision' in res:
             return res
