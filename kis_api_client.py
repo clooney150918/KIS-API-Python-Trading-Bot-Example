@@ -22,21 +22,23 @@ import os
 import math
 import tempfile
 import logging
-import threading
 from zoneinfo import ZoneInfo
 from global_throttle import GlobalThrottle # 🚨 중앙 통제소 결속
-from runtime_safety import RuntimeSafetyGate, safety_block_result
+from runtime_safety import AuthorizationError, RuntimeSafetyGate, safety_block_result
 
 
 _ORDER_SUBMISSION_TR_IDS = frozenset({
-    "TTTT1002U", "TTTT1006U",
-    "TTTS6036U", "TTTS6037U",
-    "TTTT3014U", "TTTT3016U",
+    "TTTT1002U", "TTTT1006U", "TTTT1004U",
+    "TTTS6036U", "TTTS6037U", "TTTS6038U",
+    "TTTT3014U", "TTTT3016U", "TTTT3017U",
 })
 _ORDER_SUBMISSION_PATHS = frozenset({
     "/uapi/overseas-stock/v1/trading/order",
     "/uapi/overseas-stock/v1/trading/daytime-order",
     "/uapi/overseas-stock/v1/trading/order-resv",
+    "/uapi/overseas-stock/v1/trading/order-rvsecncl",
+    "/uapi/overseas-stock/v1/trading/daytime-order-rvsecncl",
+    "/uapi/overseas-stock/v1/trading/order-resv-ccnl",
 })
 
 class KisApiClient:
@@ -51,55 +53,35 @@ class KisApiClient:
         self.token_file = f"data/token_{cano}.dat" 
         self.token = None
         self._excg_cd_cache = {} 
-        self._order_transport_capabilities = set()
-        self._order_transport_capability_lock = threading.Lock()
         self._get_access_token()
-
-    def _transport_capability_state(self):
-        if not hasattr(self, "_order_transport_capability_lock"):
-            self._order_transport_capability_lock = threading.Lock()
-            self._order_transport_capabilities = set()
-        return self._order_transport_capability_lock, self._order_transport_capabilities
-
-    def _issue_order_transport_capability(self, safety_decision):
-        """Mint a one-use identity token only for a completed LIVE authorization."""
-        if (
-            getattr(safety_decision, "can_submit", False) is not True
-            or getattr(safety_decision, "code", None) != "LIVE_AUTHORIZED"
-        ):
-            raise PermissionError("order transport capability requires LIVE authorization")
-        capability = object()
-        lock, capabilities = self._transport_capability_state()
-        with lock:
-            capabilities.add(capability)
-        return capability
 
     @staticmethod
     def _is_order_submission(method, url, headers):
-        if str(method or "").upper() != "POST":
-            return False
         tr_id = str((headers or {}).get("tr_id") or "").upper()
         path = str(url or "").split("?", 1)[0]
         return tr_id in _ORDER_SUBMISSION_TR_IDS or any(
             path.endswith(order_path) for order_path in _ORDER_SUBMISSION_PATHS
         )
 
-    def _consume_order_transport_capability(self, capability):
-        lock, capabilities = self._transport_capability_state()
-        with lock:
-            if capability not in capabilities:
-                return False
-            capabilities.remove(capability)
-            return True
-
     @staticmethod
-    def _transport_capability_block(code):
+    def _order_authorization_block(code, reason=None):
         decision = RuntimeSafetyGate.denied(
             code,
-            "authorized one-use order transport capability is required",
+            reason or "gate-issued request-bound order authorization is required",
             shadow_only=False,
         )
         return safety_block_result(decision)
+
+    @staticmethod
+    def _ambiguous_order_result(reason):
+        decision = RuntimeSafetyGate.denied(
+            "ORDER_SUBMISSION_AMBIGUOUS",
+            reason,
+            shadow_only=False,
+        )
+        result = safety_block_result(decision)
+        result["reconciliation_required"] = True
+        return result
 
 
     def _safe_float(self, value):
@@ -213,89 +195,152 @@ class KisApiClient:
 
     def _api_request(
         self, method, url, headers, params=None, data=None, *,
-        order_transport_capability=None,
+        _order_authorization=None, _order_gate=None,
     ):
-        if self._is_order_submission(method, url, headers):
-            if order_transport_capability is None:
-                return None, self._transport_capability_block(
-                    "ORDER_TRANSPORT_CAPABILITY_REQUIRED"
-                )
-            if not self._consume_order_transport_capability(order_transport_capability):
-                return None, self._transport_capability_block(
-                    "ORDER_TRANSPORT_CAPABILITY_INVALID"
-                )
-
-        # 🚨 MODIFIED: [맹독성 에러 키워드 스펙트럼 확장] 정기점검 후 KIS 서버의 비표준 Reject 에러 키워드 일괄 결속
-        TOKEN_EXPIRY_KEYWORDS = frozenset([
-            'expired', '인증', 'authorization', 'egt0001', 'egt0002', 'oauth', 
+        token_expiry_keywords = frozenset([
+            'expired', '인증', 'authorization', 'egt0001', 'egt0002', 'oauth',
             '접근토큰이 만료', '토큰이 유효하지', '점검', '권한', '등록되지', '시스템', '초과'
         ])
-    
-        for attempt in range(3): 
+
+        if self._is_order_submission(method, url, headers):
+            if _order_authorization is None or _order_gate is None:
+                return None, self._order_authorization_block(
+                    "ORDER_AUTHORIZATION_REQUIRED"
+                )
+            tr_id = str((headers or {}).get("tr_id") or "")
+            path = str(url or "").split("?", 1)[0]
+            base_url = str(getattr(self, "base_url", "") or "").rstrip("/")
+            if base_url and path.startswith(base_url):
+                path = path[len(base_url):] or "/"
             try:
-                # 🚨 MODIFIED: 파편화된 sleep 소각 및 중앙 통제소 락온
+                wire_payload = (
+                    json.dumps(data, ensure_ascii=False, allow_nan=False)
+                    if data is not None else None
+                )
+                wire_body = json.loads(wire_payload) if wire_payload is not None else None
+            except (TypeError, ValueError):
+                return None, self._order_authorization_block(
+                    "ORDER_AUTHORIZATION_REQUEST_MISMATCH",
+                    "order request body cannot be serialized exactly",
+                )
+            try:
+                with _order_gate.authorized_post(
+                    _order_authorization,
+                    method=method,
+                    tr_id=tr_id,
+                    path=path,
+                    body=wire_body,
+                ):
+                    try:
+                        GlobalThrottle.wait_api_sync()
+                        res = requests.post(
+                            url,
+                            headers=headers,
+                            data=wire_payload,
+                            timeout=10,
+                        )
+                        if res.status_code == 429 or res.status_code >= 500:
+                            return res, self._ambiguous_order_result(
+                                f"KIS order response HTTP {res.status_code}; reconcile before any retry"
+                            )
+                        resp_json = res.json()
+                        if not isinstance(resp_json, dict):
+                            return res, self._ambiguous_order_result(
+                                "KIS order response was not a JSON object; reconcile before any retry"
+                            )
+                        msg1_lower = str(resp_json.get('msg1') or '').lower()
+                        msg_cd = str(resp_json.get('msg_cd') or '').lower()
+                        if resp_json.get('rt_cd') != '0' and any(
+                            keyword in msg1_lower or keyword in msg_cd
+                            for keyword in token_expiry_keywords
+                        ):
+                            return res, self._ambiguous_order_result(
+                                "KIS order authentication/status response requires reconciliation; automatic retry forbidden"
+                            )
+                        return res, resp_json
+                    except Exception:
+                        return None, self._ambiguous_order_result(
+                            "KIS order transport outcome is unknown; reconcile broker orders before any retry"
+                        )
+            except AuthorizationError as error:
+                return None, self._order_authorization_block(error.code, error.reason)
+
+        for attempt in range(3):
+            try:
                 GlobalThrottle.wait_api_sync()
-                
                 if method.upper() == "GET":
                     res = requests.get(url, headers=headers, params=params, timeout=10)
                 else:
-                    res = requests.post(url, headers=headers, data=json.dumps(data) if data else None, timeout=10)
-    
+                    res = requests.post(
+                        url,
+                        headers=headers,
+                        data=json.dumps(data) if data else None,
+                        timeout=10,
+                    )
                 if res.status_code == 429 or res.status_code >= 500:
                     raise Exception(f"HTTP Error {res.status_code}")
-   
                 resp_json = res.json()
-                # 🚨 [AttributeError 붕괴 방어] JSON 응답이 딕셔너리가 아닐 경우 빈 딕셔너리로 폴백
                 if not isinstance(resp_json, dict):
                     resp_json = {}
-         
                 if resp_json.get('rt_cd') != '0':
-                    # 🚨 [AttributeError 궁극 수술] msg1, msg_cd가 None일 경우 발생하는 .lower() 즉사 버그 방어 쉴드
                     msg1_lower = str(resp_json.get('msg1') or '').lower()
                     msg_cd = str(resp_json.get('msg_cd') or '').lower()
-       
-                    if any(x in msg1_lower or x in msg_cd for x in TOKEN_EXPIRY_KEYWORDS):
-                        if attempt == 0: 
-                            old_token = self.token 
-                            logging.warning(f"🚨 [안전장치 가동] API 토큰 만료 및 오염 감지! : {msg1_lower}")
+                    if any(
+                        keyword in msg1_lower or keyword in msg_cd
+                        for keyword in token_expiry_keywords
+                    ):
+                        if attempt == 0:
+                            old_token = self.token
+                            logging.warning(
+                                f"🚨 [안전장치 가동] API 토큰 만료 및 오염 감지! : {msg1_lower}"
+                            )
                             self._get_access_token(force=True)
-                            
                             if self.token == old_token or self.token is None:
                                 logging.error("🚨 [Broker] 토큰 갱신 실패. 재시도 중단.")
                                 return res, resp_json
-                    
                             headers["authorization"] = f"Bearer {self.token}"
                             time.sleep(1.0)
                             continue
-
-                    # 🚨 NEW: [연속 Reject 컷오프 (Fail-Safe)망 결속] 3회 연속 실패 시 묻지도 따지지도 않고 토큰 파기
                     if attempt == 2:
-                        logging.error(f"🚨 [Fail-Safe] KIS 서버 연속 거절 감지. 토큰 오염으로 간주하고 캐시를 파기합니다: {msg1_lower}")
+                        logging.error(
+                            f"🚨 [Fail-Safe] KIS 서버 연속 거절 감지. 토큰 오염으로 간주하고 캐시를 파기합니다: {msg1_lower}"
+                        )
                         try:
                             os.remove(self.token_file)
                         except OSError:
                             pass
- 
                 return res, resp_json
-         
-            except Exception as e:
-                logging.debug(f"⚠️ [Broker] API 통신 중 예외 발생 (시도 {attempt+1}/3): {e}")
-                if attempt == 2: return None, {}
-                # 🚨 [Case 33] 3단 지수 백오프 적용
+            except Exception as error:
+                logging.debug(
+                    f"⚠️ [Broker] API 통신 중 예외 발생 (시도 {attempt + 1}/3): {error}"
+                )
+                if attempt == 2:
+                    return None, {}
                 time.sleep(1.0 * (2 ** attempt))
         return None, {}
 
     def _call_api(
         self, tr_id, url_path, method="GET", params=None, body=None, *,
-        order_transport_capability=None,
+        _order_authorization=None, _order_gate=None,
     ):
         headers = self._get_header(tr_id)
         url = f"{self.base_url}{url_path}"
         res, resp_json = self._api_request(
-            method, url, headers, params=params, data=body,
-            order_transport_capability=order_transport_capability,
+            method,
+            url,
+            headers,
+            params=params,
+            data=body,
+            _order_authorization=_order_authorization,
+            _order_gate=_order_gate,
         )
-        if not resp_json: return {'rt_cd': '999', 'msg1': '통신 오류 또는 최대 재시도 횟수 초과'}
+        if not resp_json:
+            return {
+                'rt_cd': '999',
+                'msg1': '통신 오류 또는 최대 재시도 횟수 초과',
+                'odno': '',
+                'shadow': False,
+            }
         return resp_json
 
     def _get_exchange_code(self, ticker, target_api="PRICE"):

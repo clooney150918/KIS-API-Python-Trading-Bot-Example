@@ -54,16 +54,18 @@ class TransitionToShadowGate:
 
     def authorize(self, ticker, side, quantity, price, **kwargs):
         self.calls += 1
-        if self.calls == 1:
-            return SafetyDecision(
-                code="LIVE_AUTHORIZED",
-                reason="test initial live authorization",
-                can_submit=True,
-                shadow_only=False,
-                revision=7,
-                ticker=ticker,
-                side=side,
-            )
+        return SafetyDecision(
+            code="LIVE_AUTHORIZED",
+            reason="test initial live authorization",
+            can_submit=True,
+            shadow_only=False,
+            revision=7,
+            ticker=ticker,
+            side=side,
+        )
+
+    def authorize_request(self, ticker, side, quantity, price, **kwargs):
+        self.calls += 1
         return SafetyDecision(
             code="SHADOW_ONLY",
             reason="test state transition",
@@ -72,7 +74,7 @@ class TransitionToShadowGate:
             revision=8,
             ticker=ticker,
             side=side,
-        )
+        ), None
 
 
 def make_engine(gate, recorder):
