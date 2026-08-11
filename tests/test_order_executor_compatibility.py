@@ -5,12 +5,18 @@ import pytest
 import order_executor
 from order_executor import execute_order_list
 from runtime_safety import RuntimeSafetyGate
-from test_runtime_safety import SYNTHETIC_CANO, SYNTHETIC_PRODUCT_CODE, write_state
+from test_runtime_safety import (
+    SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    SYNTHETIC_CANO,
+    SYNTHETIC_PRODUCT_CODE,
+    write_state,
+)
 
 
 class LegacyPositionalBroker:
     def __init__(self, gate):
         self.runtime_safety_gate = gate
+        self.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
         self.cano = SYNTHETIC_CANO
         self.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
         self.calls = []

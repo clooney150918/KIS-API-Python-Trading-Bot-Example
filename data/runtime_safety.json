@@ -13,5 +13,7 @@
     "UNCONFIGURED"
   ],
   "max_order_quantity": 100,
-  "max_order_notional": "25000.00"
+  "max_order_notional": "25000.00",
+  "market_quote_max_age_seconds": 120,
+  "market_slippage_buffer_percent": "5.00"
 }

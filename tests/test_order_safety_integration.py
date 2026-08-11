@@ -1,15 +1,17 @@
 import asyncio
 import json
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
 from kis_order_engine import KisOrderEngine
 from order_executor import execute_order_list
-from runtime_safety import RuntimeSafetyGate, SafetyDecision
+from runtime_safety import RuntimeSafetyGate, SafetyDecision, TrustedMarketQuote
 from shadow_intent import ShadowIntentRecorder
 from strategy_v14 import V4Strategy
 from test_runtime_safety import (
+    SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
     SYNTHETIC_CANO,
     SYNTHETIC_PRODUCT_CODE,
     write_state,
@@ -77,6 +79,13 @@ def make_engine(gate, recorder):
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = gate
     engine.shadow_intent_recorder = recorder
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
+    engine.trusted_quote_provider = lambda ticker: TrustedMarketQuote(
+        price=Decimal("100"),
+        as_of=datetime.now(timezone.utc),
+        source="KIS",
+        ticker=ticker,
+    )
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine._safe_float = lambda value: float(value)

@@ -25,6 +25,8 @@ class KoreaInvestmentBroker(KisOrderEngine):
         acnt_prdt_cd="01",
         runtime_safety_gate=None,
         shadow_intent_recorder=None,
+        trusted_quote_provider=None,
+        account_fingerprint_key=None,
     ):
         # The facade owns the shared gate used again at the final KIS submission boundary.
         super().__init__(
@@ -34,4 +36,6 @@ class KoreaInvestmentBroker(KisOrderEngine):
             acnt_prdt_cd,
             runtime_safety_gate=runtime_safety_gate,
             shadow_intent_recorder=shadow_intent_recorder,
+            trusted_quote_provider=trusted_quote_provider,
+            account_fingerprint_key=account_fingerprint_key,
         )

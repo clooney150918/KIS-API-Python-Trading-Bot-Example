@@ -18,12 +18,13 @@ import datetime
 import math
 import logging
 from zoneinfo import ZoneInfo
-from market_data_provider import MarketDataProvider
+from market_data_provider import KisCurrentQuoteProvider, MarketDataProvider
 from runtime_safety import (
     OVERSEAS_ORDER_TYPE_CODES,
     RuntimeSafetyGate,
     account_fingerprint,
     canonical_order_values,
+    resolve_account_fingerprint_key,
     safety_block_result,
     shadow_record_failure_decision,
 )
@@ -49,10 +50,20 @@ class KisOrderEngine(MarketDataProvider):
         acnt_prdt_cd="01",
         runtime_safety_gate=None,
         shadow_intent_recorder=None,
+        trusted_quote_provider=None,
+        account_fingerprint_key=None,
     ):
         super().__init__(app_key, app_secret, cano, acnt_prdt_cd)
         self.runtime_safety_gate = runtime_safety_gate or RuntimeSafetyGate()
         self.shadow_intent_recorder = shadow_intent_recorder or ShadowIntentRecorder()
+        self.trusted_quote_provider = (
+            trusted_quote_provider
+            if trusted_quote_provider is not None
+            else KisCurrentQuoteProvider(self)
+        )
+        self.account_fingerprint_key = resolve_account_fingerprint_key(
+            account_fingerprint_key
+        )
 
     def _blocked_order_result(
         self,
@@ -88,7 +99,16 @@ class KisOrderEngine(MarketDataProvider):
         return safety_block_result(decision)
 
     def _authorize_order_submission(
-        self, ticker, side, qty, price, *, order_type="LIMIT", risk_reference_price=None
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        *,
+        order_type="LIMIT",
+        risk_reference_price=None,
+        trusted_market_quote=None,
+        market_quote_preflight=False,
     ):
         gate = getattr(self, 'runtime_safety_gate', None)
         if gate is None:
@@ -98,19 +118,50 @@ class KisOrderEngine(MarketDataProvider):
                 ticker=str(ticker),
                 side=str(side),
             )
-        fingerprint = account_fingerprint(
-            getattr(self, "cano", None),
-            getattr(self, "acnt_prdt_cd", None),
+        key = resolve_account_fingerprint_key(
+            getattr(self, "account_fingerprint_key", None)
         )
+        fingerprint = None
+        if key is not None:
+            fingerprint = account_fingerprint(
+                getattr(self, "cano", None),
+                getattr(self, "acnt_prdt_cd", None),
+                key=key,
+            )
         return gate.authorize(
             ticker,
             side,
             qty,
             price,
             account_fingerprint=fingerprint,
+            account_fingerprint_key_available=key is not None,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
+            trusted_market_quote=trusted_market_quote,
+            market_quote_preflight=market_quote_preflight,
         )
+
+    def _load_trusted_market_quote(self, ticker):
+        provider = getattr(self, "trusted_quote_provider", None)
+        if provider is None:
+            return None, RuntimeSafetyGate.denied(
+                "TRUSTED_MARKET_QUOTE_UNAVAILABLE",
+                "trusted KIS quote provider is not configured",
+                ticker=str(ticker).strip().upper(),
+            )
+        try:
+            get_quote = getattr(provider, "get_quote", None)
+            if get_quote is None and callable(provider):
+                get_quote = provider
+            if get_quote is None:
+                raise TypeError("provider has no quote interface")
+            return get_quote(ticker), None
+        except Exception:
+            return None, RuntimeSafetyGate.denied(
+                "TRUSTED_MARKET_QUOTE_PROVIDER_FAILED",
+                "trusted KIS quote provider failed",
+                ticker=str(ticker).strip().upper(),
+            )
 
     @staticmethod
     def _unsupported_order_type_result(ticker, side, order_type):
@@ -145,8 +196,9 @@ class KisOrderEngine(MarketDataProvider):
             price,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
         )
-        if not decision.can_submit:
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
             return self._blocked_order_result(
                 decision,
                 ticker,
@@ -157,6 +209,39 @@ class KisOrderEngine(MarketDataProvider):
                 risk_reference_price=risk_reference_price,
                 idempotency_key=idempotency_key,
             )
+        if decision.code == "MARKET_QUOTE_REQUIRED":
+            trusted_quote, quote_error = self._load_trusted_market_quote(ticker)
+            if quote_error is not None:
+                return self._blocked_order_result(
+                    quote_error,
+                    ticker,
+                    side,
+                    qty,
+                    price,
+                    order_type,
+                    risk_reference_price=risk_reference_price,
+                    idempotency_key=idempotency_key,
+                )
+            decision = self._authorize_order_submission(
+                ticker,
+                side,
+                qty,
+                price,
+                order_type=order_type,
+                risk_reference_price=risk_reference_price,
+                trusted_market_quote=trusted_quote,
+            )
+            if not decision.can_submit:
+                return self._blocked_order_result(
+                    decision,
+                    ticker,
+                    side,
+                    qty,
+                    price,
+                    order_type,
+                    risk_reference_price=risk_reference_price,
+                    idempotency_key=idempotency_key,
+                )
         capability = self._issue_order_transport_capability(decision)
         return self._call_api(
             tr_id,
@@ -416,8 +501,9 @@ class KisOrderEngine(MarketDataProvider):
             price,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
         )
-        if not decision.can_submit:
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
             return self._blocked_order_result(
                 decision,
                 ticker,
@@ -536,8 +622,9 @@ class KisOrderEngine(MarketDataProvider):
             price,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
         )
-        if not decision.can_submit:
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
             return self._blocked_order_result(
                 decision,
                 ticker,
@@ -610,8 +697,9 @@ class KisOrderEngine(MarketDataProvider):
             price,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
         )
-        if not decision.can_submit:
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
             return self._blocked_order_result(
                 decision,
                 ticker,

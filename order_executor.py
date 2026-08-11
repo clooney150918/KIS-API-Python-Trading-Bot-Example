@@ -17,6 +17,7 @@ from runtime_safety import (
     RuntimeSafetyGate,
     account_fingerprint,
     canonical_order_values,
+    resolve_account_fingerprint_key,
     safety_block_result,
     shadow_record_failure_decision,
 )
@@ -100,51 +101,6 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ✅(기장전 보존)\n"
                 continue
 
-            gate = runtime_safety_gate or getattr(broker, 'runtime_safety_gate', None)
-            if gate is None:
-                decision = RuntimeSafetyGate.denied(
-                    "SAFETY_NOT_CONFIGURED",
-                    "runtime safety gate was not injected",
-                    ticker=str(ticker),
-                    side=o_side,
-                )
-            else:
-                fingerprint = account_fingerprint(
-                    getattr(broker, 'cano', None),
-                    getattr(broker, 'acnt_prdt_cd', None),
-                )
-                decision = gate.authorize(
-                    ticker,
-                    o_side,
-                    o.get('qty'),
-                    o.get('price'),
-                    account_fingerprint=fingerprint,
-                    order_type=o_type,
-                    risk_reference_price=o.get('risk_reference_price'),
-                )
-            if not decision.can_submit:
-                if decision.code == "SHADOW_ONLY":
-                    recorder = shadow_intent_recorder or ShadowIntentRecorder()
-                    try:
-                        recorder.record(
-                            ticker=ticker,
-                            side=o_side,
-                            quantity=o.get('qty'),
-                            price=o.get('price'),
-                            order_type=o_type,
-                            safety_revision=decision.revision,
-                            risk_reference_price=o.get('risk_reference_price'),
-                            idempotency_key=idempotency_key,
-                        )
-                    except Exception as error:
-                        decision = shadow_record_failure_decision(decision, error)
-                blocked = safety_block_result(decision)
-                code = blocked['safety_decision']['code']
-                all_success = False
-                loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
-                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
-                continue
-
             broker_method = (
                 broker.send_order
                 if is_market_active_now
@@ -161,10 +117,62 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                     "BROKER_CAPABILITY_MISSING",
                     "broker order method cannot carry required risk reference price",
                     shadow_only=False,
-                    revision=decision.revision,
                     ticker=str(ticker),
                     side=o_side,
                 )
+                blocked = safety_block_result(decision)
+                code = blocked['safety_decision']['code']
+                all_success = False
+                loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
+                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
+                continue
+
+            gate = runtime_safety_gate or getattr(broker, 'runtime_safety_gate', None)
+            if gate is None:
+                decision = RuntimeSafetyGate.denied(
+                    "SAFETY_NOT_CONFIGURED",
+                    "runtime safety gate was not injected",
+                    ticker=str(ticker),
+                    side=o_side,
+                )
+            else:
+                key = resolve_account_fingerprint_key(
+                    getattr(broker, 'account_fingerprint_key', None)
+                )
+                fingerprint = None
+                if key is not None:
+                    fingerprint = account_fingerprint(
+                        getattr(broker, 'cano', None),
+                        getattr(broker, 'acnt_prdt_cd', None),
+                        key=key,
+                    )
+                decision = gate.authorize(
+                    ticker,
+                    o_side,
+                    o.get('qty'),
+                    o.get('price'),
+                    account_fingerprint=fingerprint,
+                    account_fingerprint_key_available=key is not None,
+                    order_type=o_type,
+                    risk_reference_price=o.get('risk_reference_price'),
+                    market_quote_preflight=True,
+                )
+            if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
+                if decision.code == "SHADOW_ONLY":
+                    recorder = shadow_intent_recorder or ShadowIntentRecorder()
+                    try:
+                        recorder.record(
+                            ticker=ticker,
+                            side=o_side,
+                            quantity=o.get('qty'),
+                            price=o.get('price'),
+                            order_type=o_type,
+                            safety_revision=decision.revision,
+                            risk_reference_price=o.get('risk_reference_price'),
+                            idempotency_key=idempotency_key,
+                        )
+                    except Exception as error:
+                        decision = shadow_record_failure_decision(decision, error)
                 blocked = safety_block_result(decision)
                 code = blocked['safety_decision']['code']
                 all_success = False

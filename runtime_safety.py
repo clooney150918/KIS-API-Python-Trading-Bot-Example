@@ -2,9 +2,10 @@
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import fcntl
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import os
@@ -17,6 +18,9 @@ DEFAULT_STATE_PATH = Path(__file__).resolve().parent / "data" / "runtime_safety.
 DEFAULT_CHECKPOINT_PATH = Path(__file__).resolve().parent / "data" / "runtime_safety.revision.json"
 _VALID_SIDES = frozenset({"BUY", "SELL"})
 _MARKET_ORDER_TYPES = frozenset({"MARKET", "MOC", "MOO"})
+_MAX_MARKET_QUOTE_AGE_SECONDS = 3600
+_MAX_MARKET_SLIPPAGE_BUFFER_PERCENT = Decimal("25")
+_MAX_QUOTE_FUTURE_SKEW_SECONDS = Decimal("5")
 OVERSEAS_ORDER_TYPE_CODES = {
     "LIMIT": "00",
     "MOO": "31",
@@ -36,10 +40,41 @@ def canonical_order_values(side, order_type="LIMIT"):
     )
 
 
-def account_fingerprint(cano, product_code):
-    """Return the canonical account identifier without exposing raw account data."""
+def _canonical_account_bytes(cano, product_code):
     canonical = f"{str(cano or '').strip()}:{str(product_code or '').strip()}"
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return canonical.encode("utf-8")
+
+
+def account_fingerprint(cano, product_code, *, key):
+    """Return a keyed account identifier without exposing raw account data."""
+    if not isinstance(key, (bytes, bytearray)) or len(key) < 32:
+        raise ValueError("account fingerprint key must contain at least 32 bytes")
+    return hmac.new(bytes(key), _canonical_account_bytes(cano, product_code), hashlib.sha256).hexdigest()
+
+
+def legacy_account_fingerprint(cano, product_code):
+    """Compatibility-only legacy digest; never use this value for authorization."""
+    return hashlib.sha256(_canonical_account_bytes(cano, product_code)).hexdigest()
+
+
+def resolve_account_fingerprint_key(injected=None):
+    """Resolve an injected key first, then the runtime-only environment fallback."""
+    candidate = injected
+    if candidate is None:
+        candidate = os.environ.get("ACCOUNT_FINGERPRINT_HMAC_KEY")
+    if isinstance(candidate, str):
+        candidate = candidate.encode("utf-8")
+    if not isinstance(candidate, (bytes, bytearray)) or len(candidate) < 32:
+        return None
+    return bytes(candidate)
+
+
+@dataclass(frozen=True)
+class TrustedMarketQuote:
+    price: Decimal
+    as_of: datetime
+    source: str
+    ticker: str
 
 
 @dataclass(frozen=True)
@@ -66,7 +101,7 @@ class SafetyDecision:
 class RuntimeSafetyGate:
     """Reload and validate the safety state for each authorization decision."""
 
-    def __init__(self, state_path=DEFAULT_STATE_PATH, *, checkpoint_path=None):
+    def __init__(self, state_path=DEFAULT_STATE_PATH, *, checkpoint_path=None, clock=None):
         self.state_path = Path(state_path)
         if checkpoint_path is None:
             checkpoint_path = (
@@ -80,6 +115,7 @@ class RuntimeSafetyGate:
         )
         self._highest_revision = 0
         self._lock = threading.Lock()
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         key = str(self.checkpoint_path.resolve())
         with _CHECKPOINT_LOCKS_GUARD:
             self._checkpoint_lock = _CHECKPOINT_LOCKS.setdefault(key, threading.Lock())
@@ -106,6 +142,7 @@ class RuntimeSafetyGate:
 
     def _load_state(self):
         try:
+            mode = self.state_path.stat().st_mode & 0o777
             raw = self.state_path.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
             return None, self.denied(
@@ -168,12 +205,36 @@ class RuntimeSafetyGate:
                     len(item) != 64 or any(char not in "0123456789abcdef" for char in item)
                 ):
                     raise ValueError("account fingerprints must be SHA-256 hex digests")
+            has_configured_account = any(
+                item != "unconfigured" for item in allowed_accounts
+            )
+            if mode != 0o600 and (state["live_armed"] or has_configured_account):
+                return None, self.denied(
+                    "SAFETY_STATE_INSECURE_PERMISSIONS",
+                    "armed or account-configured safety state must have owner-only 0600 permissions",
+                )
             max_quantity = self._decimal(state.get("max_order_quantity"))
             max_notional = self._decimal(state.get("max_order_notional"))
             if max_quantity <= 0 or max_quantity != max_quantity.to_integral_value():
                 raise ValueError("max_order_quantity must be a positive integer")
             if max_notional <= 0:
                 raise ValueError("max_order_notional must be positive")
+            quote_max_age = state.get("market_quote_max_age_seconds")
+            if (
+                type(quote_max_age) is not int
+                or quote_max_age <= 0
+                or quote_max_age > _MAX_MARKET_QUOTE_AGE_SECONDS
+            ):
+                raise ValueError("market_quote_max_age_seconds is outside safe bounds")
+            slippage_text = state.get("market_slippage_buffer_percent")
+            if not isinstance(slippage_text, str) or not slippage_text.strip():
+                raise ValueError("market_slippage_buffer_percent must be a Decimal string")
+            slippage_percent = self._decimal(slippage_text)
+            if (
+                slippage_percent < 0
+                or slippage_percent > _MAX_MARKET_SLIPPAGE_BUFFER_PERCENT
+            ):
+                raise ValueError("market_slippage_buffer_percent is outside safe bounds")
         except (KeyError, TypeError, ValueError):
             return None, self.denied(
                 "SAFETY_STATE_INVALID_SCHEMA",
@@ -186,6 +247,8 @@ class RuntimeSafetyGate:
             "allowed_account_fingerprints": allowed_accounts,
             "max_order_quantity": max_quantity,
             "max_order_notional": max_notional,
+            "market_quote_max_age_seconds": quote_max_age,
+            "market_slippage_buffer_percent": slippage_percent,
         }, None
 
     def _load_checkpoint(self):
@@ -242,8 +305,11 @@ class RuntimeSafetyGate:
         price,
         *,
         account_fingerprint=None,
+        account_fingerprint_key_available=True,
         order_type="LIMIT",
         risk_reference_price=None,
+        trusted_market_quote=None,
+        market_quote_preflight=False,
     ):
         ticker_text = str(ticker or "").strip().upper()
         side_text, order_type_text = canonical_order_values(side, order_type)
@@ -270,7 +336,10 @@ class RuntimeSafetyGate:
                     quantity,
                     price,
                     account_fingerprint,
+                    account_fingerprint_key_available,
                     risk_reference_price,
+                    trusted_market_quote,
+                    market_quote_preflight,
                 )
             except OSError:
                 decision = self.denied(
@@ -310,7 +379,10 @@ class RuntimeSafetyGate:
         quantity,
         price,
         account_fingerprint,
+        account_fingerprint_key_available,
         risk_reference_price,
+        trusted_market_quote,
+        market_quote_preflight,
     ):
             state, load_error = self._load_state()
             if load_error is not None:
@@ -349,6 +421,12 @@ class RuntimeSafetyGate:
                 return self.denied("TICKER_NOT_ALLOWED", "ticker is not allow-listed", **context)
             if side_text not in _VALID_SIDES:
                 return self.denied("INVALID_SIDE", "side must be BUY or SELL", **context)
+            if not account_fingerprint_key_available:
+                return self.denied(
+                    "ACCOUNT_FINGERPRINT_KEY_UNAVAILABLE",
+                    "account fingerprint HMAC key is missing or too short",
+                    **context,
+                )
             submitted_fingerprint = str(account_fingerprint or "").strip().lower()
             if submitted_fingerprint not in state["allowed_account_fingerprints"]:
                 return self.denied(
@@ -366,19 +444,104 @@ class RuntimeSafetyGate:
 
             if order_type_text in _MARKET_ORDER_TYPES:
                 try:
-                    order_price = self._decimal(risk_reference_price)
+                    caller_price = self._decimal(risk_reference_price)
                 except ValueError:
                     return self.denied(
                         "INVALID_RISK_REFERENCE_PRICE",
                         "market order requires a finite positive risk reference price",
                         **context,
                     )
-                if order_price <= 0:
+                if caller_price <= 0:
                     return self.denied(
                         "INVALID_RISK_REFERENCE_PRICE",
                         "market order requires a finite positive risk reference price",
                         **context,
                     )
+                if trusted_market_quote is None:
+                    code = (
+                        "MARKET_QUOTE_REQUIRED"
+                        if market_quote_preflight
+                        else "TRUSTED_MARKET_QUOTE_UNAVAILABLE"
+                    )
+                    return self.denied(
+                        code,
+                        "a fresh structured KIS quote is required for market risk",
+                        **context,
+                    )
+                if not isinstance(trusted_market_quote, TrustedMarketQuote):
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_INVALID",
+                        "trusted market quote has an invalid structure",
+                        **context,
+                    )
+                quote = trusted_market_quote
+                if str(quote.source or "").strip().upper() != "KIS":
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_SOURCE_INVALID",
+                        "trusted market quote source is not KIS",
+                        **context,
+                    )
+                if str(quote.ticker or "").strip().upper() != ticker_text:
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_TICKER_MISMATCH",
+                        "trusted market quote ticker does not match the order",
+                        **context,
+                    )
+                try:
+                    quote_price = self._decimal(quote.price)
+                except ValueError:
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_PRICE_INVALID",
+                        "trusted market quote price must be finite and positive",
+                        **context,
+                    )
+                if quote_price <= 0:
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_PRICE_INVALID",
+                        "trusted market quote price must be finite and positive",
+                        **context,
+                    )
+                if (
+                    not isinstance(quote.as_of, datetime)
+                    or quote.as_of.tzinfo is None
+                    or quote.as_of.utcoffset() != timezone.utc.utcoffset(None)
+                ):
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_TIMESTAMP_INVALID",
+                        "trusted market quote timestamp must be timezone-aware UTC",
+                        **context,
+                    )
+                now = self._clock()
+                if (
+                    not isinstance(now, datetime)
+                    or now.tzinfo is None
+                    or now.utcoffset() != timezone.utc.utcoffset(None)
+                ):
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_TIMESTAMP_INVALID",
+                        "runtime quote clock must be timezone-aware UTC",
+                        **context,
+                    )
+                age_seconds = Decimal(str((now - quote.as_of).total_seconds()))
+                if age_seconds < -_MAX_QUOTE_FUTURE_SKEW_SECONDS:
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_FROM_FUTURE",
+                        "trusted market quote timestamp exceeds future-skew tolerance",
+                        **context,
+                    )
+                if age_seconds > state["market_quote_max_age_seconds"]:
+                    return self.denied(
+                        "TRUSTED_MARKET_QUOTE_STALE",
+                        "trusted market quote exceeds configured maximum age",
+                        **context,
+                    )
+                conservative_price = max(caller_price, quote_price) * (
+                    Decimal("1")
+                    + state["market_slippage_buffer_percent"] / Decimal("100")
+                )
+                order_price = conservative_price.quantize(
+                    Decimal("0.01"), rounding=ROUND_CEILING
+                )
             else:
                 try:
                     order_price = self._decimal(price)

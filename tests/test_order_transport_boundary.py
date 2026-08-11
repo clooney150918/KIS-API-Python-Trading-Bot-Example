@@ -1,12 +1,19 @@
 import json
+from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
 import kis_api_client
 from kis_api_client import KisApiClient
 from kis_order_engine import KisOrderEngine
-from runtime_safety import RuntimeSafetyGate, SafetyDecision
-from test_runtime_safety import SYNTHETIC_CANO, SYNTHETIC_PRODUCT_CODE, write_state
+from runtime_safety import RuntimeSafetyGate, SafetyDecision, TrustedMarketQuote
+from test_runtime_safety import (
+    SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    SYNTHETIC_CANO,
+    SYNTHETIC_PRODUCT_CODE,
+    write_state,
+)
 
 
 ORDER_PATH = "/uapi/overseas-stock/v1/trading/order"
@@ -64,6 +71,16 @@ def live_decision():
         revision=1,
         ticker="SOXL",
         side="BUY",
+    )
+
+
+def configure_engine_security(engine):
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
+    engine.trusted_quote_provider = lambda ticker: TrustedMarketQuote(
+        price=Decimal("100"),
+        as_of=datetime.now(timezone.utc),
+        source="KIS",
+        ticker=ticker,
     )
 
 
@@ -131,6 +148,7 @@ def test_kis_order_engine_final_gate_issues_one_capability_for_one_post(tmp_path
     state_path = write_state(tmp_path / "runtime_safety.json")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    configure_engine_security(engine)
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine.app_key = "synthetic-app-key"
@@ -155,6 +173,7 @@ def make_live_engine(tmp_path):
     state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="1000")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    configure_engine_security(engine)
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine.app_key = "synthetic-app-key"

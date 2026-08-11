@@ -1,12 +1,14 @@
 import asyncio
+from datetime import datetime, timezone
 from decimal import Decimal
+import hmac
 import hashlib
 import json
 from pathlib import Path
 
 import pytest
 
-from runtime_safety import RuntimeSafetyGate
+from runtime_safety import RuntimeSafetyGate, TrustedMarketQuote
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,8 +16,11 @@ PRODUCTION_STATE = ROOT / "data" / "runtime_safety.json"
 PRODUCTION_CHECKPOINT = ROOT / "data" / "runtime_safety.revision.json"
 SYNTHETIC_CANO = "00000000"
 SYNTHETIC_PRODUCT_CODE = "01"
-SYNTHETIC_ACCOUNT_FINGERPRINT = hashlib.sha256(
-    f"{SYNTHETIC_CANO}:{SYNTHETIC_PRODUCT_CODE}".encode("utf-8")
+SYNTHETIC_ACCOUNT_FINGERPRINT_KEY = b"synthetic-test-only-hmac-key-32b!"
+SYNTHETIC_ACCOUNT_FINGERPRINT = hmac.new(
+    SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    f"{SYNTHETIC_CANO}:{SYNTHETIC_PRODUCT_CODE}".encode("utf-8"),
+    hashlib.sha256,
 ).hexdigest()
 
 
@@ -32,9 +37,12 @@ def write_state(path, **overrides):
         "allowed_account_fingerprints": [SYNTHETIC_ACCOUNT_FINGERPRINT],
         "max_order_quantity": 100,
         "max_order_notional": "25000.00",
+        "market_quote_max_age_seconds": 120,
+        "market_slippage_buffer_percent": "5.00",
     }
     state.update(overrides)
     path.write_text(json.dumps(state), encoding="utf-8")
+    path.chmod(0o600)
     checkpoint_path = path.with_name("runtime_safety.revision.json")
     if not checkpoint_path.exists():
         checkpoint_path.write_text(json.dumps({"revision": 1}), encoding="utf-8")
@@ -53,6 +61,15 @@ def authorize(path, **overrides):
     return RuntimeSafetyGate(path).authorize(**request)
 
 
+def trusted_quote(price="100", ticker="SOXL"):
+    return TrustedMarketQuote(
+        price=Decimal(price),
+        as_of=datetime.now(timezone.utc),
+        source="KIS",
+        ticker=ticker,
+    )
+
+
 def test_missing_state_file_fails_closed(tmp_path):
     decision = authorize(tmp_path / "missing.json")
 
@@ -63,6 +80,7 @@ def test_missing_state_file_fails_closed(tmp_path):
 def test_corrupt_json_fails_closed(tmp_path):
     state_path = tmp_path / "runtime_safety.json"
     state_path.write_text("{not-json", encoding="utf-8")
+    state_path.chmod(0o600)
 
     decision = authorize(state_path)
 
@@ -298,8 +316,8 @@ def test_market_order_requires_positive_finite_risk_reference(
     assert decision.can_submit is False
 
 
-def test_market_order_uses_risk_reference_for_notional_limit(tmp_path):
-    state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="200")
+def test_market_order_uses_trusted_quote_and_buffer_for_notional_limit(tmp_path):
+    state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="210")
 
     allowed = authorize(
         state_path,
@@ -307,6 +325,7 @@ def test_market_order_uses_risk_reference_for_notional_limit(tmp_path):
         price="0",
         order_type="MOC",
         risk_reference_price="100",
+        trusted_market_quote=trusted_quote("100"),
     )
     blocked = authorize(
         state_path,
@@ -314,10 +333,11 @@ def test_market_order_uses_risk_reference_for_notional_limit(tmp_path):
         price="0",
         order_type="MOO",
         risk_reference_price="100.01",
+        trusted_market_quote=trusted_quote("100.01"),
     )
 
     assert allowed.code == "LIVE_AUTHORIZED"
-    assert allowed.notional == Decimal("200")
+    assert allowed.notional == Decimal("210.00")
     assert blocked.code == "NOTIONAL_LIMIT_EXCEEDED"
 
 
@@ -331,10 +351,11 @@ def test_each_market_order_type_uses_positive_risk_reference(tmp_path, order_typ
         price="0",
         order_type=order_type,
         risk_reference_price="100.25",
+        trusted_market_quote=trusted_quote("100.25"),
     )
 
     assert decision.code == "LIVE_AUTHORIZED"
-    assert decision.notional == Decimal("200.50")
+    assert decision.notional == Decimal("210.54")
 
 
 def test_limit_price_zero_remains_blocked_even_with_risk_reference(tmp_path):
@@ -477,6 +498,7 @@ def test_direct_kis_order_boundary_calls_kis_exactly_once_when_live_authorized(t
     state_path = write_state(tmp_path / "runtime_safety.json")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine._safe_float = lambda value: float(value)
@@ -504,6 +526,7 @@ def test_direct_kis_boundary_derives_account_fingerprint_and_blocks_wrong_accoun
     state_path = write_state(tmp_path / "runtime_safety.json")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
     engine.cano = "11111111"
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine._safe_float = lambda value: float(value)
@@ -527,6 +550,7 @@ def test_final_gate_uses_ceiled_kis_price_and_blocks_new_limit_breach(tmp_path):
     state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="99.9995")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine._safe_float = lambda value: float(value)
@@ -552,6 +576,7 @@ def test_reservation_final_gate_uses_ceiled_body_price_and_blocks_limit_breach(t
     state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="99.9995")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine._safe_float = lambda value: float(value)
@@ -572,9 +597,11 @@ def test_reservation_final_gate_uses_ceiled_body_price_and_blocks_limit_breach(t
 def test_kis_moc_accepts_explicit_risk_reference_and_submits_zero_price(tmp_path):
     from kis_order_engine import KisOrderEngine
 
-    state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="100")
+    state_path = write_state(tmp_path / "runtime_safety.json", max_order_notional="105")
     engine = object.__new__(KisOrderEngine)
     engine.runtime_safety_gate = RuntimeSafetyGate(state_path)
+    engine.account_fingerprint_key = SYNTHETIC_ACCOUNT_FINGERPRINT_KEY
+    engine.trusted_quote_provider = lambda ticker: trusted_quote(ticker=ticker)
     engine.cano = SYNTHETIC_CANO
     engine.acnt_prdt_cd = SYNTHETIC_PRODUCT_CODE
     engine._safe_float = lambda value: float(value)
