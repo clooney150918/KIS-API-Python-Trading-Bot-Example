@@ -1,0 +1,1442 @@
+[
+  {
+    "id": 1,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260622",
+    "side": "BUY",
+    "qty": 1,
+    "price": 300.77,
+    "legacy_metadata": {
+      "kis_order_no": "0030163741",
+      "source_index": 1,
+      "original_record": {
+        "date": "20260622",
+        "side": "BUY",
+        "qty": 1,
+        "price": 300.77,
+        "odno": "0030163741"
+      }
+    }
+  },
+  {
+    "id": 2,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260622",
+    "side": "BUY",
+    "qty": 1,
+    "price": 300.77,
+    "legacy_metadata": {
+      "kis_order_no": "0030163754",
+      "source_index": 2,
+      "original_record": {
+        "date": "20260622",
+        "side": "BUY",
+        "qty": 1,
+        "price": 300.77,
+        "odno": "0030163754"
+      }
+    }
+  },
+  {
+    "id": 3,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260623",
+    "side": "BUY",
+    "qty": 1,
+    "price": 231.42,
+    "legacy_metadata": {
+      "kis_order_no": "0030615477",
+      "source_index": 3,
+      "original_record": {
+        "date": "20260623",
+        "side": "BUY",
+        "qty": 1,
+        "price": 231.42,
+        "odno": "0030615477"
+      }
+    }
+  },
+  {
+    "id": 4,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260623",
+    "side": "BUY",
+    "qty": 1,
+    "price": 231.42,
+    "legacy_metadata": {
+      "kis_order_no": "0030615508",
+      "source_index": 4,
+      "original_record": {
+        "date": "20260623",
+        "side": "BUY",
+        "qty": 1,
+        "price": 231.42,
+        "odno": "0030615508"
+      }
+    }
+  },
+  {
+    "id": 5,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260624",
+    "side": "BUY",
+    "qty": 1,
+    "price": 229.57,
+    "legacy_metadata": {
+      "kis_order_no": "0030990143",
+      "source_index": 5,
+      "original_record": {
+        "date": "20260624",
+        "side": "BUY",
+        "qty": 1,
+        "price": 229.57,
+        "odno": "0030990143"
+      }
+    }
+  },
+  {
+    "id": 6,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260624",
+    "side": "BUY",
+    "qty": 1,
+    "price": 229.57,
+    "legacy_metadata": {
+      "kis_order_no": "0030990158",
+      "source_index": 6,
+      "original_record": {
+        "date": "20260624",
+        "side": "BUY",
+        "qty": 1,
+        "price": 229.57,
+        "odno": "0030990158"
+      }
+    }
+  },
+  {
+    "id": 7,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260624",
+    "side": "BUY",
+    "qty": 1,
+    "price": 229.57,
+    "legacy_metadata": {
+      "kis_order_no": "0030990189",
+      "source_index": 7,
+      "original_record": {
+        "date": "20260624",
+        "side": "BUY",
+        "qty": 1,
+        "price": 229.57,
+        "odno": "0030990189"
+      }
+    }
+  },
+  {
+    "id": 8,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260625",
+    "side": "BUY",
+    "qty": 1,
+    "price": 252.61,
+    "legacy_metadata": {
+      "kis_order_no": "0031349236",
+      "source_index": 8,
+      "original_record": {
+        "date": "20260625",
+        "side": "BUY",
+        "qty": 1,
+        "price": 252.61,
+        "odno": "0031349236"
+      }
+    }
+  },
+  {
+    "id": 9,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260625",
+    "side": "BUY",
+    "qty": 1,
+    "price": 252.61,
+    "legacy_metadata": {
+      "kis_order_no": "0031349267",
+      "source_index": 9,
+      "original_record": {
+        "date": "20260625",
+        "side": "BUY",
+        "qty": 1,
+        "price": 252.61,
+        "odno": "0031349267"
+      }
+    }
+  },
+  {
+    "id": 10,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260626",
+    "side": "BUY",
+    "qty": 1,
+    "price": 215.6,
+    "legacy_metadata": {
+      "kis_order_no": "0031710051",
+      "source_index": 10,
+      "original_record": {
+        "date": "20260626",
+        "side": "BUY",
+        "qty": 1,
+        "price": 215.6,
+        "odno": "0031710051"
+      }
+    }
+  },
+  {
+    "id": 11,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260626",
+    "side": "BUY",
+    "qty": 1,
+    "price": 215.6,
+    "legacy_metadata": {
+      "kis_order_no": "0031710065",
+      "source_index": 11,
+      "original_record": {
+        "date": "20260626",
+        "side": "BUY",
+        "qty": 1,
+        "price": 215.6,
+        "odno": "0031710065"
+      }
+    }
+  },
+  {
+    "id": 12,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260626",
+    "side": "BUY",
+    "qty": 1,
+    "price": 215.6,
+    "legacy_metadata": {
+      "kis_order_no": "0031710093",
+      "source_index": 12,
+      "original_record": {
+        "date": "20260626",
+        "side": "BUY",
+        "qty": 1,
+        "price": 215.6,
+        "odno": "0031710093"
+      }
+    }
+  },
+  {
+    "id": 13,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260626",
+    "side": "BUY",
+    "qty": 1,
+    "price": 215.6,
+    "legacy_metadata": {
+      "kis_order_no": "0031710108",
+      "source_index": 13,
+      "original_record": {
+        "date": "20260626",
+        "side": "BUY",
+        "qty": 1,
+        "price": 215.6,
+        "odno": "0031710108"
+      }
+    }
+  },
+  {
+    "id": 14,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260629",
+    "side": "BUY",
+    "qty": 1,
+    "price": 236.52,
+    "legacy_metadata": {
+      "kis_order_no": "0030125232",
+      "source_index": 14,
+      "original_record": {
+        "date": "20260629",
+        "side": "BUY",
+        "qty": 1,
+        "price": 236.52,
+        "odno": "0030125232"
+      }
+    }
+  },
+  {
+    "id": 15,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260629",
+    "side": "BUY",
+    "qty": 1,
+    "price": 236.52,
+    "legacy_metadata": {
+      "kis_order_no": "0030125249",
+      "source_index": 15,
+      "original_record": {
+        "date": "20260629",
+        "side": "BUY",
+        "qty": 1,
+        "price": 236.52,
+        "odno": "0030125249"
+      }
+    }
+  },
+  {
+    "id": 16,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260629",
+    "side": "BUY",
+    "qty": 1,
+    "price": 236.52,
+    "legacy_metadata": {
+      "kis_order_no": "0030125299",
+      "source_index": 16,
+      "original_record": {
+        "date": "20260629",
+        "side": "BUY",
+        "qty": 1,
+        "price": 236.52,
+        "odno": "0030125299"
+      }
+    }
+  },
+  {
+    "id": 17,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260630",
+    "side": "SELL",
+    "qty": 4,
+    "price": 266.71,
+    "legacy_metadata": {
+      "kis_order_no": "0030473444",
+      "source_index": 17,
+      "original_record": {
+        "date": "20260630",
+        "side": "SELL",
+        "qty": 4,
+        "price": 266.71,
+        "odno": "0030473444"
+      }
+    }
+  },
+  {
+    "id": 18,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260701",
+    "side": "BUY",
+    "qty": 1,
+    "price": 217.55,
+    "legacy_metadata": {
+      "kis_order_no": "0030825851",
+      "source_index": 18,
+      "original_record": {
+        "date": "20260701",
+        "side": "BUY",
+        "qty": 1,
+        "price": 217.55,
+        "odno": "0030825851"
+      }
+    }
+  },
+  {
+    "id": 19,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260701",
+    "side": "BUY",
+    "qty": 1,
+    "price": 217.55,
+    "legacy_metadata": {
+      "kis_order_no": "0030825872",
+      "source_index": 19,
+      "original_record": {
+        "date": "20260701",
+        "side": "BUY",
+        "qty": 1,
+        "price": 217.55,
+        "odno": "0030825872"
+      }
+    }
+  },
+  {
+    "id": 20,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260701",
+    "side": "BUY",
+    "qty": 1,
+    "price": 217.55,
+    "legacy_metadata": {
+      "kis_order_no": "0030825904",
+      "source_index": 20,
+      "original_record": {
+        "date": "20260701",
+        "side": "BUY",
+        "qty": 1,
+        "price": 217.55,
+        "odno": "0030825904"
+      }
+    }
+  },
+  {
+    "id": 21,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260701",
+    "side": "BUY",
+    "qty": 1,
+    "price": 217.55,
+    "legacy_metadata": {
+      "kis_order_no": "0030825920",
+      "source_index": 21,
+      "original_record": {
+        "date": "20260701",
+        "side": "BUY",
+        "qty": 1,
+        "price": 217.55,
+        "odno": "0030825920"
+      }
+    }
+  },
+  {
+    "id": 22,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260702",
+    "side": "BUY",
+    "qty": 1,
+    "price": 181.47,
+    "legacy_metadata": {
+      "kis_order_no": "0031245856",
+      "source_index": 22,
+      "original_record": {
+        "date": "20260702",
+        "side": "BUY",
+        "qty": 1,
+        "price": 181.47,
+        "odno": "0031245856"
+      }
+    }
+  },
+  {
+    "id": 23,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260702",
+    "side": "BUY",
+    "qty": 1,
+    "price": 181.47,
+    "legacy_metadata": {
+      "kis_order_no": "0031245875",
+      "source_index": 23,
+      "original_record": {
+        "date": "20260702",
+        "side": "BUY",
+        "qty": 1,
+        "price": 181.47,
+        "odno": "0031245875"
+      }
+    }
+  },
+  {
+    "id": 24,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260702",
+    "side": "BUY",
+    "qty": 1,
+    "price": 181.47,
+    "legacy_metadata": {
+      "kis_order_no": "0031245908",
+      "source_index": 24,
+      "original_record": {
+        "date": "20260702",
+        "side": "BUY",
+        "qty": 1,
+        "price": 181.47,
+        "odno": "0031245908"
+      }
+    }
+  },
+  {
+    "id": 25,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260702",
+    "side": "BUY",
+    "qty": 1,
+    "price": 181.47,
+    "legacy_metadata": {
+      "kis_order_no": "0031245926",
+      "source_index": 25,
+      "original_record": {
+        "date": "20260702",
+        "side": "BUY",
+        "qty": 1,
+        "price": 181.47,
+        "odno": "0031245926"
+      }
+    }
+  },
+  {
+    "id": 26,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260706",
+    "side": "BUY",
+    "qty": 1,
+    "price": 194.65,
+    "legacy_metadata": {
+      "kis_order_no": "0030142697",
+      "source_index": 26,
+      "original_record": {
+        "date": "20260706",
+        "side": "BUY",
+        "qty": 1,
+        "price": 194.65,
+        "odno": "0030142697"
+      }
+    }
+  },
+  {
+    "id": 27,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260706",
+    "side": "BUY",
+    "qty": 1,
+    "price": 194.65,
+    "legacy_metadata": {
+      "kis_order_no": "0030142712",
+      "source_index": 27,
+      "original_record": {
+        "date": "20260706",
+        "side": "BUY",
+        "qty": 1,
+        "price": 194.65,
+        "odno": "0030142712"
+      }
+    }
+  },
+  {
+    "id": 28,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260706",
+    "side": "BUY",
+    "qty": 1,
+    "price": 194.65,
+    "legacy_metadata": {
+      "kis_order_no": "0030142737",
+      "source_index": 28,
+      "original_record": {
+        "date": "20260706",
+        "side": "BUY",
+        "qty": 1,
+        "price": 194.65,
+        "odno": "0030142737"
+      }
+    }
+  },
+  {
+    "id": 29,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260706",
+    "side": "BUY",
+    "qty": 1,
+    "price": 194.65,
+    "legacy_metadata": {
+      "kis_order_no": "0030142750",
+      "source_index": 29,
+      "original_record": {
+        "date": "20260706",
+        "side": "BUY",
+        "qty": 1,
+        "price": 194.65,
+        "odno": "0030142750"
+      }
+    }
+  },
+  {
+    "id": 30,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260707",
+    "side": "BUY",
+    "qty": 2,
+    "price": 165.28,
+    "legacy_metadata": {
+      "kis_order_no": "0030477338",
+      "source_index": 30,
+      "original_record": {
+        "date": "20260707",
+        "side": "BUY",
+        "qty": 2,
+        "price": 165.28,
+        "odno": "0030477338"
+      }
+    }
+  },
+  {
+    "id": 31,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260707",
+    "side": "BUY",
+    "qty": 1,
+    "price": 165.28,
+    "legacy_metadata": {
+      "kis_order_no": "0030477401",
+      "source_index": 31,
+      "original_record": {
+        "date": "20260707",
+        "side": "BUY",
+        "qty": 1,
+        "price": 165.28,
+        "odno": "0030477401"
+      }
+    }
+  },
+  {
+    "id": 32,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260708",
+    "side": "BUY",
+    "qty": 1,
+    "price": 174.82,
+    "legacy_metadata": {
+      "kis_order_no": "0030883987",
+      "source_index": 32,
+      "original_record": {
+        "date": "20260708",
+        "side": "BUY",
+        "qty": 1,
+        "price": 174.82,
+        "odno": "0030883987"
+      }
+    }
+  },
+  {
+    "id": 33,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260709",
+    "side": "BUY",
+    "qty": 2,
+    "price": 192.45,
+    "legacy_metadata": {
+      "kis_order_no": "0031204512",
+      "source_index": 33,
+      "original_record": {
+        "date": "20260709",
+        "side": "BUY",
+        "qty": 2,
+        "price": 192.45,
+        "odno": "0031204512"
+      }
+    }
+  },
+  {
+    "id": 34,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260709",
+    "side": "BUY",
+    "qty": 1,
+    "price": 192.45,
+    "legacy_metadata": {
+      "kis_order_no": "0031204532",
+      "source_index": 34,
+      "original_record": {
+        "date": "20260709",
+        "side": "BUY",
+        "qty": 1,
+        "price": 192.45,
+        "odno": "0031204532"
+      }
+    }
+  },
+  {
+    "id": 35,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260709",
+    "side": "BUY",
+    "qty": 1,
+    "price": 192.45,
+    "legacy_metadata": {
+      "kis_order_no": "0031204565",
+      "source_index": 35,
+      "original_record": {
+        "date": "20260709",
+        "side": "BUY",
+        "qty": 1,
+        "price": 192.45,
+        "odno": "0031204565"
+      }
+    }
+  },
+  {
+    "id": 36,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260710",
+    "side": "BUY",
+    "qty": 2,
+    "price": 192.26,
+    "legacy_metadata": {
+      "kis_order_no": "0031375986",
+      "source_index": 36,
+      "original_record": {
+        "date": "20260710",
+        "side": "BUY",
+        "qty": 2,
+        "price": 192.26,
+        "odno": "0031375986"
+      }
+    }
+  },
+  {
+    "id": 37,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260710",
+    "side": "BUY",
+    "qty": 2,
+    "price": 192.26,
+    "legacy_metadata": {
+      "kis_order_no": "0031375995",
+      "source_index": 37,
+      "original_record": {
+        "date": "20260710",
+        "side": "BUY",
+        "qty": 2,
+        "price": 192.26,
+        "odno": "0031375995"
+      }
+    }
+  },
+  {
+    "id": 38,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260713",
+    "side": "BUY",
+    "qty": 2,
+    "price": 165.37,
+    "legacy_metadata": {
+      "kis_order_no": "0030017786",
+      "source_index": 38,
+      "original_record": {
+        "date": "20260713",
+        "side": "BUY",
+        "qty": 2,
+        "price": 165.37,
+        "odno": "0030017786"
+      }
+    }
+  },
+  {
+    "id": 39,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260713",
+    "side": "BUY",
+    "qty": 2,
+    "price": 165.37,
+    "legacy_metadata": {
+      "kis_order_no": "0030017790",
+      "source_index": 39,
+      "original_record": {
+        "date": "20260713",
+        "side": "BUY",
+        "qty": 2,
+        "price": 165.37,
+        "odno": "0030017790"
+      }
+    }
+  },
+  {
+    "id": 40,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260713",
+    "side": "BUY",
+    "qty": 1,
+    "price": 165.37,
+    "legacy_metadata": {
+      "kis_order_no": "0030017816",
+      "source_index": 40,
+      "original_record": {
+        "date": "20260713",
+        "side": "BUY",
+        "qty": 1,
+        "price": 165.37,
+        "odno": "0030017816"
+      }
+    }
+  },
+  {
+    "id": 41,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260714",
+    "side": "BUY",
+    "qty": 2,
+    "price": 176.66,
+    "legacy_metadata": {
+      "kis_order_no": "0030349329",
+      "source_index": 41,
+      "original_record": {
+        "date": "20260714",
+        "side": "BUY",
+        "qty": 2,
+        "price": 176.66,
+        "odno": "0030349329"
+      }
+    }
+  },
+  {
+    "id": 42,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260714",
+    "side": "BUY",
+    "qty": 2,
+    "price": 176.66,
+    "legacy_metadata": {
+      "kis_order_no": "0030349339",
+      "source_index": 42,
+      "original_record": {
+        "date": "20260714",
+        "side": "BUY",
+        "qty": 2,
+        "price": 176.66,
+        "odno": "0030349339"
+      }
+    }
+  },
+  {
+    "id": 43,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260715",
+    "side": "BUY",
+    "qty": 4,
+    "price": 165.55,
+    "legacy_metadata": {
+      "kis_order_no": "0030645970",
+      "source_index": 43,
+      "original_record": {
+        "date": "20260715",
+        "side": "BUY",
+        "qty": 4,
+        "price": 165.55,
+        "odno": "0030645970"
+      }
+    }
+  },
+  {
+    "id": 44,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260715",
+    "side": "BUY",
+    "qty": 1,
+    "price": 165.55,
+    "legacy_metadata": {
+      "kis_order_no": "0030645989",
+      "source_index": 44,
+      "original_record": {
+        "date": "20260715",
+        "side": "BUY",
+        "qty": 1,
+        "price": 165.55,
+        "odno": "0030645989"
+      }
+    }
+  },
+  {
+    "id": 45,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260716",
+    "side": "BUY",
+    "qty": 4,
+    "price": 142.48,
+    "legacy_metadata": {
+      "kis_order_no": "0030950190",
+      "source_index": 45,
+      "original_record": {
+        "date": "20260716",
+        "side": "BUY",
+        "qty": 4,
+        "price": 142.48,
+        "odno": "0030950190"
+      }
+    }
+  },
+  {
+    "id": 46,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260716",
+    "side": "BUY",
+    "qty": 1,
+    "price": 142.48,
+    "legacy_metadata": {
+      "kis_order_no": "0030950201",
+      "source_index": 46,
+      "original_record": {
+        "date": "20260716",
+        "side": "BUY",
+        "qty": 1,
+        "price": 142.48,
+        "odno": "0030950201"
+      }
+    }
+  },
+  {
+    "id": 47,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260716",
+    "side": "BUY",
+    "qty": 1,
+    "price": 142.48,
+    "legacy_metadata": {
+      "kis_order_no": "0030950206",
+      "source_index": 47,
+      "original_record": {
+        "date": "20260716",
+        "side": "BUY",
+        "qty": 1,
+        "price": 142.48,
+        "odno": "0030950206"
+      }
+    }
+  },
+  {
+    "id": 48,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260717",
+    "side": "BUY",
+    "qty": 1,
+    "price": 135.47,
+    "legacy_metadata": {
+      "kis_order_no": "0031274496",
+      "source_index": 48,
+      "original_record": {
+        "date": "20260717",
+        "side": "BUY",
+        "qty": 1,
+        "price": 135.47,
+        "odno": "0031274496"
+      }
+    }
+  },
+  {
+    "id": 49,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260720",
+    "side": "BUY",
+    "qty": 1,
+    "price": 136.81,
+    "legacy_metadata": {
+      "kis_order_no": "0030011552",
+      "source_index": 49,
+      "original_record": {
+        "date": "20260720",
+        "side": "BUY",
+        "qty": 1,
+        "price": 136.81,
+        "odno": "0030011552"
+      }
+    }
+  },
+  {
+    "id": 50,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260720",
+    "side": "BUY",
+    "qty": 1,
+    "price": 136.81,
+    "legacy_metadata": {
+      "kis_order_no": "0030011557",
+      "source_index": 50,
+      "original_record": {
+        "date": "20260720",
+        "side": "BUY",
+        "qty": 1,
+        "price": 136.81,
+        "odno": "0030011557"
+      }
+    }
+  },
+  {
+    "id": 51,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260721",
+    "side": "BUY",
+    "qty": 4,
+    "price": 158.54,
+    "legacy_metadata": {
+      "kis_order_no": "0030313995",
+      "source_index": 51,
+      "original_record": {
+        "date": "20260721",
+        "side": "BUY",
+        "qty": 4,
+        "price": 158.54,
+        "odno": "0030313995"
+      }
+    }
+  },
+  {
+    "id": 52,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260721",
+    "side": "BUY",
+    "qty": 1,
+    "price": 158.54,
+    "legacy_metadata": {
+      "kis_order_no": "0030314016",
+      "source_index": 52,
+      "original_record": {
+        "date": "20260721",
+        "side": "BUY",
+        "qty": 1,
+        "price": 158.54,
+        "odno": "0030314016"
+      }
+    }
+  },
+  {
+    "id": 53,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260722",
+    "side": "BUY",
+    "qty": 5,
+    "price": 160.99,
+    "legacy_metadata": {
+      "kis_order_no": "0030617362",
+      "source_index": 53,
+      "original_record": {
+        "date": "20260722",
+        "side": "BUY",
+        "qty": 5,
+        "price": 160.99,
+        "odno": "0030617362"
+      }
+    }
+  },
+  {
+    "id": 54,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260723",
+    "side": "BUY",
+    "qty": 5,
+    "price": 157.5,
+    "legacy_metadata": {
+      "kis_order_no": "0030925436",
+      "source_index": 54,
+      "original_record": {
+        "date": "20260723",
+        "side": "BUY",
+        "qty": 5,
+        "price": 157.5,
+        "odno": "0030925436"
+      }
+    }
+  },
+  {
+    "id": 55,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260724",
+    "side": "BUY",
+    "qty": 5,
+    "price": 136.81,
+    "legacy_metadata": {
+      "kis_order_no": "0031262925",
+      "source_index": 55,
+      "original_record": {
+        "date": "20260724",
+        "side": "BUY",
+        "qty": 5,
+        "price": 136.81,
+        "odno": "0031262925"
+      }
+    }
+  },
+  {
+    "id": 56,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260724",
+    "side": "BUY",
+    "qty": 1,
+    "price": 136.81,
+    "legacy_metadata": {
+      "kis_order_no": "0031262950",
+      "source_index": 56,
+      "original_record": {
+        "date": "20260724",
+        "side": "BUY",
+        "qty": 1,
+        "price": 136.81,
+        "odno": "0031262950"
+      }
+    }
+  },
+  {
+    "id": 57,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260727",
+    "side": "BUY",
+    "qty": 5,
+    "price": 128.15,
+    "legacy_metadata": {
+      "kis_order_no": "0030010372",
+      "source_index": 57,
+      "original_record": {
+        "date": "20260727",
+        "side": "BUY",
+        "qty": 5,
+        "price": 128.15,
+        "odno": "0030010372"
+      }
+    }
+  },
+  {
+    "id": 58,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260727",
+    "side": "BUY",
+    "qty": 1,
+    "price": 128.15,
+    "legacy_metadata": {
+      "kis_order_no": "0030010398",
+      "source_index": 58,
+      "original_record": {
+        "date": "20260727",
+        "side": "BUY",
+        "qty": 1,
+        "price": 128.15,
+        "odno": "0030010398"
+      }
+    }
+  },
+  {
+    "id": 59,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260728",
+    "side": "BUY",
+    "qty": 5,
+    "price": 109.54,
+    "legacy_metadata": {
+      "kis_order_no": "0030297868",
+      "source_index": 59,
+      "original_record": {
+        "date": "20260728",
+        "side": "BUY",
+        "qty": 5,
+        "price": 109.54,
+        "odno": "0030297868"
+      }
+    }
+  },
+  {
+    "id": 60,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260728",
+    "side": "BUY",
+    "qty": 1,
+    "price": 109.54,
+    "legacy_metadata": {
+      "kis_order_no": "0030297892",
+      "source_index": 60,
+      "original_record": {
+        "date": "20260728",
+        "side": "BUY",
+        "qty": 1,
+        "price": 109.54,
+        "odno": "0030297892"
+      }
+    }
+  },
+  {
+    "id": 61,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260728",
+    "side": "BUY",
+    "qty": 1,
+    "price": 109.54,
+    "legacy_metadata": {
+      "kis_order_no": "0030297900",
+      "source_index": 61,
+      "original_record": {
+        "date": "20260728",
+        "side": "BUY",
+        "qty": 1,
+        "price": 109.54,
+        "odno": "0030297900"
+      }
+    }
+  },
+  {
+    "id": 62,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260728",
+    "side": "BUY",
+    "qty": 1,
+    "price": 109.54,
+    "legacy_metadata": {
+      "kis_order_no": "0030297907",
+      "source_index": 62,
+      "original_record": {
+        "date": "20260728",
+        "side": "BUY",
+        "qty": 1,
+        "price": 109.54,
+        "odno": "0030297907"
+      }
+    }
+  },
+  {
+    "id": 63,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260729",
+    "side": "BUY",
+    "qty": 1,
+    "price": 91.99,
+    "legacy_metadata": {
+      "kis_order_no": "0030637341",
+      "source_index": 63,
+      "original_record": {
+        "date": "20260729",
+        "side": "BUY",
+        "qty": 1,
+        "price": 91.99,
+        "odno": "0030637341"
+      }
+    }
+  },
+  {
+    "id": 64,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260729",
+    "side": "BUY",
+    "qty": 1,
+    "price": 91.99,
+    "legacy_metadata": {
+      "kis_order_no": "0030637346",
+      "source_index": 64,
+      "original_record": {
+        "date": "20260729",
+        "side": "BUY",
+        "qty": 1,
+        "price": 91.99,
+        "odno": "0030637346"
+      }
+    }
+  },
+  {
+    "id": 65,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260729",
+    "side": "BUY",
+    "qty": 1,
+    "price": 91.99,
+    "legacy_metadata": {
+      "kis_order_no": "0030637353",
+      "source_index": 65,
+      "original_record": {
+        "date": "20260729",
+        "side": "BUY",
+        "qty": 1,
+        "price": 91.99,
+        "odno": "0030637353"
+      }
+    }
+  },
+  {
+    "id": 66,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260731",
+    "side": "BUY",
+    "qty": 6,
+    "price": 114.72,
+    "legacy_metadata": {
+      "kis_order_no": "0031250298",
+      "source_index": 66,
+      "original_record": {
+        "date": "20260731",
+        "side": "BUY",
+        "qty": 6,
+        "price": 114.72,
+        "odno": "0031250298"
+      }
+    }
+  },
+  {
+    "id": 67,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260731",
+    "side": "BUY",
+    "qty": 1,
+    "price": 114.72,
+    "legacy_metadata": {
+      "kis_order_no": "0031250311",
+      "source_index": 67,
+      "original_record": {
+        "date": "20260731",
+        "side": "BUY",
+        "qty": 1,
+        "price": 114.72,
+        "odno": "0031250311"
+      }
+    }
+  },
+  {
+    "id": 68,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260803",
+    "side": "SELL",
+    "qty": 10,
+    "price": 116.71,
+    "legacy_metadata": {
+      "kis_order_no": "0030010328",
+      "source_index": 68,
+      "original_record": {
+        "date": "20260803",
+        "side": "SELL",
+        "qty": 10,
+        "price": 116.71,
+        "odno": "0030010328"
+      }
+    }
+  },
+  {
+    "id": 69,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260804",
+    "side": "SELL",
+    "qty": 9,
+    "price": 139.9,
+    "legacy_metadata": {
+      "kis_order_no": "0030322868",
+      "source_index": 69,
+      "original_record": {
+        "date": "20260804",
+        "side": "SELL",
+        "qty": 9,
+        "price": 139.9,
+        "odno": "0030322868"
+      }
+    }
+  },
+  {
+    "id": 70,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260805",
+    "side": "BUY",
+    "qty": 9,
+    "price": 132.07,
+    "legacy_metadata": {
+      "kis_order_no": "0030700387",
+      "source_index": 70,
+      "original_record": {
+        "date": "20260805",
+        "side": "BUY",
+        "qty": 9,
+        "price": 132.07,
+        "odno": "0030700387"
+      }
+    }
+  },
+  {
+    "id": 71,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260805",
+    "side": "BUY",
+    "qty": 9,
+    "price": 132.07,
+    "legacy_metadata": {
+      "kis_order_no": "0030700396",
+      "source_index": 71,
+      "original_record": {
+        "date": "20260805",
+        "side": "BUY",
+        "qty": 9,
+        "price": 132.07,
+        "odno": "0030700396"
+      }
+    }
+  },
+  {
+    "id": 72,
+    "source": "LEGACY_HISTORY",
+    "ticker": "SOXL",
+    "date": "20260810",
+    "side": "SELL",
+    "qty": 5,
+    "price": 130.0,
+    "legacy_metadata": {
+      "kis_order_no": "0030254610",
+      "source_index": 72,
+      "original_record": {
+        "date": "20260810",
+        "side": "SELL",
+        "qty": 5,
+        "price": 130.0,
+        "odno": "0030254610"
+      }
+    }
+  }
+]

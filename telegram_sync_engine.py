@@ -317,10 +317,9 @@ class TelegramSyncEngine:
                             calib_price = actual_avg if actual_avg > 0 else temp_sim_avg
                             calib_avg = actual_avg if actual_avg > 0 else temp_sim_avg
                             
-                        calib_item = {'date': target_ledger_str, 'side': calib_side, 'qty': abs(gap_qty), 'price': calib_price, 'avg_price': calib_avg, 'exec_id': f"CALIB_{int(time.time())}", 'desc': "비파괴 보정"}
-                        if is_rev: calib_item['is_reverse'] = True
-                        new_target_records.append(calib_item)
-                        
+                        logging.error(f"⛔ [{ticker}] legacy CALIB synthetic ledger generation blocked; use confirmed post-cutoff KIS fills only.")
+                        await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] CALIB 합성 장부 생성을 차단했습니다.</b>\n▫️ 기존 KIS 72건은 LEGACY_HISTORY로만 보존됩니다.\n▫️ 새 공식 원장은 2026-08-11 이후 KIS 확정 체결만 append합니다.", parse_mode='HTML')
+                        return "CALIB synthetic ledger generation blocked - legacy facts are audit-only"
                     if new_target_records:
                         if safe_actual_qty_for_vrev > 0:
                             for r in new_target_records: r['avg_price'] = actual_avg

@@ -63,6 +63,8 @@ class ConfigManager:
             "T_STATE": "data/t_state.json",
             "STRATEGY_BASELINE": "data/strategy_baseline_SOXL_2026-08-11.json",
             "T_EVENTS": "data/t_events_SOXL.jsonl",
+            "LEGACY_HISTORY": "data/legacy_history_SOXL_20260622_20260810.json",
+            "EXECUTION_LEDGER": "data/execution_ledger_SOXL.jsonl",
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
@@ -344,31 +346,8 @@ class ConfigManager:
                 self._save_json(self.FILES["LEDGER"], ledger)
 
     def overwrite_genesis_ledger(self, ticker, genesis_records, actual_avg):
-        with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
-            target_recs = [r for r in ledger if r.get('ticker') == ticker]
-            
-            if len(target_recs) > 0:
-                logging.warning(f"⚠️ [보안 차단] {ticker}의 장부 기록이 이미 존재하여 파괴적 Genesis 덮어쓰기를 차단했습니다.")
-                return
-
-            max_id = max([int(self._safe_float(r.get('id', 0))) for r in ledger] + [0])
-            for i, rec in enumerate(genesis_records or []):
-                if not isinstance(rec, dict): continue
-                max_id += 1
-                ledger.append({
-                    "id": max_id,
-                    "date": rec.get('date'),
-                    "ticker": ticker,
-                    "side": rec.get('side'),
-                    "price": self._safe_float(rec.get('price', 0.0)),
-                    "qty": int(self._safe_float(rec.get('qty', 0))),
-                    "avg_price": self._safe_float(actual_avg), 
-                    "exec_id": f"GENESIS_{int(time.time())}_{i}",
-                    "desc": "✨과거기록복원",
-                    "is_reverse": False 
-                })
-            self._save_json(self.FILES["LEDGER"], ledger)
+        from ledger_migration import LegacyLedgerError
+        raise LegacyLedgerError("synthetic GENESIS ledger generation is blocked from the official pipeline")
 
     def overwrite_incremental_ledger(self, ticker, temp_recs, new_today_records):
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
@@ -381,6 +360,8 @@ class ConfigManager:
             
             for i, rec in enumerate(new_today_records or []):
                 if not isinstance(rec, dict): continue
+                from ledger_migration import reject_synthetic_official_event
+                reject_synthetic_official_event(rec)
                 max_id += 1
                 new_row = {
                     "id": max_id,
@@ -402,24 +383,8 @@ class ConfigManager:
             self._save_json(self.FILES["LEDGER"], remaining)
 
     def overwrite_ledger(self, ticker, actual_qty, actual_avg):
-        with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
-            target_recs = [r for r in ledger if r.get('ticker') == ticker]
-            
-            if len(target_recs) > 0:
-                logging.warning(f"⚠️ [보안 차단] {ticker}의 장부 기록이 이미 존재하여 파괴적 INIT 덮어쓰기를 차단했습니다.")
-                return
-                
-            est = ZoneInfo('America/New_York')
-            today_str = datetime.datetime.now(est).strftime('%Y-%m-%d')
-            new_id = 1 if not ledger else max([int(self._safe_float(r.get('id', 0))) for r in ledger] + [0]) + 1
-             
-            ledger.append({
-                "id": new_id, "date": today_str, "ticker": ticker, "side": "BUY",
-                "price": self._safe_float(actual_avg), "qty": int(self._safe_float(actual_qty)), "avg_price": self._safe_float(actual_avg), 
-                "exec_id": f"INIT_{int(time.time())}", "desc": "✨최초스냅샷", "is_reverse": False
-            })
-            self._save_json(self.FILES["LEDGER"], ledger)
+        from ledger_migration import LegacyLedgerError
+        raise LegacyLedgerError("synthetic INIT ledger generation is blocked from the official pipeline")
 
     def calibrate_avg_price(self, ticker, actual_avg):
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
