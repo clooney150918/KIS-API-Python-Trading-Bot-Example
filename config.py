@@ -87,6 +87,18 @@ class ConfigManager:
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
+        self._last_t_event_status = {}
+
+    def _set_t_event_status(self, ticker, ok, error=None):
+        target = str(ticker).upper()
+        self._last_t_event_status[target] = {
+            "ok": bool(ok),
+            "error": "" if error is None else str(error),
+        }
+
+    def get_t_event_state_status(self, ticker):
+        target = str(ticker).upper()
+        return self._last_t_event_status.get(target, {"ok": True, "error": ""}).copy()
 
     def _safe_float(self, value):
         try:
@@ -293,17 +305,19 @@ class ConfigManager:
     def get_absolute_t_val(self, ticker, actual_qty, actual_avg_price):
         # V4.0: T는 승인된 immutable baseline + append-only 체결 이벤트 원장만이
         # source of truth다. actual_qty/actual_avg_price는 원가 역산에 쓰지 않는다.
+        target = str(ticker).upper()
         try:
             from trade_state_store import TradeStateStore
 
-            target = str(ticker).upper()
             store = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"])
             state = store.load_state(target)
             t_val = float(state.t)
             remaining_splits = max(1.0, 20.0 - t_val)
             one_portion = float(state.available_cash) / remaining_splits
+            self._set_t_event_status(target, True)
             return round(t_val, 2), one_portion
         except Exception as e:
+            self._set_t_event_status(target, False, e)
             logging.error(f"⛔ [{ticker}] T 이벤트 원장 로드 실패 — 원가 역산 없이 fail-safe 0 반환: {e}")
             return 0.0, 0.0
 
@@ -650,17 +664,19 @@ class ConfigManager:
     def calculate_v14_state(self, ticker):
         # Official Task 3 source: immutable KIS baseline + append-only T events.
         # Do not reconstruct T from cost basis.
+        target = str(ticker).upper()
         try:
             from trade_state_store import TradeStateStore
 
-            target = str(ticker).upper()
             state = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"]).load_state(target)
             t_val = float(state.t)
             rem_cash = float(state.available_cash)
             safe_denom = max(1.0, 20.0 - t_val)
             current_budget = rem_cash / safe_denom
+            self._set_t_event_status(target, True)
             return max(0.0, round(t_val, 4)), max(0.0, current_budget), max(0.0, rem_cash)
         except Exception as e:
+            self._set_t_event_status(target, False, e)
             logging.error(f"⛔ [{ticker}] V14 state ledger load failed; cost-basis inverse blocked: {e}")
             return 0.0, 0.0, 0.0
 

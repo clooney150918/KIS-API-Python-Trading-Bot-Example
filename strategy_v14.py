@@ -236,6 +236,21 @@ class V4Strategy:
         # V4.0: T는 원가 역산값이 아니라 체결 이벤트 상태값이다.
         t_val, _ = self.cfg.get_absolute_t_val(ticker, qty, avg_price)
         t_val = round(self._safe_float(t_val), 2)
+        t_event_status_getter = getattr(self.cfg, "get_t_event_state_status", None)
+        t_event_status = t_event_status_getter(ticker) if callable(t_event_status_getter) else {"ok": True, "error": ""}
+        if isinstance(t_event_status, dict) and not t_event_status.get("ok", True):
+            reason = t_event_status.get("error") or "T event ledger unavailable"
+            plan_result = {
+                "orders": [], "core_orders": [], "bonus_orders": [],
+                "total_q": qty, "avg_price": avg_price, "t_val": t_val,
+                "one_portion": 0.0, "process_status": "⛔T이벤트원장HALT",
+                "is_reverse": False, "star_price": 0.0, "star_ratio": 0.0,
+                "target_price": 0.0, "real_cash_used": real_available_cash,
+                "tracking_info": {}, "initial_qty": qty, "is_zero_start": qty == 0,
+                "safety": {"halted": True, "reason": f"T event ledger unavailable: {reason}"}
+            }
+            if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
+            return plan_result
 
         target_price = self._ceil(avg_price * (1 + target_ratio)) if avg_price > 0 else 0.0
         

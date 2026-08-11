@@ -1,6 +1,7 @@
 import json
 
 from config import ConfigManager
+from strategy_v14 import V4Strategy
 
 
 BASELINE = {
@@ -16,6 +17,83 @@ BASELINE = {
     "legacy_execution_count": 72,
     "immutable": True,
 }
+
+
+def _isolated_strategy_config(tmp_path, events_path):
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(BASELINE), encoding="utf-8")
+
+    cfg = ConfigManager()
+    cfg.FILES["STRATEGY_BASELINE"] = str(baseline_path)
+    cfg.FILES["T_EVENTS"] = str(events_path)
+    cfg.FILES["T_STATE"] = str(tmp_path / "t_state.json")
+    cfg.FILES["REVERSE_CFG"] = str(tmp_path / "reverse.json")
+    cfg.FILES["SPLIT"] = str(tmp_path / "split.json")
+    cfg.FILES["SEED_CFG"] = str(tmp_path / "seed.json")
+    cfg.FILES["PROFIT_CFG"] = str(tmp_path / "profit.json")
+    cfg.FILES["LOCKS"] = str(tmp_path / "locks.json")
+    (tmp_path / "t_state.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "reverse.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "split.json").write_text(json.dumps({"SOXL": 20.0}), encoding="utf-8")
+    (tmp_path / "seed.json").write_text(json.dumps({"SOXL": 6720.0}), encoding="utf-8")
+    (tmp_path / "profit.json").write_text(json.dumps({"SOXL": 12.0}), encoding="utf-8")
+    return cfg
+
+
+def _strategy_plan(cfg):
+    strategy = V4Strategy(cfg)
+    strategy.load_daily_snapshot = lambda ticker: None
+    return strategy.get_plan(
+        "SOXL",
+        current_price=100.0,
+        avg_price=158.0735,
+        qty=98,
+        prev_close=99.0,
+        available_cash=1482.88,
+        market_type="REG",
+    )
+
+
+def test_strategy_halts_order_generation_when_event_ledger_missing(tmp_path):
+    cfg = _isolated_strategy_config(tmp_path, tmp_path / "missing-events.jsonl")
+
+    plan = _strategy_plan(cfg)
+
+    assert plan["orders"] == []
+    assert plan["core_orders"] == []
+    assert plan["bonus_orders"] == []
+    assert plan["process_status"].startswith("⛔")
+    assert "T" in plan["process_status"]
+    assert plan.get("safety", {}).get("halted") is True
+    assert "ledger" in plan.get("safety", {}).get("reason", "").lower()
+
+
+def test_strategy_halts_order_generation_when_event_ledger_is_corrupt(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text('{"event_id": "broken"}', encoding="utf-8")
+    cfg = _isolated_strategy_config(tmp_path, events_path)
+
+    plan = _strategy_plan(cfg)
+
+    assert plan["orders"] == []
+    assert plan["core_orders"] == []
+    assert plan["bonus_orders"] == []
+    assert plan["process_status"].startswith("⛔")
+    assert plan.get("safety", {}).get("halted") is True
+    assert "ledger" in plan.get("safety", {}).get("reason", "").lower()
+
+
+def test_strategy_empty_existing_event_ledger_uses_baseline_t_without_overblocking(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text("", encoding="utf-8")
+    cfg = _isolated_strategy_config(tmp_path, events_path)
+
+    plan = _strategy_plan(cfg)
+
+    assert plan["t_val"] == 18.32
+    assert plan.get("safety") is None
+    assert plan["orders"]
+    assert any(order.get("side") in {"BUY", "SELL"} for order in plan["orders"])
 
 
 def test_config_absolute_t_reads_baseline_event_ledger_only(tmp_path):
