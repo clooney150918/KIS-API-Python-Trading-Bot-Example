@@ -348,6 +348,132 @@ def test_non_soxl_returns_zero_orders_and_halt_reason(tmp_path):
     assert "SOXL" in plan["safety"]["reason"]
 
 
+def test_corrupt_reverse_day_zero_preserves_kernel_fail_closed_semantics(tmp_path):
+    direct_kernel_plan = calculate_reverse_plan(
+        ReverseState(
+            ticker="SOXL",
+            split=20,
+            quantity=89,
+            previous_quantity=98,
+            avg_price=D("158.0735"),
+            cash=D("1482.88"),
+            t=D("17.109"),
+            day=0,
+            previous_closes=["130", "132", "134", "136", "138"],
+        )
+    )
+    assert direct_kernel_plan.fail_closed is True
+    assert "day" in direct_kernel_plan.reason.lower()
+
+    reverse_state = {
+        "is_active": True,
+        "day_count": 0,
+        "exit_target": 0.0,
+        "last_update_date": "2026-08-11",
+        "last_t_update_date": "2026-08-11",
+        "dynamic_t": 17.109,
+        "rem_cash": 1482.88,
+        "is_day_one": False,
+    }
+    cfg = isolated_cfg(tmp_path, reverse_state=reverse_state)
+    strategy = make_strategy(cfg)
+    strategy.load_daily_snapshot = lambda ticker: None
+
+    plan = strategy.get_plan(
+        "SOXL",
+        current_price=100.0,
+        avg_price=158.0735,
+        qty=89,
+        prev_close=138.0,
+        ma_5day=134.0,
+        available_cash=1482.88,
+        market_type="REG",
+        previous_closes=["130", "132", "134", "136", "138"],
+    )
+
+    assert plan["orders"] == []
+    assert plan["core_orders"] == []
+    assert plan["bonus_orders"] == []
+    assert plan["intent_ids"] == []
+    assert plan["safety"]["halted"] is True
+    assert "day" in plan["safety"]["reason"].lower()
+    assert "HALT" in plan["process_status"]
+    assert not any(order.get("side") == "SELL" and order.get("order_type") == "MOC" for order in plan["orders"])
+
+
+def test_wrapper_forwards_reverse_context_kwargs_and_matches_direct_wait(tmp_path):
+    reverse_state = {
+        "is_active": True,
+        "day_count": 2,
+        "exit_target": 0.0,
+        "last_update_date": "2026-08-11",
+        "last_t_update_date": "2026-08-11",
+        "dynamic_t": 17.109,
+        "rem_cash": 1482.88,
+        "is_day_one": False,
+    }
+    cfg = isolated_cfg(tmp_path, reverse_state=reverse_state)
+    direct = make_strategy(cfg)
+    direct.load_daily_snapshot = lambda ticker: None
+    wrapper = InfiniteStrategy(cfg)
+    wrapper.v4._get_logical_date_str = lambda: TRADE_DATE
+    wrapper.v4.load_daily_snapshot = lambda ticker: None
+
+    kwargs = {
+        "confirmed_close": "130.00",
+        "previous_closes": ["130", "132", "134", "136", "138"],
+    }
+    direct_plan = direct.get_plan(
+        "SOXL",
+        current_price=100.0,
+        avg_price=158.0735,
+        qty=89,
+        prev_close=138.0,
+        ma_5day=134.0,
+        available_cash=1482.88,
+        market_type="REG",
+        **kwargs,
+    )
+    wrapper_plan = wrapper.get_plan(
+        "SOXL",
+        current_price=100.0,
+        avg_price=158.0735,
+        qty=89,
+        prev_close=138.0,
+        ma_5day=134.0,
+        available_cash=1482.88,
+        market_type="REG",
+        **kwargs,
+    )
+
+    assert direct_plan["orders"] == []
+    assert direct_plan["core_orders"] == []
+    assert direct_plan["bonus_orders"] == []
+    assert direct_plan["process_status"] == "♻️리버스복귀대기"
+    assert wrapper_plan["orders"] == direct_plan["orders"]
+    assert wrapper_plan["core_orders"] == direct_plan["core_orders"]
+    assert wrapper_plan["bonus_orders"] == direct_plan["bonus_orders"]
+    assert wrapper_plan["process_status"] == direct_plan["process_status"]
+    assert wrapper_plan["intent_ids"] == direct_plan["intent_ids"]
+
+
+def test_wrapper_unsupported_route_halt_plan_includes_canonical_metadata(tmp_path):
+    cfg = isolated_cfg(tmp_path, version={"SOXL": "V4"})
+    strategy = InfiniteStrategy(cfg)
+
+    plan = strategy.get_plan("SOXL", 100.0, 158.0735, 98, 99.0, available_cash=1482.88)
+
+    assert plan["orders"] == []
+    assert plan["core_orders"] == []
+    assert plan["bonus_orders"] == []
+    assert plan["trade_date"]
+    assert "t_revision" in plan
+    assert plan["total_q"] == 0
+    assert plan["avg_price"] == 0.0
+    assert "source_balance_at" in plan
+    assert plan["safety"]["halted"] is True
+
+
 def test_reverse_plan_path_uses_official_kernel_event_and_order_types(tmp_path):
     reverse_state = {
         "is_active": True,

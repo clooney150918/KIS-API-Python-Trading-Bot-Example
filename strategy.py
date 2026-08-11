@@ -19,14 +19,19 @@ class InfiniteStrategy:
         self.v14_vwap_plugin = _StubPlugin()
 
     def _halt_plan(self, ticker, reason):
+        trade_date = self.v4._get_logical_date_str() if getattr(self, "v4", None) else ""
         return {
             'strategy': 'LAOER_V4_SOXL_20',
             'strategy_revision': 1,
+            't_revision': 0,
+            'trade_date': trade_date,
             'ticker': str(ticker or '').strip().upper(),
             'core_orders': [], 'bonus_orders': [], 'orders': [],
+            'total_q': 0, 'avg_price': 0.0,
             't_val': 0.0, 'is_reverse': False, 'star_price': 0.0,
             'star_ratio': 0.0, 'target_price': 0.0, 'one_portion': 0.0,
             'process_status': '⛔VERSION_HALT', 'intent_ids': [],
+            'source_balance_at': '',
             'safety': {'halted': True, 'reason': reason},
         }
 
@@ -52,7 +57,8 @@ class InfiniteStrategy:
             ticker=safe_ticker, current_price=current_price, avg_price=avg_price,
             qty=qty, prev_close=prev_close, ma_5day=ma_5day,
             market_type=market_type, available_cash=available_cash,
-            is_simulation=is_simulation, is_snapshot_mode=is_snapshot_mode
+            is_simulation=is_simulation, is_snapshot_mode=is_snapshot_mode,
+            **kwargs,
         )
 
     def capture_vrev_snapshot(self, *a, **kw): return None

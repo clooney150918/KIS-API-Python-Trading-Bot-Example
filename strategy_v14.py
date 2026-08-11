@@ -314,8 +314,6 @@ class V4Strategy:
             reverse_t = rev_state.get("dynamic_t", t_val_dec) or t_val_dec
             reverse_cash = rev_state.get("rem_cash", official_cash) or official_cash
             day = int(self._safe_float(rev_state.get("day_count", 1)))
-            if day <= 0:
-                day = 1
             previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
             if day <= 1:
                 previous_closes = []
