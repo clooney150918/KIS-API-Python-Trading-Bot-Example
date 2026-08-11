@@ -17,6 +17,7 @@ from runtime_safety import (
     RuntimeSafetyGate,
     account_fingerprint,
     canonical_order_values,
+    order_submission_ambiguous_result,
     resolve_account_fingerprint_key,
     safety_block_result,
     shadow_record_failure_decision,
@@ -25,6 +26,7 @@ from shadow_intent import ShadowIntentRecorder
 
 
 _RISK_REFERENCE_ORDER_TYPES = frozenset({"MARKET", "MOC", "MOO"})
+ORDER_SUBMISSION_TIMEOUT_SECONDS = 15.0
 
 
 def _supports_keyword(callable_obj, keyword):
@@ -125,7 +127,7 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 all_success = False
                 loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
-                continue
+                break
 
             gate = runtime_safety_gate or getattr(broker, 'runtime_safety_gate', None)
             if gate is None:
@@ -178,77 +180,67 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 all_success = False
                 loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
-                continue
+                break
 
             res = {}
-            
-            for attempt in range(3):
-                try:
-                    # 🚨 MODIFIED: [매도 탈출망 확보] 자본이 잠기더라도 매도(SELL) 주문은 애프터장으로 날리지 않고 정규장 엔진(VWAP 등)으로 정상 인계
-                    if is_capital_locked and o_side == 'BUY':
-                        slice_info = {"ticker": ticker, "side": o_side, "total_qty": o_qty, "filled_qty": 0, "target_price": o_price, "desc": o_desc, "status": "PENDING"}
-                        await asyncio.wait_for(asyncio.to_thread(save_aftermarket_state_sync, ticker, today_str, slice_info), timeout=10.0)
-                        res = {'rt_cd': '0', 'msg1': '애프터장 매수 지연 이관 완료', 'odno': f'AFTERMARKET_{id(o)}'}
-                        
-                    elif o_type == 'VWAP':
-                        slice_info = {"ticker": ticker, "side": o_side, "total_qty": o_qty, "filled_qty": 0, "target_price": o_price, "desc": o_desc, "status": "PENDING"}
-                        await asyncio.wait_for(asyncio.to_thread(save_slice_state_sync, ticker, today_str, slice_info), timeout=10.0)
-                        res = {'rt_cd': '0', 'msg1': '로컬 자체 VWAP 엔진 위임 완료', 'odno': f'LOCAL_VWAP_{id(o)}'}
-                        
-                    elif is_market_active_now:
-                        kwargs = {}
-                        if supports_risk_reference:
-                            kwargs["risk_reference_price"] = o.get('risk_reference_price')
-                        if supports_idempotency_key:
-                            kwargs["idempotency_key"] = idempotency_key
-                        res = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                broker_method,
-                                ticker,
-                                o_side,
-                                o_qty,
-                                o_price,
-                                o_type,
-                                **kwargs,
-                            ),
-                            timeout=15.0,
-                        )
-                    else:
-                        kwargs = {}
-                        if supports_risk_reference:
-                            kwargs["risk_reference_price"] = o.get('risk_reference_price')
-                        if supports_idempotency_key:
-                            kwargs["idempotency_key"] = idempotency_key
-                        res = await asyncio.wait_for(
-                            asyncio.to_thread(
-                                broker_method,
-                                ticker,
-                                o_side,
-                                o_qty,
-                                o_price,
-                                o_type,
-                                **kwargs,
-                            ),
-                            timeout=15.0,
-                        )
 
-                    break
-                    
-                except asyncio.TimeoutError:
-                    if attempt < 2:
-                        await asyncio.sleep(1.0 * (2 ** attempt))
-                    else:
-                        res = {'rt_cd': '999', 'msg1': 'API 통신 타임아웃 (10~15초 초과)'}
-                except TypeError as e:
-                    res = {'rt_cd': '999', 'msg1': f'통신/I/O 오류: {str(e)}'}
-                    break
-                except Exception as e:
-                    if attempt < 2:
-                        await asyncio.sleep(1.0 * (2 ** attempt))
-                    else:
-                        res = {'rt_cd': '999', 'msg1': f'통신/I/O 오류: {str(e)}'}
+            try:
+                # 🚨 MODIFIED: [매도 탈출망 확보] 자본이 잠기더라도 매도(SELL) 주문은 애프터장으로 날리지 않고 정규장 엔진(VWAP 등)으로 정상 인계
+                if is_capital_locked and o_side == 'BUY':
+                    slice_info = {"ticker": ticker, "side": o_side, "total_qty": o_qty, "filled_qty": 0, "target_price": o_price, "desc": o_desc, "status": "PENDING"}
+                    await asyncio.wait_for(asyncio.to_thread(save_aftermarket_state_sync, ticker, today_str, slice_info), timeout=10.0)
+                    res = {'rt_cd': '0', 'msg1': '애프터장 매수 지연 이관 완료', 'odno': f'AFTERMARKET_{id(o)}'}
+
+                elif o_type == 'VWAP':
+                    slice_info = {"ticker": ticker, "side": o_side, "total_qty": o_qty, "filled_qty": 0, "target_price": o_price, "desc": o_desc, "status": "PENDING"}
+                    await asyncio.wait_for(asyncio.to_thread(save_slice_state_sync, ticker, today_str, slice_info), timeout=10.0)
+                    res = {'rt_cd': '0', 'msg1': '로컬 자체 VWAP 엔진 위임 완료', 'odno': f'LOCAL_VWAP_{id(o)}'}
+
+                else:
+                    kwargs = {}
+                    if supports_risk_reference:
+                        kwargs["risk_reference_price"] = o.get('risk_reference_price')
+                    if supports_idempotency_key:
+                        kwargs["idempotency_key"] = idempotency_key
+                    res = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            broker_method,
+                            ticker,
+                            o_side,
+                            o_qty,
+                            o_price,
+                            o_type,
+                            **kwargs,
+                        ),
+                        timeout=ORDER_SUBMISSION_TIMEOUT_SECONDS,
+                    )
+            except asyncio.TimeoutError:
+                res = order_submission_ambiguous_result(
+                    "broker order call timed out; worker may still complete",
+                    ticker=ticker,
+                    side=o_side,
+                )
+            except Exception as error:
+                res = order_submission_ambiguous_result(
+                    f"broker order call raised {type(error).__name__}",
+                    ticker=ticker,
+                    side=o_side,
+                )
 
             safe_res = res if isinstance(res, dict) else {}
+            safety_decision = safe_res.get('safety_decision')
+            is_ambiguous = (
+                isinstance(safety_decision, dict)
+                and safety_decision.get('code') == 'ORDER_SUBMISSION_AMBIGUOUS'
+            )
+            if is_ambiguous:
+                reason = safety_decision.get('reason') or safe_res.get('msg1')
+                safe_res = order_submission_ambiguous_result(
+                    reason, ticker=ticker, side=o_side
+                )
+                if gate is not None and hasattr(gate, 'latch_ambiguous_submission'):
+                    gate.latch_ambiguous_submission(reason)
+
             is_success = safe_res.get('rt_cd') == '0'
             err_msg = html.escape(str(safe_res.get('msg1') or '오류/잔금패스'))
 
@@ -256,11 +248,20 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 successful_orders_cache.add(order_key)
             else:
                 all_success = False
-                loop_fail_reason = f"[{ticker}] {order_category} 거절: {err_msg}"
+                if is_ambiguous:
+                    err_msg = (
+                        "ORDER_SUBMISSION_AMBIGUOUS "
+                        "HALT_REQUIRED RECONCILIATION_REQUIRED"
+                    )
+                    loop_fail_reason = f"[{ticker}] {order_category}: {err_msg}"
+                else:
+                    loop_fail_reason = f"[{ticker}] {order_category} 거절: {err_msg}"
 
             status_icon = '✅' if is_success else f'❌({err_msg})'
             msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): {status_icon}\n"
-            
+            if not is_success:
+                break
+
             await asyncio.sleep(0.2)
 
         except Exception as e:
@@ -268,5 +269,6 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             loop_fail_reason = f"[{ticker}] {order_category} 치명적 오류"
             logging.error(f"🚨 [{ticker}] execute_order_list 개별 덫 처리 오류: {e}")
             msgs += f"└ {order_category} 시스템 오류: {html.escape(str(e))}\n"
+            break
 
     return all_success, msgs, loop_fail_reason

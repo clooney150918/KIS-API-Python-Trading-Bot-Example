@@ -236,6 +236,7 @@ class RuntimeSafetyGate:
         self._authorization_ttl = timedelta(seconds=authorization_ttl_seconds)
         self._authorization_secret = os.urandom(32)
         self._authorizations = {}
+        self._ambiguous_halt_reason = None
         key = str(self.checkpoint_path.resolve())
         with _CHECKPOINT_LOCKS_GUARD:
             self._checkpoint_lock = _CHECKPOINT_LOCKS.setdefault(key, threading.Lock())
@@ -243,6 +244,14 @@ class RuntimeSafetyGate:
     @staticmethod
     def denied(code, reason, **context):
         return SafetyDecision(code=code, reason=reason, can_submit=False, **context)
+
+    def latch_ambiguous_submission(self, reason):
+        """Fail closed in this process after an indeterminate order submission."""
+        with self._lock:
+            if self._ambiguous_halt_reason is None:
+                self._ambiguous_halt_reason = str(
+                    reason or "order submission status is unknown"
+                )
 
     @staticmethod
     def _decimal(value):
@@ -855,6 +864,14 @@ class RuntimeSafetyGate:
         side_text, order_type_text = canonical_order_values(side, order_type)
 
         with self._lock, self._checkpoint_lock:
+            if self._ambiguous_halt_reason is not None:
+                return self.denied(
+                    "ORDER_SUBMISSION_AMBIGUOUS",
+                    self._ambiguous_halt_reason,
+                    shadow_only=False,
+                    ticker=ticker_text,
+                    side=side_text,
+                )
             lock_fd = None
             locked = False
             decision = None
@@ -924,6 +941,14 @@ class RuntimeSafetyGate:
         trusted_market_quote,
         market_quote_preflight,
     ):
+            if self._ambiguous_halt_reason is not None:
+                return self.denied(
+                    "ORDER_SUBMISSION_AMBIGUOUS",
+                    self._ambiguous_halt_reason,
+                    shadow_only=False,
+                    ticker=ticker_text,
+                    side=side_text,
+                )
             state, load_error = self._load_state()
             if load_error is not None:
                 return load_error
@@ -1114,13 +1139,32 @@ class RuntimeSafetyGate:
 
 def safety_block_result(decision):
     """Return a broker-compatible, structured fail-closed result."""
-    return {
+    result = {
         "rt_cd": "999",
         "msg1": f"runtime safety blocked order: {decision.code}",
         "odno": "",
         "shadow": decision.shadow_only,
         "safety_decision": decision.as_dict(),
     }
+    if decision.code == "ORDER_SUBMISSION_AMBIGUOUS":
+        result["halt_required"] = True
+        result["reconciliation_required"] = True
+    return result
+
+
+def order_submission_ambiguous_result(reason, *, ticker="", side=""):
+    """Return the common no-order-number HALT/reconciliation contract."""
+    decision = RuntimeSafetyGate.denied(
+        "ORDER_SUBMISSION_AMBIGUOUS",
+        str(reason or "order submission status is unknown"),
+        shadow_only=False,
+        ticker=str(ticker or "").strip().upper(),
+        side=str(side or "").strip().upper(),
+    )
+    result = safety_block_result(decision)
+    result["halt_required"] = True
+    result["reconciliation_required"] = True
+    return result
 
 
 def shadow_record_failure_decision(decision, error):
