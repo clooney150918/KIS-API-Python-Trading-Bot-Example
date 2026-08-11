@@ -162,7 +162,7 @@ class TradeStateStore:
 
     def _read_events_unlocked(self, ticker: str) -> list[dict[str, Any]]:
         if not self.events_path.exists():
-            return []
+            raise TEventLedgerCorruptError(f"T event ledger missing: {self.events_path}")
         events: list[dict[str, Any]] = []
         with self.events_path.open("r", encoding="utf-8") as f:
             for line_number, line in enumerate(f, start=1):

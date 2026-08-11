@@ -109,6 +109,7 @@ def test_append_event_is_atomic_and_revision_monotonic(tmp_path):
     baseline_path = tmp_path / "baseline.json"
     events_path = tmp_path / "events.jsonl"
     write_json(baseline_path, BASELINE)
+    events_path.write_text("", encoding="utf-8")
     store = TradeStateStore(baseline_path, events_path)
 
     state = store.append_event(event())
@@ -121,10 +122,22 @@ def test_append_event_is_atomic_and_revision_monotonic(tmp_path):
     assert not (tmp_path / "events.jsonl.tmp").exists()
 
 
+def test_missing_event_ledger_halts_instead_of_returning_baseline_state(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    events_path = tmp_path / "events.jsonl"
+    write_json(baseline_path, BASELINE)
+
+    store = TradeStateStore(baseline_path, events_path)
+
+    with pytest.raises(TEventLedgerCorruptError, match="ledger.*missing|missing.*ledger"):
+        store.load_state("SOXL")
+
+
 def test_duplicate_event_id_or_fill_key_rejected_fail_closed(tmp_path):
     baseline_path = tmp_path / "baseline.json"
     events_path = tmp_path / "events.jsonl"
     write_json(baseline_path, BASELINE)
+    events_path.write_text("", encoding="utf-8")
     store = TradeStateStore(baseline_path, events_path)
     store.append_event(event())
 
@@ -157,6 +170,7 @@ def test_append_rejects_t_or_revision_mismatch(tmp_path):
     baseline_path = tmp_path / "baseline.json"
     events_path = tmp_path / "events.jsonl"
     write_json(baseline_path, BASELINE)
+    events_path.write_text("", encoding="utf-8")
     store = TradeStateStore(baseline_path, events_path)
 
     with pytest.raises(ValueError, match="t_before"):

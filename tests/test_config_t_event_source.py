@@ -54,3 +54,36 @@ def test_calculate_v14_state_does_not_inverse_cost_basis(tmp_path):
     assert t_val == 18.32
     assert budget == 1482.88 / (20 - 18.32)
     assert rem_cash == 1482.88
+
+
+def test_missing_event_ledger_get_absolute_t_val_returns_fail_safe_zero(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    events_path = tmp_path / "events.jsonl"
+    baseline_path.write_text(json.dumps(BASELINE), encoding="utf-8")
+
+    cfg = ConfigManager()
+    cfg.FILES["STRATEGY_BASELINE"] = str(baseline_path)
+    cfg.FILES["T_EVENTS"] = str(events_path)
+
+    t_val, one_portion = cfg.get_absolute_t_val("SOXL", actual_qty=999, actual_avg_price=1)
+
+    assert t_val == 0.0
+    assert one_portion == 0.0
+
+
+def test_missing_event_ledger_calculate_v14_state_returns_fail_safe_zero(tmp_path):
+    baseline_path = tmp_path / "baseline.json"
+    events_path = tmp_path / "events.jsonl"
+    baseline_path.write_text(json.dumps(BASELINE), encoding="utf-8")
+
+    cfg = ConfigManager()
+    cfg.FILES["STRATEGY_BASELINE"] = str(baseline_path)
+    cfg.FILES["T_EVENTS"] = str(events_path)
+    cfg.FILES["LEDGER"] = str(tmp_path / "ledger.json")
+    (tmp_path / "ledger.json").write_text(json.dumps([
+        {"id": 1, "ticker": "SOXL", "side": "BUY", "qty": 999, "price": 1},
+    ]), encoding="utf-8")
+
+    t_val, budget, rem_cash = cfg.calculate_v14_state("SOXL")
+
+    assert (t_val, budget, rem_cash) == (0.0, 0.0, 0.0)
