@@ -24,6 +24,7 @@ from runtime_safety import (
 )
 from order_intent_store import (
     InvalidOrderIntentError,
+    REQUIRED_PLAN_FIELDS,
     STRATEGY as OFFICIAL_ORDER_STRATEGY,
     compute_intent_id,
 )
@@ -84,18 +85,37 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     """
     is_official_order = (
         order.get("strategy") == OFFICIAL_ORDER_STRATEGY
+        or "intent_id" in order
         or "strategy_revision" in order
         or "t_revision" in order
         or "event_type" in order
     )
     if not is_official_order:
         return fallback_key
+
+    missing_fields = []
+    for field in REQUIRED_PLAN_FIELDS:
+        if field == "order_type":
+            if "order_type" not in order and "type" not in order:
+                missing_fields.append(field)
+        elif field not in order:
+            missing_fields.append(field)
+    if missing_fields:
+        raise InvalidOrderIntentError(
+            f"missing required official order intent field(s): {', '.join(missing_fields)}"
+        )
+
+    order_ticker = str(order.get("ticker", "")).strip().upper()
+    executor_ticker = str(ticker).strip().upper()
+    if order_ticker != executor_ticker:
+        raise InvalidOrderIntentError("ticker must match executor ticker")
+
     intent_payload = {
-        "strategy": order.get("strategy", OFFICIAL_ORDER_STRATEGY),
-        "strategy_revision": order.get("strategy_revision", 1),
-        "t_revision": order.get("t_revision", 1),
-        "ticker": ticker,
-        "trade_date": order.get("trade_date", trade_date),
+        "strategy": order.get("strategy"),
+        "strategy_revision": order.get("strategy_revision"),
+        "t_revision": order.get("t_revision"),
+        "ticker": order.get("ticker"),
+        "trade_date": order.get("trade_date"),
         "event_type": order.get("event_type"),
         "side": side,
         "order_type": order_type,
@@ -122,17 +142,13 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             if not isinstance(o, dict): continue
 
             o_side, o_type = canonical_order_values(
-                o.get('side', 'BUY'), o.get('type', 'LOC')
+                o.get('side', 'BUY'), o.get('type', o.get('order_type', 'LOC'))
             )
             o_qty = int(_safe_float(o.get('qty')))
             o_price = _safe_float(o.get('price'))
             idempotency_key = _order_idempotency_key(
                 today_str, ticker, order_index, o, o_side, o_type
             )
-            
-            if o_qty <= 0:
-                msgs += f"⚠️ {order_category}: 수량 0주 산출로 타격 바이패스 (안전 격리)\n"
-                continue
             
             o_desc = html.escape(str(o.get('desc', '주문')))
 
@@ -151,6 +167,9 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 loop_fail_reason = f"[{ticker}] {order_category} 주문 의도 검증 실패: {code} {reason}"
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code}: {reason})\n"
                 break
+            if o_qty <= 0:
+                msgs += f"⚠️ {order_category}: 수량 0주 산출로 타격 바이패스 (안전 격리)\n"
+                continue
             if order_key in successful_orders_cache:
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ✅(기장전 보존)\n"
                 continue

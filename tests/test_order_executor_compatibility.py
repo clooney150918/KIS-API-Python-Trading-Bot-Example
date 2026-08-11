@@ -18,6 +18,7 @@ from test_runtime_safety_authorization import ORDER_REQUEST, POLICY_REQUEST
 
 def official_order(**overrides):
     order = {
+        "ticker": "SOXL",
         "side": "BUY",
         "qty": 1,
         "price": "100",
@@ -211,6 +212,118 @@ def test_official_order_rejects_missing_event_type_without_legacy_fallback(tmp_p
     assert "ORDER_INTENT_INVALID" in messages
     assert "event_type" in messages
     assert "ORDER_INTENT_INVALID" in failure
+
+
+@pytest.mark.parametrize(
+    "missing_field,official_marker",
+    [
+        ("strategy", {"strategy_revision": 1}),
+        ("strategy_revision", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("t_revision", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("trade_date", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("ticker", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("side", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("price", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("qty", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("event_type", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("type", {"strategy": "LAOER_V4_SOXL_20"}),
+    ],
+)
+def test_official_order_missing_required_identity_field_fails_closed_without_defaults(
+    tmp_path, monkeypatch, missing_field, official_marker
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    incomplete = official_order(**official_marker)
+    incomplete.pop(missing_field)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [incomplete],
+            cache,
+            True,
+            "20991231",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_INVALID" in messages
+    expected_missing_name = "order_type" if missing_field == "type" else missing_field
+    assert expected_missing_name in messages
+    assert "ORDER_INTENT_INVALID" in failure
+
+
+@pytest.mark.parametrize(
+    "official_marker",
+    [
+        {"strategy": "LAOER_V4_SOXL_20"},
+        {"intent_id": "official-looking-intent-id"},
+        {"strategy_revision": 1},
+        {"t_revision": 3},
+        {"event_type": "FULL_BUY"},
+    ],
+)
+def test_any_official_marker_requires_full_official_schema_before_broker_call(
+    tmp_path, monkeypatch, official_marker
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    official_looking_legacy_shape = {
+        "side": "BUY",
+        "qty": 1,
+        "price": "100",
+        "type": "LIMIT",
+        **official_marker,
+    }
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [official_looking_legacy_shape],
+            set(),
+            True,
+            "20991231",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert "ORDER_INTENT_INVALID" in messages
+    assert "ORDER_INTENT_INVALID" in failure
+
+
+def test_legacy_order_without_official_markers_still_uses_legacy_idempotency(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [{"side": "BUY", "qty": 1, "price": "100", "type": "LIMIT", "desc": "legacy"}],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert len(broker.calls) == 1
+    assert len(cache) == 1
 
 
 @pytest.mark.parametrize("market_active", [True, False])
