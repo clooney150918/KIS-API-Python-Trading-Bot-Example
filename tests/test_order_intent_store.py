@@ -94,6 +94,38 @@ def test_official_intent_rejects_non_integer_numeric_values(tmp_path, field, val
         store.create_planned(planned_intent(**{field: value}))
 
 
+@pytest.mark.parametrize("price", ["abc", "", "NaN", "Infinity", "-1", "0"])
+def test_compute_intent_id_rejects_invalid_official_prices(price):
+    with pytest.raises(InvalidOrderIntentError, match="price"):
+        compute_intent_id(planned_intent(price=price))
+
+
+@pytest.mark.parametrize("price", ["abc", "", "NaN", "Infinity", "-1", "0"])
+def test_create_planned_rejects_invalid_official_prices_without_appending(tmp_path, price):
+    store, path = make_store(tmp_path)
+
+    with pytest.raises(InvalidOrderIntentError, match="price"):
+        store.create_planned(planned_intent(price=price))
+
+    assert path.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize("price", ["131.76", "0.01", "131.760"])
+def test_official_price_accepts_positive_decimal_strings_and_preserves_canonical_text(
+    tmp_path, price
+):
+    store, _path = make_store(tmp_path)
+
+    created = store.create_planned(planned_intent(price=price))
+
+    assert created["price"] == price
+    expected = hashlib.sha256(
+        f"SOXL|2026-08-11|1|FULL_BUY|BUY|{price}|6".encode("utf-8")
+    ).hexdigest()
+    assert created["intent_id"] == expected
+    assert compute_intent_id(planned_intent(price=price)) == expected
+
+
 @pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
 def test_official_intent_accepts_digit_integer_strings(tmp_path, field):
     provider = (lambda _ticker: 1) if field == "t_revision" else current_revision_provider

@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -95,8 +96,14 @@ def _require_iso8601(value: Any, field: str) -> str:
 
 def _normalize_price(value: Any) -> str:
     text = _require_non_empty_string(str(value) if value is not None else value, "price")
-    if text.lower() in {"nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}:
-        raise InvalidOrderIntentError("price must be finite")
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError) as exc:
+        raise InvalidOrderIntentError("price must be a finite positive decimal") from exc
+    if not parsed.is_finite():
+        raise InvalidOrderIntentError("price must be a finite positive decimal")
+    if parsed <= 0:
+        raise InvalidOrderIntentError("price must be a finite positive decimal")
     return text
 
 

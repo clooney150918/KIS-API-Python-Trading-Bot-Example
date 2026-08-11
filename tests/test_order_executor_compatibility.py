@@ -429,6 +429,35 @@ def test_official_order_rejects_non_integer_numeric_values_before_broker_call(
     assert "ORDER_INTENT_INVALID" in failure
 
 
+@pytest.mark.parametrize("price", ["abc", "", "NaN", "Infinity", "-1", "0"])
+def test_official_order_rejects_invalid_price_before_broker_call(tmp_path, monkeypatch, price):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    invalid = official_order(price=price)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [invalid],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_INVALID" in messages
+    assert "price" in messages
+    assert "ORDER_INTENT_INVALID" in failure
+
+
 @pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
 def test_official_order_accepts_digit_integer_strings(tmp_path, monkeypatch, field):
     gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
