@@ -1,7 +1,8 @@
 """Central fail-closed authorization for every live order submission."""
 
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 import fcntl
 import hashlib
@@ -9,6 +10,8 @@ import hmac
 import json
 from pathlib import Path
 import os
+import secrets
+import stat
 import tempfile
 import threading
 from typing import Optional
@@ -30,6 +33,7 @@ OVERSEAS_ORDER_TYPE_CODES = {
 }
 _CHECKPOINT_LOCKS = {}
 _CHECKPOINT_LOCKS_GUARD = threading.Lock()
+_MAX_AUTHORIZATION_TTL_SECONDS = 30
 
 
 def canonical_order_values(side, order_type="LIMIT"):
@@ -38,6 +42,50 @@ def canonical_order_values(side, order_type="LIMIT"):
         str(side or "").strip().upper(),
         str(order_type or "").strip().upper(),
     )
+
+
+def _canonical_request_value(value):
+    """Return a JSON-safe value without lossy Decimal/float conversion."""
+    if isinstance(value, bool) or value is None or isinstance(value, int):
+        return value
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("request body contains a non-finite Decimal")
+        return str(value)
+    if isinstance(value, float):
+        decimal_value = Decimal(str(value))
+        if not decimal_value.is_finite():
+            raise ValueError("request body contains a non-finite float")
+        return str(decimal_value)
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_canonical_request_value(item) for item in value]
+    if isinstance(value, dict):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("request body object keys must be strings")
+        return {key: _canonical_request_value(item) for key, item in value.items()}
+    raise ValueError("request body contains an unsupported value")
+
+
+def canonical_request_digest(method, tr_id, path, body):
+    """Return a deterministic digest of an immutable HTTP order request."""
+    envelope = {
+        "method": str(method or "").strip().upper(),
+        "tr_id": str(tr_id or "").strip(),
+        "path": str(path or "").strip(),
+        "body": _canonical_request_value(body),
+    }
+    if not envelope["method"] or not envelope["tr_id"] or not envelope["path"]:
+        raise ValueError("method, tr_id, and path are required")
+    canonical = json.dumps(
+        envelope,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _canonical_account_bytes(cano, product_code):
@@ -98,10 +146,37 @@ class SafetyDecision:
         return result
 
 
+@dataclass(frozen=True)
+class OrderAuthorization:
+    """Opaque, request-bound, process-local, one-shot order capability."""
+
+    nonce: str
+    revision: int
+    request_digest: str
+    expires_at: datetime
+    seal: str
+
+
+class AuthorizationError(RuntimeError):
+    """Raised when an order authorization cannot be safely consumed."""
+
+    def __init__(self, code, reason):
+        super().__init__(f"{code}: {reason}")
+        self.code = code
+        self.reason = reason
+
+
 class RuntimeSafetyGate:
     """Reload and validate the safety state for each authorization decision."""
 
-    def __init__(self, state_path=DEFAULT_STATE_PATH, *, checkpoint_path=None, clock=None):
+    def __init__(
+        self,
+        state_path=DEFAULT_STATE_PATH,
+        *,
+        checkpoint_path=None,
+        clock=None,
+        authorization_ttl_seconds=5,
+    ):
         self.state_path = Path(state_path)
         if checkpoint_path is None:
             checkpoint_path = (
@@ -116,6 +191,16 @@ class RuntimeSafetyGate:
         self._highest_revision = 0
         self._lock = threading.Lock()
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        if (
+            isinstance(authorization_ttl_seconds, bool)
+            or not isinstance(authorization_ttl_seconds, (int, float))
+            or authorization_ttl_seconds <= 0
+            or authorization_ttl_seconds > _MAX_AUTHORIZATION_TTL_SECONDS
+        ):
+            raise ValueError("authorization TTL must be positive and at most 30 seconds")
+        self._authorization_ttl = timedelta(seconds=authorization_ttl_seconds)
+        self._authorization_secret = os.urandom(32)
+        self._authorizations = {}
         key = str(self.checkpoint_path.resolve())
         with _CHECKPOINT_LOCKS_GUARD:
             self._checkpoint_lock = _CHECKPOINT_LOCKS.setdefault(key, threading.Lock())
@@ -141,14 +226,45 @@ class RuntimeSafetyGate:
         raise ValueError(f"non-finite JSON number: {value}")
 
     def _load_state(self):
+        fd = None
         try:
-            mode = self.state_path.stat().st_mode & 0o777
-            raw = self.state_path.read_text(encoding="utf-8")
+            flags = (
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+            )
+            fd = os.open(self.state_path, flags)
+            file_stat = os.fstat(fd)
+            if not stat.S_ISREG(file_stat.st_mode):
+                raise OSError("runtime safety state is not a regular file")
+            mode = stat.S_IMODE(file_stat.st_mode)
+            chunks = []
+            total = 0
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 1024 * 1024:
+                    raise OSError("runtime safety state is too large")
+                chunks.append(chunk)
+            raw = b"".join(chunks).decode("utf-8")
         except (FileNotFoundError, OSError):
             return None, self.denied(
                 "SAFETY_STATE_MISSING",
                 "runtime safety state is missing or unreadable",
             )
+        except UnicodeError:
+            return None, self.denied(
+                "SAFETY_STATE_INVALID_JSON",
+                "runtime safety state is not valid JSON",
+            )
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
 
         try:
             state = json.loads(
@@ -296,6 +412,253 @@ class RuntimeSafetyGate:
                 "runtime safety revision checkpoint could not be persisted",
             )
         return None
+
+    def _authorization_seal(self, nonce, revision, request_digest, expires_at, pid):
+        payload = "|".join(
+            (
+                nonce,
+                str(revision),
+                request_digest,
+                expires_at.isoformat(timespec="microseconds"),
+                str(pid),
+            )
+        ).encode("utf-8")
+        return hmac.new(self._authorization_secret, payload, hashlib.sha256).hexdigest()
+
+    def authorize_request(
+        self,
+        ticker,
+        side,
+        quantity,
+        price,
+        *,
+        method,
+        tr_id,
+        path,
+        body,
+        account_fingerprint=None,
+        account_fingerprint_key_available=True,
+        order_type="LIMIT",
+        risk_reference_price=None,
+        trusted_market_quote=None,
+        market_quote_preflight=False,
+    ):
+        """Authorize policy and mint one request capability in one lock scope."""
+        ticker_text = str(ticker or "").strip().upper()
+        side_text, order_type_text = canonical_order_values(side, order_type)
+        if str(method or "").strip().upper() != "POST":
+            return self.denied(
+                "ORDER_REQUEST_METHOD_INVALID",
+                "order authorization is restricted to POST",
+                ticker=ticker_text,
+                side=side_text,
+            ), None
+        try:
+            request_digest = canonical_request_digest(method, tr_id, path, body)
+        except (TypeError, ValueError):
+            return self.denied(
+                "ORDER_REQUEST_INVALID",
+                "order request cannot be canonically digested",
+                ticker=ticker_text,
+                side=side_text,
+            ), None
+        policy_values = (
+            ticker_text,
+            side_text,
+            order_type_text,
+            quantity,
+            price,
+            account_fingerprint,
+            account_fingerprint_key_available,
+            risk_reference_price,
+            trusted_market_quote,
+            market_quote_preflight,
+        )
+
+        with self._lock, self._checkpoint_lock:
+            lock_fd = None
+            locked = False
+            try:
+                self.checkpoint_lock_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    lock_fd = os.open(
+                        self.checkpoint_lock_path, os.O_RDWR | os.O_CREAT, 0o600
+                    )
+                except OSError:
+                    lock_fd = os.open(self.checkpoint_lock_path, os.O_RDONLY)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                locked = True
+                decision = self._authorize_under_checkpoint_lock(*policy_values)
+                if not decision.can_submit or decision.code != "LIVE_AUTHORIZED":
+                    return decision, None
+                now = self._clock()
+                if (
+                    not isinstance(now, datetime)
+                    or now.tzinfo is None
+                    or now.utcoffset() != timezone.utc.utcoffset(None)
+                ):
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_CLOCK_INVALID",
+                        "authorization clock must be timezone-aware UTC",
+                    )
+                nonce = secrets.token_urlsafe(32)
+                expires_at = now + self._authorization_ttl
+                pid = os.getpid()
+                authorization = OrderAuthorization(
+                    nonce=nonce,
+                    revision=decision.revision,
+                    request_digest=request_digest,
+                    expires_at=expires_at,
+                    seal=self._authorization_seal(
+                        nonce, decision.revision, request_digest, expires_at, pid
+                    ),
+                )
+                self._authorizations[nonce] = {
+                    "authorization": authorization,
+                    "pid": pid,
+                    "policy_values": policy_values,
+                }
+                return decision, authorization
+            except OSError:
+                return self.denied(
+                    "REVISION_LOCK_IO_ERROR",
+                    "runtime safety revision lock could not be acquired or released",
+                    ticker=ticker_text,
+                    side=side_text,
+                ), None
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                if lock_fd is not None:
+                    try:
+                        os.close(lock_fd)
+                    except OSError:
+                        pass
+
+    @contextmanager
+    def authorized_post(self, authorization, *, method, tr_id, path, body):
+        """Consume a capability and hold the checkpoint lock through one POST."""
+        with self._lock, self._checkpoint_lock:
+            lock_fd = None
+            locked = False
+            try:
+                try:
+                    self.checkpoint_lock_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        lock_fd = os.open(
+                            self.checkpoint_lock_path, os.O_RDWR | os.O_CREAT, 0o600
+                        )
+                    except OSError:
+                        lock_fd = os.open(self.checkpoint_lock_path, os.O_RDONLY)
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                    locked = True
+                except OSError as exc:
+                    raise AuthorizationError(
+                        "REVISION_LOCK_IO_ERROR",
+                        "runtime safety revision lock could not be acquired",
+                    ) from exc
+
+                if not isinstance(authorization, OrderAuthorization):
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_INVALID", "authorization is not gate-issued"
+                    )
+                digest_chars = "0123456789abcdef"
+                fields_valid = (
+                    isinstance(authorization.nonce, str)
+                    and bool(authorization.nonce)
+                    and type(authorization.revision) is int
+                    and authorization.revision > 0
+                    and isinstance(authorization.request_digest, str)
+                    and len(authorization.request_digest) == 64
+                    and all(char in digest_chars for char in authorization.request_digest)
+                    and isinstance(authorization.expires_at, datetime)
+                    and authorization.expires_at.tzinfo is not None
+                    and authorization.expires_at.utcoffset()
+                    == timezone.utc.utcoffset(None)
+                    and isinstance(authorization.seal, str)
+                    and len(authorization.seal) == 64
+                    and all(char in digest_chars for char in authorization.seal)
+                )
+                if not fields_valid:
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_INVALID",
+                        "authorization fields are malformed",
+                    )
+                record = self._authorizations.get(authorization.nonce)
+                if record is None or record["pid"] != os.getpid():
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_INVALID", "authorization is unknown or consumed"
+                    )
+                expected_seal = self._authorization_seal(
+                    authorization.nonce,
+                    authorization.revision,
+                    authorization.request_digest,
+                    authorization.expires_at,
+                    record["pid"],
+                )
+                if (
+                    authorization != record["authorization"]
+                    or not hmac.compare_digest(authorization.seal, expected_seal)
+                ):
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_INVALID", "authorization integrity check failed"
+                    )
+
+                # A valid nonce is consumed before any request/state check. Every
+                # attempted use is one-shot, including fail-closed attempts.
+                del self._authorizations[authorization.nonce]
+                try:
+                    current_digest = canonical_request_digest(method, tr_id, path, body)
+                except (TypeError, ValueError) as exc:
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_REQUEST_MISMATCH",
+                        "current request cannot match the authorized request",
+                    ) from exc
+                if not hmac.compare_digest(current_digest, authorization.request_digest):
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_REQUEST_MISMATCH",
+                        "current request differs from the authorized request",
+                    )
+                now = self._clock()
+                if (
+                    not isinstance(now, datetime)
+                    or now.tzinfo is None
+                    or now.utcoffset() != timezone.utc.utcoffset(None)
+                ):
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_CLOCK_INVALID",
+                        "authorization clock must be timezone-aware UTC",
+                    )
+                if now >= authorization.expires_at:
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_EXPIRED", "authorization has expired"
+                    )
+
+                decision = self._authorize_under_checkpoint_lock(
+                    *record["policy_values"]
+                )
+                if not decision.can_submit or decision.code != "LIVE_AUTHORIZED":
+                    raise AuthorizationError(decision.code, decision.reason)
+                if decision.revision != authorization.revision:
+                    raise AuthorizationError(
+                        "ORDER_AUTHORIZATION_REVISION_MISMATCH",
+                        "runtime safety revision changed after authorization",
+                    )
+                yield authorization
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                if lock_fd is not None:
+                    try:
+                        os.close(lock_fd)
+                    except OSError:
+                        pass
 
     def authorize(
         self,
