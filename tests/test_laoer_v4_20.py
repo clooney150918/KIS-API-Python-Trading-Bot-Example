@@ -139,6 +139,23 @@ def test_normal_fail_closed_zeroes_quantities_on_invalid_state(state_kwargs):
 
 
 @pytest.mark.parametrize(
+    "event_name, expected",
+    [
+        ("FULL", "4"),
+        ("HALF", "3.5"),
+        ("QUARTER", "2.25"),
+        ("TARGET_FULL", "1.75"),
+        ("TARGET_HALF", "1.25"),
+    ],
+)
+def test_apply_fill_event_accepts_public_spec_event_names(event_name, expected):
+    public_event = FillEvent(event_name)
+
+    assert apply_fill_event(D("3"), public_event) == D(expected)
+    assert apply_fill_event(D("3"), event_name) == D(expected)
+
+
+@pytest.mark.parametrize(
     "event, expected",
     [
         (FillEvent.FULL_BUY, "4"),
@@ -148,8 +165,31 @@ def test_normal_fail_closed_zeroes_quantities_on_invalid_state(state_kwargs):
         (FillEvent.TARGET_SELL_THEN_HALF_BUY, "1.25"),
     ],
 )
-def test_apply_fill_event_updates_t_by_official_event_table(event, expected):
+def test_apply_fill_event_updates_t_by_backward_alias_event_table(event, expected):
     assert apply_fill_event(D("3"), event) == D(expected)
+
+
+@pytest.mark.parametrize("t_value", ["1", "10"])
+def test_normal_fail_closed_when_cash_cannot_buy_one_share_in_normal_phase(t_value):
+    plan = calculate_normal_plan(
+        NormalState(
+            ticker="SOXL",
+            split=20,
+            quantity=10,
+            avg_price=D("100"),
+            cash=D("1"),
+            t=D(t_value),
+            reverse=False,
+        )
+    )
+
+    assert plan.fail_closed is True
+    assert "insufficient cash" in plan.reason.lower()
+    assert "cannot buy one share" in plan.reason.lower()
+    assert plan.star_buy_quantity == 0
+    assert plan.average_buy_quantity == 0
+    assert plan.quarter_sell_quantity == 0
+    assert plan.target_sell_quantity == 0
 
 
 def test_reverse_first_day_sells_floor_one_tenth_moc_and_buys_nothing():

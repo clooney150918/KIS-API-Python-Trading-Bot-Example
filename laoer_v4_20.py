@@ -20,11 +20,29 @@ TWENTY = Decimal("20")
 
 
 class FillEvent(str, Enum):
-    FULL_BUY = "FULL_BUY"
-    HALF_BUY = "HALF_BUY"
-    QUARTER_SELL = "QUARTER_SELL"
-    TARGET_SELL_THEN_FULL_BUY = "TARGET_SELL_THEN_FULL_BUY"
-    TARGET_SELL_THEN_HALF_BUY = "TARGET_SELL_THEN_HALF_BUY"
+    FULL = "FULL"
+    HALF = "HALF"
+    QUARTER = "QUARTER"
+    TARGET_FULL = "TARGET_FULL"
+    TARGET_HALF = "TARGET_HALF"
+
+    # Backward-compatible internal aliases retained for existing callers.
+    FULL_BUY = "FULL"
+    HALF_BUY = "HALF"
+    QUARTER_SELL = "QUARTER"
+    TARGET_SELL_THEN_FULL_BUY = "TARGET_FULL"
+    TARGET_SELL_THEN_HALF_BUY = "TARGET_HALF"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "FillEvent | None":
+        legacy_values = {
+            "FULL_BUY": cls.FULL,
+            "HALF_BUY": cls.HALF,
+            "QUARTER_SELL": cls.QUARTER,
+            "TARGET_SELL_THEN_FULL_BUY": cls.TARGET_FULL,
+            "TARGET_SELL_THEN_HALF_BUY": cls.TARGET_HALF,
+        }
+        return legacy_values.get(value) if isinstance(value, str) else None
 
 
 @dataclass(frozen=True)
@@ -199,8 +217,17 @@ def calculate_normal_plan(state: NormalState) -> NormalPlan:
         average_buy_budget = ZERO
         average_buy_price = _round_cent(avg_price)
 
+    star_budget_quantity = _quantity_for_budget(star_buy_budget, star_buy_price)
+    average_budget_quantity = _quantity_for_budget(average_buy_budget, average_buy_price)
+    if star_budget_quantity < 1 or (average_buy_budget > ZERO and average_budget_quantity < 1):
+        return _empty_normal_plan(
+            state,
+            phase="FAIL_CLOSED",
+            reason="insufficient cash: computed buy budget cannot buy one share",
+        )
+
     star_buy_quantity = min(
-        _quantity_for_budget(star_buy_budget, star_buy_price),
+        star_budget_quantity,
         _quantity_for_budget(cash, star_buy_price),
     )
     remaining_cash_after_star = cash - (Decimal(star_buy_quantity) * star_buy_price)
