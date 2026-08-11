@@ -847,6 +847,37 @@ class KisOrderEngine(MarketDataProvider):
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "RSVN_ORD_RCIT_DT": order_date, "OVRS_RSVN_ODNO": order_id}
         return self._call_api("TTTT3017U", "/uapi/overseas-stock/v1/trading/order-resv-ccnl", "POST", body=body)
 
+    def get_execution_fills(self, ticker, start_date, end_date):
+        """Return raw KIS execution rows, preserving each partial fill.
+
+        ``get_execution_history`` keeps the legacy per-ODNO aggregation for old
+        display/sync callers.  Fill reconciliation must use this raw method so
+        the stable fill_key can include execution time and exact qty/price.
+        """
+        excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
+        rows = []
+        fk200, nk200 = "", ""
+        for attempt in range(10):
+            params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker, "ORD_STRT_DT": start_date, "ORD_END_DT": end_date, "SLL_BUY_DVSN": "00", "CCLD_NCCS_DVSN": "00", "OVRS_EXCG_CD": excg_cd, "SORT_SQN": "DS", "CTX_AREA_FK200": fk200, "CTX_AREA_NK200": nk200}
+            headers = self._get_header("TTTS3035R")
+            if fk200 or nk200: headers["tr_cont"] = "N"
+            res, resp_json = self._api_request("GET", f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl", headers, params=params)
+            if res and resp_json.get('rt_cd') == '0':
+                output = resp_json.get('output') or []
+                if isinstance(output, dict): output = [output]
+                if not isinstance(output, list): output = []
+                for item in output:
+                    if isinstance(item, dict) and self._safe_float(item.get('ft_ccld_qty', 0)) > 0:
+                        rows.append(dict(item))
+                fk200 = str(resp_json.get('ctx_area_fk200', '') or '').strip()
+                nk200 = str(resp_json.get('ctx_area_nk200', '') or '').strip()
+                if hasattr(res, 'headers') and res.headers.get('tr_cont', '') in ['M', 'F'] and nk200:
+                    time.sleep(0.3)
+                    continue
+                break
+            break
+        return rows
+
     def get_execution_history(self, ticker, start_date, end_date):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         odno_map = {}

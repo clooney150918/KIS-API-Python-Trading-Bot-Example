@@ -211,13 +211,14 @@ class TelegramSyncEngine:
 
                 raw_execs = []
                 target_execs = []
+                execution_fill_reader = getattr(self.broker, 'get_execution_fills', self.broker.get_execution_history)
                     
                 if actual_qty == 0 and max_check_qty > 0:
                     max_retries = 6
                     prev_sold_today = -1
                     stable_cnt = 0
                     for attempt in range(max_retries):
-                        raw_execs = await self._retry_api(self.broker.get_execution_history, ticker, kis_search_start, query_end_dt, timeout=15.0, default=None)
+                        raw_execs = await self._retry_api(execution_fill_reader, ticker, kis_search_start, query_end_dt, timeout=15.0, default=None)
                         if raw_execs is None:
                             return "체결 원장 조회(get_execution_history) 실패 - API 서버 무응답 또는 거절"
                         target_execs = filter_to_est(raw_execs)
@@ -235,7 +236,7 @@ class TelegramSyncEngine:
                             logging.info(f"⏳ [{ticker}] 체결 원장 지연(Lag) 감지. 데이터 안정화 및 EST 매핑 검증 중... ({attempt+1}/{max_retries})")
                             await asyncio.sleep(2.0)
                 else:
-                    raw_execs = await self._retry_api(self.broker.get_execution_history, ticker, kis_search_start, query_end_dt, timeout=15.0, default=None)
+                    raw_execs = await self._retry_api(execution_fill_reader, ticker, kis_search_start, query_end_dt, timeout=15.0, default=None)
                     if raw_execs is None:
                         return "체결 원장 조회(get_execution_history) 실패 - API 서버 무응답 또는 거절"
                     target_execs = filter_to_est(raw_execs)

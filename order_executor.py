@@ -177,7 +177,7 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     return canonical_intent_id
 
 
-async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None, current_t_revision_provider=None):
+async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None, current_t_revision_provider=None, order_intent_store=None, t_event_store=None):
     msgs = ""
     all_success = True
     loop_fail_reason = ""
@@ -376,7 +376,27 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             err_msg = html.escape(str(safe_res.get('msg1') or '오류/잔금패스'))
 
             if is_success:
-                successful_orders_cache.add(order_key)
+                odno = str(safe_res.get('odno') or '').strip()
+                if official_order and not odno:
+                    is_success = False
+                    all_success = False
+                    err_msg = "ORDER_ACCEPTED_WITHOUT_ORDER_NO HALT_REQUIRED RECONCILIATION_REQUIRED"
+                    loop_fail_reason = f"[{ticker}] {order_category}: {err_msg}"
+                    if gate is not None and hasattr(gate, 'latch_ambiguous_submission'):
+                        gate.latch_ambiguous_submission("KIS accepted official order without ODNO")
+                else:
+                    if official_order and order_intent_store is not None:
+                        try:
+                            order_intent_store.transition_status(order_key, "SUBMITTED")
+                        except Exception as error:
+                            is_success = False
+                            all_success = False
+                            err_msg = f"ORDER_INTENT_SUBMITTED_RECORD_FAILED {html.escape(str(error))}"
+                            loop_fail_reason = f"[{ticker}] {order_category}: {err_msg}"
+                    if is_success:
+                        # rt_cd==0 is acceptance only: cache the accepted ODNO/intent so
+                        # the executor does not resubmit, but never mutate T here.
+                        successful_orders_cache.add(order_key)
             else:
                 all_success = False
                 if is_ambiguous:

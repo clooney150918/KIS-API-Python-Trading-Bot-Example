@@ -1,0 +1,8 @@
+{
+  "scenario": "full fill",
+  "account_fingerprint": "acct-A",
+  "ticker": "SOXL",
+  "executions": [
+    {"odno":"ODNO-1","ord_dt":"20260812","ord_tmd":"223015","pdno":"SOXL","ovrs_excg_cd":"AMEX","sll_buy_dvsn_cd":"02","ft_ccld_qty":"4","ft_ccld_unpr3":"100.00"}
+  ]
+}

@@ -891,3 +891,77 @@ def test_ambiguous_latch_blocks_future_request_authorization(tmp_path):
     assert decision.code == "ORDER_SUBMISSION_AMBIGUOUS"
     assert decision.can_submit is False
     assert authorization is None
+
+
+class TrackingIntentStore:
+    def __init__(self):
+        self.transitions = []
+
+    def transition_status(self, intent_id, status):
+        self.transitions.append((intent_id, status))
+        return {"intent_id": intent_id, "status": status}
+
+
+def test_order_acceptance_transitions_official_intent_to_submitted_without_fill_or_t_update(
+    tmp_path, monkeypatch
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    intent_store = TrackingIntentStore()
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    order = official_order()
+    order["intent_id"] = compute_intent_id(dict(order, ticker="SOXL", order_type="LIMIT"))
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [order],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=intent_store,
+            t_event_store=object(),
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert intent_store.transitions == [(order["intent_id"], "SUBMITTED")]
+    assert len(broker.calls) == 1
+    assert len(cache) == 1
+
+
+def test_order_acceptance_missing_order_number_fails_closed_before_submitted_or_cache(
+    tmp_path, monkeypatch
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = FailingBroker(gate, {"rt_cd": "0", "msg1": "accepted", "odno": ""})
+    intent_store = TrackingIntentStore()
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    order = official_order()
+    order["intent_id"] = compute_intent_id(dict(order, ticker="SOXL", order_type="LIMIT"))
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [order],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=intent_store,
+        )
+    )
+
+    assert success is False
+    assert cache == set()
+    assert intent_store.transitions == []
+    assert "ORDER_ACCEPTED_WITHOUT_ORDER_NO" in messages
+    assert "ORDER_ACCEPTED_WITHOUT_ORDER_NO" in failure

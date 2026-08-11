@@ -16,7 +16,10 @@ ranges = [
 ]
 all_items = []
 for start, end in ranges:
-    part = engine.get_execution_history("SOXL", start, end)
+    if hasattr(engine, "get_execution_fills"):
+        part = engine.get_execution_fills("SOXL", start, end)
+    else:
+        part = engine.get_execution_history("SOXL", start, end)
     items = list(part.values()) if isinstance(part, dict) else list(part)
     print(f"RANGE {start}-{end}={len(items)}")
     all_items.extend(items)
