@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from global_throttle import GlobalThrottle
 
-class V14Strategy:
+class V4Strategy:
     def __init__(self, config):
         self.cfg = config
 
@@ -50,8 +50,8 @@ class V14Strategy:
 
     def save_daily_snapshot(self, ticker, plan_data):
         today_str = self._get_logical_date_str()
-        snap_file = f"data/daily_snapshot_V14_{today_str}_{ticker}.json"
-        
+        snap_file = f"data/daily_snapshot_V4_{today_str}_{ticker}.json"
+
         safe_plan = plan_data if isinstance(plan_data, dict) else {}
         
         data = {
@@ -62,7 +62,7 @@ class V14Strategy:
             "star_price": self._safe_float(safe_plan.get('star_price', 0.0)),
             "star_ratio": self._safe_float(safe_plan.get('star_ratio', 0.0)),
             "target_price": self._safe_float(safe_plan.get('target_price', 0.0)), 
-            "t_val": self._safe_float(safe_plan.get('t_val', 0.0)),
+            "t_val": round(self._safe_float(safe_plan.get('t_val', 0)), 2),
             "is_reverse": bool(safe_plan.get('is_reverse', False)),
             "is_zero_start": bool(safe_plan.get('is_zero_start', False)),
             "initial_qty": int(self._safe_float(safe_plan.get('initial_qty', 0))),
@@ -100,8 +100,8 @@ class V14Strategy:
 
     def load_daily_snapshot(self, ticker):
         today_str = self._get_logical_date_str()
-        snap_file = f"data/daily_snapshot_V14_{today_str}_{ticker}.json"
-        
+        snap_file = f"data/daily_snapshot_V4_{today_str}_{ticker}.json"
+
         with GlobalThrottle.get_file_lock(snap_file):
             try:
                 with open(snap_file, 'r', encoding='utf-8') as f:
@@ -143,6 +143,21 @@ class V14Strategy:
         available_cash = self._safe_float(available_cash)
         real_available_cash = max(0.0, available_cash)
         ma_5day = self._safe_float(ma_5day)
+        snap = None
+
+        # KIS 체결 재구성에 수동검토 항목이 있으면 실제 주문만 HALT한다.
+        t_states = self.cfg._load_json(self.cfg.FILES.get("T_STATE", "data/t_state.json"), {})
+        t_state = t_states.get(ticker, {}) if isinstance(t_states, dict) else {}
+        if isinstance(t_state, dict) and t_state.get("needs_manual_review", False) and not is_simulation:
+            t_val = round(self._safe_float(t_state.get("t_val", 0.0)), 2)
+            return {
+                "orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price,
+                "t_val": t_val, "one_portion": 0.0, "process_status": "⛔T값 수동검토",
+                "is_reverse": False, "star_price": 0.0, "star_ratio": 0.0,
+                "target_price": 0.0, "real_cash_used": real_available_cash,
+                "tracking_info": {}, "initial_qty": qty, "is_zero_start": qty == 0,
+                "safety": {"halted": True, "reason": t_state.get("review_reason", "T값 수동검토 필요")}
+            }
 
         if not is_snapshot_mode:
             snap = self.load_daily_snapshot(ticker)
@@ -184,7 +199,7 @@ class V14Strategy:
                 return snap
 
         split = self._safe_float(self.cfg.get_split_count(ticker))
-        if split <= 0: split = 40.0
+        if split <= 0: split = 20.0
 
         rev_state = self.cfg.get_reverse_state(ticker)
         is_rev_active = rev_state.get('is_active', False)
@@ -202,7 +217,7 @@ class V14Strategy:
             
             if loss_pct >= escape_thresh and qty > 0:
                 logging.info(f"🚀 [{ticker}] 손실률 {loss_pct:.2f}% 도달 (임계치 {escape_thresh}%). 리버스 모드 탈출 및 일반 모드 롤오버를 가동합니다.")
-                dynamic_t = self._safe_float(rev_state.get('dynamic_t', 0.0))
+                dynamic_t = round(self._safe_float(rev_state.get('dynamic_t', 0)), 2)
                 rem_cash = self._safe_float(rev_state.get('rem_cash', 0.0))
                 
                 # 리버스 탈출: seed 재설정·T 리셋 없음. T값 유지.
@@ -214,12 +229,9 @@ class V14Strategy:
         target_ratio = target_pct_val / 100.0
         
         portion = seed / split if split > 0 else 1.0
-        # 스냅샷에 유효한 T값이 있으면 우선 사용, 없으면 원가 역산
-        if qty > 0 and snap and isinstance(snap, dict) and snap.get('t_val', 0.0) > 0:
-            t_val = float(snap.get('t_val', 0.0))
-        else:
-            t_val = (qty * avg_price) / portion if portion > 0 else 0.0
-        t_val = round(t_val, 4)
+        # V4.0: T는 원가 역산값이 아니라 체결 이벤트 상태값이다.
+        t_val, _ = self.cfg.get_absolute_t_val(ticker, qty, avg_price)
+        t_val = round(self._safe_float(t_val), 2)
 
         target_price = self._ceil(avg_price * (1 + target_ratio)) if avg_price > 0 else 0.0
         
@@ -227,8 +239,8 @@ class V14Strategy:
         
         one_portion_amt = portion
         
-        # SOXL 20분할 원문 방법론: star_ratio = target% - 2*T (퍼센트 포인트 기준)
-        star_ratio_percent = target_pct_val - 2.0 * t_val
+        # SOXL 20분할 원문 방법론: 별% = N/2 - T
+        star_ratio_percent = (split / 2.0) - t_val
         star_ratio = star_ratio_percent / 100.0
         star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0.0
           
@@ -254,13 +266,13 @@ class V14Strategy:
                     self.cfg.set_reverse_state(ticker, True, 0, 0.0, dynamic_t=t_val, rem_cash=real_available_cash, is_day_one=True)
                     is_rev_active = True
                 else:
-                    # 🚨 NEW: 리버스 장부 정산(잔액 역산 및 T값 스케일링)을 스냅샷 모드에서 원자적 1회 호출
+                    # 🚨 NEW: 리버스 장부 정산(잔액 역산 및 정수 T값 갱신)을 스냅샷 모드에서 원자적 1회 호출
                     if is_snapshot_mode:
                         self.cfg.apply_reverse_daily_settlement(ticker)
 
                 # 🚨 MODIFIED: 갱신된 리버스 상태 다시 로드
                 rev_state = self.cfg.get_reverse_state(ticker)
-                dynamic_t = self._safe_float(rev_state.get('dynamic_t', 0.0))
+                dynamic_t = round(self._safe_float(rev_state.get('dynamic_t', 0)), 2)
                 rem_cash = self._safe_float(rev_state.get('rem_cash', 0.0))
                 is_day_one = rev_state.get('is_day_one', True)
                 
@@ -274,9 +286,7 @@ class V14Strategy:
                     process_status = "♻️리버스(1일차 진입)"
                 else:
                     # 리버스 별지점: 직전 5거래일 확정 종가 평균 (ma_5day 대체)
-                    rev_star = self._safe_float(attr_data.get('close_5day_avg', 0.0))
-                    if rev_star <= 0:
-                        rev_star = prev_close if prev_close > 0 else current_price
+                    rev_star = ma_5day if ma_5day > 0.0 else (prev_close if prev_close > 0.0 else current_price)
                     buy_price = max(0.01, round(rev_star - 0.01, 2))
                     
                     buy_budget = rem_cash / 4.0
@@ -351,7 +361,7 @@ class V14Strategy:
                         if q_star_total > 0:
                             core_orders.append({"side": "BUY", "price": p_star, "qty": q_star_total, "type": "LOC", "desc": "💫별값매수(통합)"})
 
-                q_sell = math.ceil(qty / 4)
+                q_sell = math.floor(qty / 4)
                 rem_qty = int(qty - q_sell)
                 if star_price > 0 and q_sell > 0:
                     core_orders.append({"side": "SELL", "price": star_price, "qty": q_sell, "type": "LOC", "desc": "🌟별값매도(쿼터)"})

@@ -52,13 +52,30 @@ class ConfigManager:
             "HISTORY": "data/manual_history.json", 
             "SPLIT": "data/split_config.json",
             "TICKER": "data/active_tickers.json",
+            "UPWARD_SNIPER": "data/upward_sniper.json", 
+            "SECRET_MODE": "data/secret_mode.dat",
             "PROFIT_CFG": "data/profit_config.json",
             "LOCKS": "data/trade_locks.json",
             "SEED_CFG": "data/seed_config.json",         
             "COMPOUND_CFG": "data/compound_config.json",
             "VERSION_CFG": "data/version_config.json",
-            "FEE_CFG": "data/fee_config.json", 
+            "REVERSE_CFG": "data/reverse_config.json",
+            "T_STATE": "data/t_state.json",
+            "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
+            "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
+            "AVWAP_SORTIE_CFG": "data/avwap_sortie.json",
+            "MANUAL_VWAP_CFG": "data/manual_vwap_config.json",
+            "FEE_CFG": "data/fee_config.json", 
+            "MASTER_SWITCH": "data/master_switch.json",
+            "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
+            "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
+            "VREV_GAP_SWITCH_CFG": "data/vrev_gap_switch.json",     
+            "VREV_GAP_THRESH_CFG": "data/vrev_gap_thresh.json",
+            "AVWAP_GAP_THRESH_CFG": "data/avwap_gap_thresh.json",
+            "AVWAP_ANCHOR_CFG": "data/avwap_anchor.json",
+            "AVWAP_BUDGET_CFG": "data/avwap_budget.json",         
+            "AVWAP_OVERNIGHT_CFG": "data/avwap_overnight.json"      
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -274,17 +291,28 @@ class ConfigManager:
     def get_absolute_t_val(self, ticker, actual_qty, actual_avg_price):
         rev_state = self.get_reverse_state(ticker)
         split = self.get_split_count(ticker)
-        
+
+        # V4.0: T는 체결 이벤트 상태값이다. 수량×평단으로 역산하지 않는다.
+        t_states = self._load_json(self.FILES["T_STATE"], {})
+        t_state = t_states.get(ticker, {}) if isinstance(t_states, dict) else {}
+        stored_t = self._safe_float(t_state.get("t_val", 0.0)) if isinstance(t_state, dict) else 0.0
+        if self._safe_float(actual_qty) <= 0:
+            return 0.0, 0.0
+
         if rev_state.get("is_active", False):
-            dynamic_t = self._safe_float(rev_state.get("dynamic_t", 0.0))
+            dynamic_t = self._safe_float(rev_state.get("dynamic_t", stored_t))
             rem_cash = self._safe_float(rev_state.get("rem_cash", 0.0))
             one_portion = rem_cash / 4.0 if rem_cash > 0 else 0.0
-            return round(dynamic_t, 4), round(one_portion, 2)
-            
+            return round(dynamic_t, 2), round(one_portion, 2)
+
         seed = self.get_seed(ticker)
         one_portion = seed / split if split > 0 else 1.0
-        t_val = (self._safe_float(actual_qty) * self._safe_float(actual_avg_price)) / one_portion if one_portion > 0 else 0.0
-        return round(t_val, 4), round(one_portion, 2)
+        if stored_t > 0:
+            return round(stored_t, 2), round(one_portion, 2)
+
+        # 상태값이 없으면 임의 역산하지 않고 HALT 신호(0)를 반환한다.
+        logging.error(f"⛔ [{ticker}] T 이벤트 상태값이 없어 원가 역산을 차단합니다.")
+        return 0.0, round(one_portion, 2)
 
     def apply_stock_split(self, ticker, ratio):
         safe_ratio = self._safe_float(ratio)
@@ -456,6 +484,7 @@ class ConfigManager:
             self.set_reverse_state(ticker, False, 0, 0.0, dynamic_t=0.0, rem_cash=0.0, is_day_one=True)
 
     def calculate_holdings(self, ticker, records=None):
+        # 장부 자체의 수량·원가 계산 전용. KIS 실계좌 값은 kis_balance.json에서 별도로 사용한다.
         if records is None:
             records = self.get_ledger()
         target_recs = [r for r in (records or []) if isinstance(r, dict) and r.get('ticker') == ticker]
@@ -487,10 +516,8 @@ class ConfigManager:
         sold_up = math.ceil(total_sold * 100) / 100.0
         
         avg_price = 0.0
-        if total_qty > 0 and target_recs:
-            avg_price = self._safe_float(target_recs[-1].get('avg_price', 0.0))
-            if avg_price == 0.0:
-                avg_price = (running_cost / running_qty) if running_qty > 0 else 0.0
+        if total_qty > 0:
+            avg_price = (running_cost / running_qty) if running_qty > 0 else 0.0
         
         return total_qty, avg_price, invested_up, sold_up
 
@@ -592,8 +619,10 @@ class ConfigManager:
                     if split <= 20: dynamic_t *= 0.9
                     else: dynamic_t *= 0.95
                 
-                if had_buy:
-                    dynamic_t += (split - dynamic_t) * 0.25
+                # V4.0: 스무딩 없이 T값은 매일 실제 보유량 기준으로 재계산
+                # (여기서는 dynamic_t를 실제 보유잔고로 역산하지 않고,
+                #  매도/매수 비율만 반영해 감소시킴)
+                # V4.0: T값 스무딩 제거 — strategy_v14.py에서 보유량 기준으로 재계산
 
                 logging.info(f"♻️ [{ticker}] 리버스 일일 정산 완료: sell=${sell_sum:.2f}, buy=${buy_sum:.2f} ➔ 잔액=${rem_cash:.2f}, T값={dynamic_t:.4f}")
 
@@ -856,88 +885,82 @@ class ConfigManager:
             self._save_json(self.FILES["SNIPER_MULTIPLIER_CFG"], d)
 
     def get_upward_sniper_mode(self, ticker): 
-        return False
-    
+        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_SNIPER"]):
+            return bool(self._load_json(self.FILES["UPWARD_SNIPER"], {}).get(ticker, False))
+         
     def set_upward_sniper_mode(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_SNIPER"]):
+             d = self._load_json(self.FILES["UPWARD_SNIPER"], {})
+             d[ticker] = bool(v)
+             self._save_json(self.FILES["UPWARD_SNIPER"], d)
 
-    def get_avwap_hybrid_mode(self, ticker):
-        return False
-
+    def get_avwap_hybrid_mode(self, ticker): 
+        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
+            return bool(self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {}).get(ticker, False))
+    
     def set_avwap_hybrid_mode(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
+            d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
+            d[ticker] = bool(v)
+            self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
 
     def get_avwap_sortie_mode(self, ticker):
-        return "SINGLE"
+        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_SORTIE_CFG"]):
+            return str(self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {}).get(ticker, "SINGLE"))
         
     def set_avwap_sortie_mode(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_SORTIE_CFG"]):
+            d = self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {})
+            d[ticker] = str(v)
+            self._save_json(self.FILES["AVWAP_SORTIE_CFG"], d)
 
     def get_manual_vwap_mode(self, ticker): 
-        return False
+        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
+            return bool(self._load_json(self.FILES["MANUAL_VWAP_CFG"], {}).get(ticker, False))
         
     def set_manual_vwap_mode(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
+            d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
+            d[ticker] = bool(v)
+            self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
 
     def get_master_switch(self, ticker): 
-        return "ALL"
+        with GlobalThrottle.get_file_lock(self.FILES["MASTER_SWITCH"]):
+            return str(self._load_json(self.FILES["MASTER_SWITCH"], {}).get(ticker, "ALL"))
         
     def set_master_switch(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["MASTER_SWITCH"]):
+            d = self._load_json(self.FILES["MASTER_SWITCH"], {})
+            d[ticker] = str(v)
+            self._save_json(self.FILES["MASTER_SWITCH"], d)
 
     def get_sniper_buy_locked(self, ticker): 
-        return False
+        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_BUY_LOCKED"]):
+            return bool(self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {}).get(ticker, False))
         
     def set_sniper_buy_locked(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_BUY_LOCKED"]):
+            d = self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {})
+            d[ticker] = bool(v)
+            self._save_json(self.FILES["SNIPER_BUY_LOCKED"], d)
 
     def get_sniper_sell_locked(self, ticker): 
-        return False
+        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_SELL_LOCKED"]):
+            return bool(self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {}).get(ticker, False))
         
     def set_sniper_sell_locked(self, ticker, v):
-        pass
-
-    def get_vrev_gap_switch(self, ticker): 
-        return False
-        
-    def set_vrev_gap_switch(self, ticker, v):
-        pass
-
-    def get_vrev_gap_thresh(self, ticker): 
-        return 0.0
-        
-    def set_vrev_gap_thresh(self, ticker, v):
-        pass
-
-    def get_avwap_gap_thresh(self, ticker): 
-        return 0.0
-        
-    def set_avwap_gap_thresh(self, ticker, v):
-        pass
-
-    def get_avwap_anchor(self, ticker): 
-        return 0.0
-        
-    def set_avwap_anchor(self, ticker, v):
-        pass
-
-    def get_avwap_budget(self, ticker): 
-        return 0.0
-        
-    def set_avwap_budget(self, ticker, v):
-        pass
-
-    def get_avwap_overnight(self, ticker): 
-        return False
-        
-    def set_avwap_overnight(self, ticker, v):
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_SELL_LOCKED"]):
+            d = self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {})
+            d[ticker] = bool(v)
+            self._save_json(self.FILES["SNIPER_SELL_LOCKED"], d)
 
     def get_secret_mode(self): 
-        return False
-        
+        with GlobalThrottle.get_file_lock(self.FILES["SECRET_MODE"]):
+            return self._load_file(self.FILES["SECRET_MODE"]) == 'True'
+         
     def set_secret_mode(self, v): 
-        pass
+        with GlobalThrottle.get_file_lock(self.FILES["SECRET_MODE"]):
+            self._save_file(self.FILES["SECRET_MODE"], str(v))
     
     def get_active_tickers(self): 
         with GlobalThrottle.get_file_lock(self.FILES["TICKER"]):

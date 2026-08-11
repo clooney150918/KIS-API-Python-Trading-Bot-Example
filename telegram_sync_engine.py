@@ -136,6 +136,12 @@ class TelegramSyncEngine:
                 actual_qty = int(self._safe_float(safe_ticker_info.get('qty')))
                 actual_avg = self._safe_float(safe_ticker_info.get('avg'))
 
+                # KIS 실계좌 평단 저장 — 장부 대신 KIS 기준으로 모든 계산
+                if actual_qty > 0 and actual_avg > 0:
+                    await self._retry_api(self.cfg._save_json, "data/kis_balance.json",
+                        {"SOXL": {"qty": actual_qty, "avg_price": actual_avg, "last_update": datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M')}},
+                        timeout=5.0)
+
                 full_ledger = await self._retry_api(self.cfg.get_ledger, default=[])
                 recs_for_check = [r for r in (full_ledger or []) if isinstance(r, dict) and r.get('ticker') == ticker]
                 hold_res = await self._retry_api(self.cfg.calculate_holdings, ticker, recs_for_check, default=(0, 0.0, 0.0, 0.0))

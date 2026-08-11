@@ -1,6 +1,3 @@
-# stub: callback_avwap_handler.py - removed per cleanup
 class CallbackAvwapHandler:
-    def __init__(self, *args, **kwargs):
-        pass
-    async def handle(self, *args, **kwargs):
-        pass
+    def __init__(self, *a, **kw): pass
+    async def handle(self, *a, **kw): pass

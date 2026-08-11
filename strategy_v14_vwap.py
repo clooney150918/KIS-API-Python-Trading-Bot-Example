@@ -1,4 +1,4 @@
-# stub: strategy_v14_vwap.py - removed per cleanup
 class V14VwapStrategy:
-    def get_plan(self, *args, **kwargs):
-        return {}
+    def __init__(self, config=None, *a, **kw): pass
+    def get_plan(self, *a, **kw): return {}
+    def load_daily_snapshot(self, *a, **kw): return None

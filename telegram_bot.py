@@ -143,11 +143,11 @@ class TelegramController:
              return await self.commands_handler.cmd_ticker(update, context)
         elif "분할 변경" in text or "환경 설정" in text or "세팅" in text:
             return await self.commands_handler.cmd_settlement(update, context)
-        elif "스나이퍼" in text:
+        elif "변동성" in text:
             return await self.commands_handler.cmd_mode(update, context)
         elif "명예의 전당" in text or "졸업" in text:
              return await self.commands_handler.cmd_history(update, context)
-        elif "암살자" in text or "조기" in text or "avwap" in text.lower():
+        elif "독립" in text or "조기" in text:
              return await self.commands_handler.cmd_avwap(update, context)
         elif "로그" in text or "에러" in text:
             return await self.commands_handler.cmd_log(update, context)

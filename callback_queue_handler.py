@@ -4,17 +4,13 @@
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 46대 엣지 케이스 완벽 결속 교차 검증 완료
 # 🚨 MODIFIED: [V-REV LIFO 지층 제어 전담 도메인] 큐 장부 조작 로직 분리
 # 🚨 MODIFIED: [Case 08, 14, 25, 26 절대 헌법 준수] 동기식 파일 스캔(os.path.exists) 배제 및 html.escape 쉴드 전역 결속 완료
-# 🚨 MODIFIED: [2차 오인 패러독스 붕괴 원천 차단] 지층 삭제(DEL_Q) 시에도 진행 중인 슬라이스 지시서를 os.remove()로 삭제하지 않고 hijacked=True 상태의 빈 지시서로 덮어써서 VWAP 스케줄러의 False Alarm 에러를 100% 영구 소각 완료.
+# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 지층 삭제(DEL_Q) 시에도 낡은 슬라이싱 지시서 및 애프터장 지시서를 원자적으로 소각(Nuke)하도록 파이프라인 전면 확장 완료.
 # ==========================================================
 import logging
 import asyncio
 import html
 import os
 import glob
-import tempfile # 🚨 NEW: 원자적 쓰기용 모듈 결속
-import json
-import datetime
-from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle
@@ -98,25 +94,15 @@ class CallbackQueueHandler:
                             with GlobalThrottle.get_file_lock(f):
                                 try: os.remove(f)
                                 except OSError: pass
-                                
-                        # 🚨 MODIFIED: 2차 오인 패러독스 차단 (물리적 삭제 대신 빈 지시서 박제)
-                        est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
-                        today_str = est_now.strftime('%Y-%m-%d')
-                        empty_state = {"date": today_str, "hijacked": True, "orders": []}
-                        
-                        for f_path in [f"data/vrev_slice_state_{ticker}.json", f"data/vrev_aftermarket_state_{ticker}.json"]:
-                            with GlobalThrottle.get_file_lock(f_path):
-                                dir_name = os.path.dirname(f_path) or '.'
-                                try: os.makedirs(dir_name, exist_ok=True)
+                        # 🚨 NEW
+                        for f in glob.glob(f"data/vrev_slice_state_{ticker}.json"):
+                            with GlobalThrottle.get_file_lock(f):
+                                try: os.remove(f)
                                 except OSError: pass
-                                try:
-                                    fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-                                    with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                                        json.dump(empty_state, f_out, ensure_ascii=False, indent=4)
-                                        f_out.flush()
-                                        os.fsync(f_out.fileno())
-                                    os.replace(tmp_path, f_path)
-                                except Exception: pass
+                        for f in glob.glob(f"data/vrev_aftermarket_state_{ticker}.json"):
+                            with GlobalThrottle.get_file_lock(f):
+                                try: os.remove(f)
+                                except OSError: pass
                                 
                     await asyncio.wait_for(asyncio.to_thread(_nuke_snapshot_and_state_del), timeout=10.0)
                         
