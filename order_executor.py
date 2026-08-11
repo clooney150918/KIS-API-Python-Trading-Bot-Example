@@ -10,6 +10,7 @@ import logging
 import html
 import math
 from state_io_manager import save_slice_state_sync, save_aftermarket_state_sync
+from runtime_safety import RuntimeSafetyGate, safety_block_result
 
 def _safe_float(val):
     try:
@@ -19,7 +20,7 @@ def _safe_float(val):
     except Exception:
         return 0.0
 
-async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수"):
+async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None):
     msgs = ""
     all_success = True
     loop_fail_reason = ""
@@ -45,6 +46,24 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             order_key = f"{ticker}_{o_desc}"
             if order_key in successful_orders_cache:
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ✅(기장전 보존)\n"
+                continue
+
+            gate = runtime_safety_gate or getattr(broker, 'runtime_safety_gate', None)
+            if gate is None:
+                decision = RuntimeSafetyGate.denied(
+                    "SAFETY_NOT_CONFIGURED",
+                    "runtime safety gate was not injected",
+                    ticker=str(ticker),
+                    side=o_side,
+                )
+            else:
+                decision = gate.authorize(ticker, o_side, o.get('qty'), o.get('price'))
+            if not decision.can_submit:
+                blocked = safety_block_result(decision)
+                code = blocked['safety_decision']['code']
+                all_success = False
+                loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
+                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
                 continue
 
             res = {}

@@ -19,8 +19,31 @@ import math
 import logging
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
+from runtime_safety import RuntimeSafetyGate, safety_block_result
 
 class KisOrderEngine(MarketDataProvider):
+
+    def __init__(self, app_key, app_secret, cano, acnt_prdt_cd="01", runtime_safety_gate=None):
+        super().__init__(app_key, app_secret, cano, acnt_prdt_cd)
+        self.runtime_safety_gate = runtime_safety_gate or RuntimeSafetyGate()
+
+    def _authorize_order_submission(self, ticker, side, qty, price):
+        gate = getattr(self, 'runtime_safety_gate', None)
+        if gate is None:
+            return RuntimeSafetyGate.denied(
+                "SAFETY_NOT_CONFIGURED",
+                "runtime safety gate was not injected",
+                ticker=str(ticker),
+                side=str(side),
+            )
+        return gate.authorize(ticker, side, qty, price)
+
+    def _call_order_api(self, ticker, side, qty, price, tr_id, path, body):
+        """Re-authorize at the single final boundary immediately before KIS POST."""
+        decision = self._authorize_order_submission(ticker, side, qty, price)
+        if not decision.can_submit:
+            return safety_block_result(decision)
+        return self._call_api(tr_id, path, "POST", body=body)
     
     def get_account_balance(self):
         """ 🚨 [Case 03 준수] API 잔고 응답 중복 합산 절대 방어 락온 """
@@ -252,6 +275,10 @@ class KisOrderEngine(MarketDataProvider):
         return len(target_orders)
 
     def send_order(self, ticker, side, qty, price, order_type="LIMIT", start_time=None, end_time=None):
+        decision = self._authorize_order_submission(ticker, side, qty, price)
+        if not decision.can_submit:
+            return safety_block_result(decision)
+
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
         except (TypeError, ValueError): return {'rt_cd': '999', 'msg1': f'유효하지 않은 주문 수량: {qty!r}'}
@@ -283,11 +310,21 @@ class KisOrderEngine(MarketDataProvider):
                 else:
                     body["ALGO_ORD_TMD_DVSN_CD"] = "02"
 
-            res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/order", "POST", body=body)
+            res = self._call_order_api(
+                ticker,
+                side,
+                qty,
+                price,
+                tr_id,
+                "/uapi/overseas-stock/v1/trading/order",
+                body,
+            )
             # 🚨 MODIFIED: [TypeError 붕괴 방어] msg1이 None일 경우 any() 루프에서 발생하는 예외 원천 봉쇄
             safe_msg = str(res.get('msg1') or '')
             
             if res.get('rt_cd') != '0':
+                if 'safety_decision' in res:
+                    return res
                 if attempt < 2 and any(x in safe_msg for x in ["거래소", "시장", "exchange", "코드"]):
                     if ticker in self._excg_cd_cache: del self._excg_cd_cache[ticker]
                     time.sleep(1.0 * (2 ** attempt))
@@ -326,6 +363,10 @@ class KisOrderEngine(MarketDataProvider):
         return self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
 
     def send_daytime_order(self, ticker, side, qty, price):
+        decision = self._authorize_order_submission(ticker, side, qty, price)
+        if not decision.can_submit:
+            return safety_block_result(decision)
+
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [최종 무결성 수술] 수동 주문 시 Float 수량이 주입되어 KIS 서버에서 리젝되는 현상을 막기 위해 int 강제 형변환 쉴드 주입
         try: order_qty = int(self._safe_float(qty))
@@ -336,7 +377,17 @@ class KisOrderEngine(MarketDataProvider):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
     
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(self._ceil_2(price)), "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
-        res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/daytime-order", "POST", body=body)
+        res = self._call_order_api(
+            ticker,
+            side,
+            qty,
+            price,
+            tr_id,
+            "/uapi/overseas-stock/v1/trading/daytime-order",
+            body,
+        )
+        if 'safety_decision' in res:
+            return res
         
         # 🚨 MODIFIED: [AttributeError 붕괴 방어] output 객체 추출 시 안전 단락 평가
         out = res.get('output') or {}
@@ -355,6 +406,10 @@ class KisOrderEngine(MarketDataProvider):
         return self._call_api("TTTS6038U", "/uapi/overseas-stock/v1/trading/daytime-order-rvsecncl", "POST", body=body)
 
     def send_reservation_order(self, ticker, side, qty, price, order_type="LIMIT"):
+        decision = self._authorize_order_submission(ticker, side, qty, price)
+        if not decision.can_submit:
+            return safety_block_result(decision)
+
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
@@ -376,7 +431,17 @@ class KisOrderEngine(MarketDataProvider):
             body["ORD_DVSN"] = "00" 
             body["FT_ORD_UNPR3"] = final_price
            
-        res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/order-resv", "POST", body=body)
+        res = self._call_order_api(
+            ticker,
+            side,
+            qty,
+            price,
+            tr_id,
+            "/uapi/overseas-stock/v1/trading/order-resv",
+            body,
+        )
+        if 'safety_decision' in res:
+            return res
         rt_cd = str(res.get('rt_cd') or '999')
         msg1 = str(res.get('msg1') or '오류')
       

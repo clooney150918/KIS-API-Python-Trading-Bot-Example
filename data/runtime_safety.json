@@ -1,0 +1,14 @@
+{
+  "operator_halt": true,
+  "live_armed": false,
+  "shadow_only": true,
+  "reason": "OFFICIAL_V4_REFACTOR",
+  "revision": 1,
+  "updated_at": "2026-08-11T00:00:00Z",
+  "updated_by": "SYSTEM",
+  "allowed_tickers": [
+    "SOXL"
+  ],
+  "max_order_quantity": 100,
+  "max_order_notional": "25000.00"
+}
