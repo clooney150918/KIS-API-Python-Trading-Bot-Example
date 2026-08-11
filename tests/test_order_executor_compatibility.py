@@ -34,6 +34,14 @@ def official_order(**overrides):
     return order
 
 
+def current_t_revision_provider(current_revision=3):
+    def provider(ticker):
+        assert ticker == "SOXL"
+        return current_revision
+
+    return provider
+
+
 class LegacyPositionalBroker:
     def __init__(self, gate):
         self.runtime_safety_gate = gate
@@ -123,6 +131,7 @@ def test_success_cache_uses_official_intent_id_not_legacy_description(tmp_path, 
             True,
             "20260811",
             runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
         )
     )
 
@@ -150,6 +159,7 @@ def test_success_cache_dedupes_same_intent_even_when_ui_description_changes(tmp_
             True,
             "20260811",
             runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
         )
     )
 
@@ -176,6 +186,7 @@ def test_official_order_rejects_forged_intent_id_before_broker_call(tmp_path, mo
             True,
             "20260811",
             runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
         )
     )
 
@@ -184,6 +195,102 @@ def test_official_order_rejects_forged_intent_id_before_broker_call(tmp_path, mo
     assert cache == set()
     assert "ORDER_INTENT_ID_MISMATCH" in messages
     assert "ORDER_INTENT_ID_MISMATCH" in failure
+
+
+def test_official_order_rejects_stale_t_revision_before_broker_call(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    stale = official_order(t_revision=1)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [stale],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=lambda ticker: {"status": "OK", "t_revision": 3},
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_STALE_T_REVISION" in messages
+    assert "ORDER_INTENT_STALE_T_REVISION" in failure
+
+
+@pytest.mark.parametrize(
+    "provider",
+    [
+        None,
+        lambda ticker: None,
+        lambda ticker: 0,
+        lambda ticker: {"status": "CORRUPT", "t_revision": 3},
+        lambda ticker: {"status": "OK"},
+        lambda ticker: (_ for _ in ()).throw(RuntimeError("ledger unavailable")),
+    ],
+)
+def test_official_order_rejects_missing_or_corrupt_t_revision_status_before_broker_call(
+    tmp_path, monkeypatch, provider
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [official_order()],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=provider,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_T_REVISION_UNAVAILABLE" in messages
+    assert "ORDER_INTENT_T_REVISION_UNAVAILABLE" in failure
+
+
+@pytest.mark.parametrize("market_active", [True, False])
+def test_official_order_with_matching_t_revision_still_submits_and_dedupes(
+    tmp_path, monkeypatch, market_active
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    same_intent = official_order()
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [same_intent, dict(same_intent, desc="changed UI desc")],
+            cache,
+            market_active,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(3),
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert len(broker.calls) == 1
+    assert cache == {compute_intent_id(dict(same_intent, ticker="SOXL", order_type="LIMIT"))}
+    assert "✅(기장전 보존)" in messages
 
 
 def test_official_order_rejects_missing_event_type_without_legacy_fallback(tmp_path, monkeypatch):

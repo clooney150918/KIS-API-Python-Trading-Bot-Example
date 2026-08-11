@@ -77,7 +77,50 @@ def _order_idempotency_key(trade_date, ticker, order_index, order, side, order_t
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
-def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallback_key):
+def _coerce_positive_int(value, field):
+    if isinstance(value, bool):
+        raise InvalidOrderIntentError(f"{field} must be a positive integer")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidOrderIntentError(f"{field} must be a positive integer") from exc
+    if parsed <= 0:
+        raise InvalidOrderIntentError(f"{field} must be a positive integer")
+    return parsed
+
+
+def _current_t_revision_from_provider(provider, ticker):
+    if provider is None:
+        raise InvalidOrderIntentError("ORDER_INTENT_T_REVISION_UNAVAILABLE: current T revision provider missing")
+    try:
+        status = provider(ticker)
+    except Exception as exc:
+        raise InvalidOrderIntentError("ORDER_INTENT_T_REVISION_UNAVAILABLE: current T revision provider failed") from exc
+    if isinstance(status, dict):
+        if status.get("status") not in {"OK", "CURRENT", "READY"}:
+            raise InvalidOrderIntentError("ORDER_INTENT_T_REVISION_UNAVAILABLE: current T revision status not ok")
+        for key in ("t_revision", "current_t_revision", "revision"):
+            if key in status:
+                status = status[key]
+                break
+        else:
+            raise InvalidOrderIntentError("ORDER_INTENT_T_REVISION_UNAVAILABLE: current T revision missing")
+    try:
+        return _coerce_positive_int(status, "current_t_revision")
+    except InvalidOrderIntentError as exc:
+        raise InvalidOrderIntentError("ORDER_INTENT_T_REVISION_UNAVAILABLE: current T revision invalid") from exc
+
+
+def _assert_official_t_revision_current(order, ticker, current_t_revision_provider):
+    order_revision = _coerce_positive_int(order.get("t_revision"), "t_revision")
+    current_revision = _current_t_revision_from_provider(current_t_revision_provider, ticker)
+    if order_revision != current_revision:
+        raise InvalidOrderIntentError(
+            f"ORDER_INTENT_STALE_T_REVISION: expected {current_revision}, got {order_revision}"
+        )
+
+
+def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallback_key, current_t_revision_provider=None):
     """Use official deterministic intent_id for successful-order de-dupe.
 
     Legacy/non-official orders fall back to the existing transport idempotency key
@@ -110,6 +153,8 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     if order_ticker != executor_ticker:
         raise InvalidOrderIntentError("ticker must match executor ticker")
 
+    _assert_official_t_revision_current(order, order_ticker, current_t_revision_provider)
+
     intent_payload = {
         "strategy": order.get("strategy"),
         "strategy_revision": order.get("strategy_revision"),
@@ -129,7 +174,7 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     return canonical_intent_id
 
 
-async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None):
+async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None, current_t_revision_provider=None):
     msgs = ""
     all_success = True
     loop_fail_reason = ""
@@ -154,16 +199,26 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
 
             try:
                 order_key = _order_success_cache_key(
-                    today_str, ticker, o, o_side, o_type, idempotency_key
+                    today_str,
+                    ticker,
+                    o,
+                    o_side,
+                    o_type,
+                    idempotency_key,
+                    current_t_revision_provider=current_t_revision_provider,
                 )
             except InvalidOrderIntentError as error:
-                code = (
-                    "ORDER_INTENT_ID_MISMATCH"
-                    if "ORDER_INTENT_ID_MISMATCH" in str(error)
-                    else "ORDER_INTENT_INVALID"
-                )
+                error_text = str(error)
+                if "ORDER_INTENT_ID_MISMATCH" in error_text:
+                    code = "ORDER_INTENT_ID_MISMATCH"
+                elif "ORDER_INTENT_STALE_T_REVISION" in error_text:
+                    code = "ORDER_INTENT_STALE_T_REVISION"
+                elif "ORDER_INTENT_T_REVISION_UNAVAILABLE" in error_text:
+                    code = "ORDER_INTENT_T_REVISION_UNAVAILABLE"
+                else:
+                    code = "ORDER_INTENT_INVALID"
                 all_success = False
-                reason = html.escape(str(error))
+                reason = html.escape(error_text)
                 loop_fail_reason = f"[{ticker}] {order_category} 주문 의도 검증 실패: {code} {reason}"
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code}: {reason})\n"
                 break
