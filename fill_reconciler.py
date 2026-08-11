@@ -250,11 +250,13 @@ class FillReconciler:
                     continue
 
                 event = self._build_t_event(intent, fill, accumulated_qty, accumulated_amount)
+                snapshots = self._snapshot_ledgers()
                 try:
-                    self.intent_store.transition_status(intent["intent_id"], "FILLED")
                     self.trade_state_store.append_event(event)
                     self._record_processed(fill, intent["intent_id"], "FINAL")
+                    self.intent_store.transition_status(intent["intent_id"], "FILLED")
                 except Exception as exc:
+                    self._restore_ledgers(snapshots)
                     raise FillReconciliationError("atomic fill finalization failed; retry required") from exc
                 result["new_fill_count"] += 1
             result["partial_open"] = self.forbid_new_orders(ticker)
@@ -264,6 +266,7 @@ class FillReconciler:
 
     def _match_intent(self, ticker: str, fill: Mapping[str, Any]) -> dict[str, Any] | None:
         latest = list(_latest_by_intent(self.intent_store.list_intents(ticker)).values())
+        fill_matching_key = build_matching_key(fill)
         candidates = []
         for intent in latest:
             if intent.get("ticker") != ticker:
@@ -272,15 +275,40 @@ class FillReconciler:
                 continue
             if intent.get("side") != fill.get("side"):
                 continue
-            if _trade_date_compact(intent.get("trade_date")) != fill.get("trade_date"):
+            accepted_order = intent.get("accepted_order")
+            if not isinstance(accepted_order, Mapping):
                 continue
-            # Without an accepted-order-number column in the Task 4 exact schema,
-            # only exact official intent semantics may match.  Manual-looking ODNOs
-            # remain unclassified so external fills never mutate T implicitly.
-            if str(fill.get("order_no", "")).upper().startswith("MANUAL"):
+            if accepted_order.get("matching_key") != fill_matching_key:
                 continue
             candidates.append(intent)
         return candidates[0] if len(candidates) == 1 else None
+
+    def _snapshot_ledgers(self) -> dict[Path, bytes | None]:
+        paths = [
+            Path(self.intent_store.ledger_path),
+            Path(self.trade_state_store.events_path),
+            Path(self.processed_fill_store.ledger_path),
+        ]
+        return {path: path.read_bytes() if path.exists() else None for path in paths}
+
+    def _restore_ledgers(self, snapshots: Mapping[Path, bytes | None]) -> None:
+        for path, content in snapshots.items():
+            if content is None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = path.with_name(f".{path.name}.rollback.{os.getpid()}")
+            fd = os.open(str(temp_path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
+            try:
+                os.write(fd, content)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(str(temp_path), str(path))
+            _fsync_dir(path.parent)
 
     def _fill_within_intent(self, intent: Mapping[str, Any], fill: Mapping[str, Any]) -> bool:
         if intent.get("side") != fill.get("side"):

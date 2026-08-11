@@ -225,3 +225,49 @@ def test_ledger_rejects_extra_fields_exact_schema(tmp_path):
 
     with pytest.raises(OrderIntentLedgerCorruptError, match="schema"):
         store.list_intents("SOXL")
+
+
+def test_record_accepted_order_persists_durable_matching_key_fields_without_changing_planned_schema(tmp_path):
+    import order_intent_store
+    store, path = make_store(tmp_path)
+    created = store.create_planned(planned_intent())
+    planned_raw = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert set(planned_raw) == set(order_intent_store.LEDGER_FIELDS)
+
+    submitted = store.record_accepted_order(created["intent_id"], {
+        "account_fingerprint": "acct-A",
+        "ticker": "SOXL",
+        "exchange": "AMEX",
+        "trade_date": "20260811",
+        "order_no": "ODNO-ACCEPTED-1",
+    })
+
+    assert submitted["status"] == "SUBMITTED"
+    assert submitted["accepted_order"] == {
+        "account_fingerprint": "acct-A",
+        "ticker": "SOXL",
+        "exchange": "AMEX",
+        "trade_date": "20260811",
+        "order_no": "ODNO-ACCEPTED-1",
+        "matching_key": "acct-A|SOXL|AMEX|20260811|ODNO-ACCEPTED-1",
+    }
+    assert store.list_intents("SOXL")[-1]["accepted_order"]["matching_key"] == "acct-A|SOXL|AMEX|20260811|ODNO-ACCEPTED-1"
+
+
+@pytest.mark.parametrize("missing", ["account_fingerprint", "ticker", "exchange", "trade_date", "order_no"])
+def test_record_accepted_order_requires_full_key_and_rejects_odno_alone(tmp_path, missing):
+    store, _path = make_store(tmp_path)
+    created = store.create_planned(planned_intent())
+    accepted = {
+        "account_fingerprint": "acct-A",
+        "ticker": "SOXL",
+        "exchange": "AMEX",
+        "trade_date": "20260811",
+        "order_no": "ODNO-ACCEPTED-1",
+    }
+    accepted.pop(missing)
+
+    with pytest.raises(InvalidOrderIntentError, match=missing):
+        store.record_accepted_order(created["intent_id"], accepted)
+
+    assert store.list_intents("SOXL")[-1]["status"] == "PLANNED"

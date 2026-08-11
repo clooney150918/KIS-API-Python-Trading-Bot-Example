@@ -54,6 +54,14 @@ REQUIRED_PLAN_FIELDS = (
     "qty",
 )
 LEDGER_FIELDS = REQUIRED_PLAN_FIELDS + ("intent_id", "status", "created_at")
+ACCEPTED_ORDER_FIELDS = (
+    "account_fingerprint",
+    "ticker",
+    "exchange",
+    "trade_date",
+    "order_no",
+    "matching_key",
+)
 TERMINAL_STATUSES = frozenset({"FILLED", "CANCELLED", "REJECTED"})
 ALLOWED_TRANSITIONS = {
     "PLANNED": frozenset({"SUBMITTED"}),
@@ -105,6 +113,29 @@ def _normalize_price(value: Any) -> str:
     if parsed <= 0:
         raise InvalidOrderIntentError("price must be a finite positive decimal")
     return text
+
+
+def _normalize_accepted_order(accepted_order: Mapping[str, Any]) -> dict[str, str]:
+    if not isinstance(accepted_order, Mapping):
+        raise InvalidOrderIntentError("accepted_order must be a mapping")
+    accepted = {
+        "account_fingerprint": _require_non_empty_string(accepted_order.get("account_fingerprint"), "account_fingerprint"),
+        "ticker": _require_non_empty_string(accepted_order.get("ticker"), "ticker").upper(),
+        "exchange": _require_non_empty_string(accepted_order.get("exchange"), "exchange").upper(),
+        "trade_date": _require_non_empty_string(accepted_order.get("trade_date"), "trade_date").replace("-", ""),
+        "order_no": _require_non_empty_string(accepted_order.get("order_no"), "order_no"),
+    }
+    accepted["matching_key"] = "|".join([
+        accepted["account_fingerprint"],
+        accepted["ticker"],
+        accepted["exchange"],
+        accepted["trade_date"],
+        accepted["order_no"],
+    ])
+    supplied_key = accepted_order.get("matching_key")
+    if supplied_key is not None and str(supplied_key) != accepted["matching_key"]:
+        raise InvalidOrderIntentError("accepted_order matching_key mismatch")
+    return accepted
 
 
 def _normalize_plan(intent: Mapping[str, Any]) -> dict[str, Any]:
@@ -177,6 +208,26 @@ class OrderIntentStore:
             self._append_record_unlocked(record)
         return record
 
+    def record_accepted_order(self, intent_id: str, accepted_order: Mapping[str, Any]) -> dict[str, Any]:
+        intent_id = _require_non_empty_string(intent_id, "intent_id")
+        accepted = _normalize_accepted_order(accepted_order)
+        with self._exclusive_lock():
+            records = self._read_records_unlocked()
+            latest = self._latest_by_id(records).get(intent_id)
+            if latest is None:
+                raise InvalidOrderIntentError(f"unknown intent_id: {intent_id}")
+            old_status = latest["status"]
+            if "SUBMITTED" not in ALLOWED_TRANSITIONS[old_status]:
+                raise InvalidOrderIntentError(f"invalid status transition: {old_status}->SUBMITTED")
+            if accepted["ticker"] != latest["ticker"]:
+                raise InvalidOrderIntentError("accepted_order ticker must match intent ticker")
+            updated = dict(latest)
+            updated["status"] = "SUBMITTED"
+            updated["accepted_order"] = accepted
+            updated["created_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            self._append_record_unlocked(updated)
+        return updated
+
     def transition_status(self, intent_id: str, new_status: str) -> dict[str, Any]:
         intent_id = _require_non_empty_string(intent_id, "intent_id")
         new_status = _require_non_empty_string(new_status, "status").upper()
@@ -245,7 +296,8 @@ class OrderIntentStore:
             raise InvalidOrderIntentError("ledger record must be a mapping")
         raw_keys = set(raw.keys())
         expected_keys = set(LEDGER_FIELDS)
-        if raw_keys != expected_keys:
+        accepted_keys = expected_keys | {"accepted_order"}
+        if raw_keys != expected_keys and raw_keys != accepted_keys:
             raise InvalidOrderIntentError("ledger schema keys must exactly match LEDGER_FIELDS")
         normalized = _normalize_plan(raw)
         record = dict(normalized)
@@ -259,6 +311,8 @@ class OrderIntentStore:
         record["intent_id"] = intent_id
         record["status"] = status
         record["created_at"] = _require_iso8601(raw.get("created_at"), "created_at")
+        if "accepted_order" in raw:
+            record["accepted_order"] = _normalize_accepted_order(raw.get("accepted_order"))
         return record
 
     def _validate_sequence(self, records: list[dict[str, Any]]) -> None:

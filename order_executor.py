@@ -132,6 +132,19 @@ def _assert_official_t_revision_current(order, ticker, current_t_revision_provid
         )
 
 
+def _fill_guard_forbids_new_orders(fill_reconciliation_guard, ticker):
+    if fill_reconciliation_guard is None:
+        return False
+    try:
+        if callable(fill_reconciliation_guard):
+            return bool(fill_reconciliation_guard(ticker))
+        if hasattr(fill_reconciliation_guard, "forbid_new_orders"):
+            return bool(fill_reconciliation_guard.forbid_new_orders(ticker))
+    except Exception:
+        return True
+    return True
+
+
 def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallback_key, current_t_revision_provider=None):
     """Use official deterministic intent_id for successful-order de-dupe.
 
@@ -177,7 +190,7 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     return canonical_intent_id
 
 
-async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None, current_t_revision_provider=None, order_intent_store=None, t_event_store=None):
+async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None, current_t_revision_provider=None, order_intent_store=None, t_event_store=None, fill_reconciliation_guard=None):
     msgs = ""
     all_success = True
     loop_fail_reason = ""
@@ -230,6 +243,12 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             if o_qty <= 0:
                 msgs += f"⚠️ {order_category}: 수량 0주 산출로 타격 바이패스 (안전 격리)\n"
                 continue
+            if official_order and _fill_guard_forbids_new_orders(fill_reconciliation_guard, ticker):
+                code = "PARTIAL_FILL_OPEN"
+                all_success = False
+                loop_fail_reason = f"[{ticker}] {order_category} 체결 대사 안전 차단: {code}"
+                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
+                break
             if order_key in successful_orders_cache:
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ✅(기장전 보존)\n"
                 continue
@@ -261,6 +280,7 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 break
 
             gate = runtime_safety_gate or getattr(broker, 'runtime_safety_gate', None)
+            fingerprint = None
             if gate is None:
                 decision = RuntimeSafetyGate.denied(
                     "SAFETY_NOT_CONFIGURED",
@@ -272,7 +292,6 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 key = resolve_account_fingerprint_key(
                     getattr(broker, 'account_fingerprint_key', None)
                 )
-                fingerprint = None
                 if key is not None:
                     fingerprint = account_fingerprint(
                         getattr(broker, 'cano', None),
@@ -387,7 +406,17 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 else:
                     if official_order and order_intent_store is not None:
                         try:
-                            order_intent_store.transition_status(order_key, "SUBMITTED")
+                            accepted_order = {
+                                "account_fingerprint": fingerprint,
+                                "ticker": str(ticker).strip().upper(),
+                                "exchange": str(o.get("exchange") or o.get("ovrs_excg_cd") or "AMEX").strip().upper(),
+                                "trade_date": str(today_str).strip().replace("-", ""),
+                                "order_no": odno,
+                            }
+                            if hasattr(order_intent_store, "record_accepted_order"):
+                                order_intent_store.record_accepted_order(order_key, accepted_order)
+                            else:
+                                order_intent_store.transition_status(order_key, "SUBMITTED")
                         except Exception as error:
                             is_success = False
                             all_success = False

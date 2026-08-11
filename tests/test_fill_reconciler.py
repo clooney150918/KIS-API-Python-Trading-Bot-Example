@@ -67,9 +67,23 @@ def kis_fill(**overrides):
     return row
 
 
-def submitted_intent(intent_store, **overrides):
+def accepted_key(**overrides):
+    data = {
+        "account_fingerprint": "acct-A",
+        "ticker": "SOXL",
+        "exchange": "AMEX",
+        "trade_date": "20260812",
+        "order_no": "ODNO-1",
+    }
+    data.update(overrides)
+    return data
+
+
+def submitted_intent(intent_store, *, accepted_order=None, **overrides):
     created = intent_store.create_planned(planned_intent(**overrides))
-    intent_store.transition_status(created["intent_id"], "SUBMITTED")
+    if accepted_order is None:
+        accepted_order = accepted_key(order_no=overrides.get("odno", "ODNO-1"))
+    intent_store.record_accepted_order(created["intent_id"], accepted_order)
     return created
 
 
@@ -83,6 +97,70 @@ def test_fill_key_is_stable_but_matching_key_includes_account_ticker_exchange_da
     assert build_matching_key(first).startswith("acct-A|SOXL|AMEX|20260812|ODNO-1")
     assert build_matching_key(first) != "ODNO-1"
 
+
+
+def test_external_unrelated_odno_account_or_exchange_does_not_match_existing_intent(tmp_path):
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-ACCEPTED"))
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+
+    result = reconciler.reconcile("SOXL", [kis_fill(odno="EXT-UNRELATED-1")])
+
+    assert result["operator_halt"] is True
+    assert "UNCLASSIFIED_FILL" in result["codes"]
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "SUBMITTED"
+    assert events_path.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize(
+    "accepted_overrides,fill_overrides,reconciler_account",
+    [
+        ({"account_fingerprint": "acct-A"}, {}, "acct-B"),
+        ({"exchange": "NYSE"}, {}, "acct-A"),
+        ({"trade_date": "20260811"}, {}, "acct-A"),
+        ({"order_no": "ODNO-DIFFERENT"}, {}, "acct-A"),
+    ],
+)
+def test_reconciler_only_matches_exact_accepted_order_key(tmp_path, accepted_overrides, fill_overrides, reconciler_account):
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    submitted_intent(intent_store, accepted_order=accepted_key(**accepted_overrides))
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint=reconciler_account)
+
+    result = reconciler.reconcile("SOXL", [kis_fill(**fill_overrides)])
+
+    assert result["operator_halt"] is True
+    assert "UNCLASSIFIED_FILL" in result["codes"]
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "SUBMITTED"
+    assert events_path.read_text(encoding="utf-8") == ""
+
+
+def test_append_event_failure_leaves_final_fill_retryable_without_terminal_status_or_processed_fill(tmp_path, monkeypatch):
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-FAIL"), event_type="FULL_BUY", qty=4)
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    real_append = trade_store.append_event
+    calls = {"n": 0}
+
+    def flaky_append(event):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated append failure")
+        return real_append(event)
+
+    monkeypatch.setattr(trade_store, "append_event", flaky_append)
+
+    with pytest.raises(FillReconciliationError):
+        reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-FAIL")])
+
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "SUBMITTED"
+    assert events_path.read_text(encoding="utf-8") == ""
+    assert processed_path.read_text(encoding="utf-8") == ""
+
+    result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-FAIL")])
+    assert result["operator_halt"] is False
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
+    assert len(processed_path.read_text(encoding="utf-8").splitlines()) == 1
 
 def test_order_acceptance_without_any_fill_keeps_submitted_and_does_not_append_t_event(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
@@ -100,7 +178,7 @@ def test_order_acceptance_without_any_fill_keeps_submitted_and_does_not_append_t
 
 def test_full_fill_transitions_intent_and_appends_one_t_event_atomically(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
-    intent = submitted_intent(intent_store, event_type="FULL_BUY", qty=4, price="100.00")
+    intent = submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-1"), event_type="FULL_BUY", qty=4, price="100.00")
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-1", ft_ccld_qty="4", ft_ccld_unpr3="100.00")])
@@ -121,7 +199,7 @@ def test_full_fill_transitions_intent_and_appends_one_t_event_atomically(tmp_pat
 
 def test_partial_then_additional_fill_accumulates_but_updates_t_only_after_final(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    submitted_intent(intent_store, event_type="FULL_BUY", qty=4, price="100.00")
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-2"), event_type="FULL_BUY", qty=4, price="100.00")
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
 
     partial = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-2", ord_tmd="223000", ft_ccld_qty="2")])
@@ -145,7 +223,7 @@ def test_partial_then_additional_fill_accumulates_but_updates_t_only_after_final
 
 def test_duplicate_fill_requery_is_ignored_without_second_t_event(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    submitted_intent(intent_store, event_type="FULL_BUY", qty=4)
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-3"), event_type="FULL_BUY", qty=4)
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
     row = kis_fill(odno="ODNO-3")
 
@@ -159,7 +237,7 @@ def test_duplicate_fill_requery_is_ignored_without_second_t_event(tmp_path):
 
 def test_cancelled_order_with_residual_partial_fill_keeps_halt_and_never_updates_t(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    intent = submitted_intent(intent_store, event_type="FULL_BUY", qty=4)
+    intent = submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-4"), event_type="FULL_BUY", qty=4)
     intent_store.transition_status(intent["intent_id"], "CANCELLED")
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
 
@@ -173,7 +251,7 @@ def test_cancelled_order_with_residual_partial_fill_keeps_halt_and_never_updates
 
 def test_external_manual_fill_is_unclassified_halt_and_no_t_update(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    submitted_intent(intent_store, event_type="FULL_BUY", qty=4, price="100.00")
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-1"), event_type="FULL_BUY", qty=4, price="100.00")
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="MANUAL-1", ft_ccld_qty="1")])
@@ -193,7 +271,7 @@ def test_external_manual_fill_is_unclassified_halt_and_no_t_update(tmp_path):
 )
 def test_fill_outside_intent_qty_price_side_is_unclassified_halt_no_proportional_t(tmp_path, overrides):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    submitted_intent(intent_store, event_type="FULL_BUY", qty=4, price="100.00", side="BUY")
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-5"), event_type="FULL_BUY", qty=4, price="100.00", side="BUY")
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-5", **overrides)])
@@ -205,7 +283,7 @@ def test_fill_outside_intent_qty_price_side_is_unclassified_halt_no_proportional
 
 def test_middle_failure_between_t_event_and_intent_status_is_atomic_and_retryable(tmp_path, monkeypatch):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    submitted_intent(intent_store, event_type="FULL_BUY", qty=4)
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-6"), event_type="FULL_BUY", qty=4)
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
     real_transition = intent_store.transition_status
     calls = {"n": 0}
@@ -228,3 +306,28 @@ def test_middle_failure_between_t_event_and_intent_status_is_atomic_and_retryabl
     assert result["operator_halt"] is False
     assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
     assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+
+
+def test_required_kis_order_fixtures_exist_and_are_valid_json():
+    fixture_dir = __import__("pathlib").Path(__file__).parent / "fixtures" / "kis_orders"
+    required = {
+        "order_accepted_no_fills.json",
+        "full_fill.json",
+        "partial_then_additional.json",
+        "duplicate_requery.json",
+        "cancelled_partial.json",
+        "external_manual.json",
+        "missing_order_number.json",
+        "fill_outside_bounds.json",
+    }
+
+    loaded = {}
+    for name in required:
+        path = fixture_dir / name
+        assert path.exists(), name
+        loaded[name] = json.loads(path.read_text(encoding="utf-8"))
+        assert loaded[name]["ticker"] == "SOXL"
+        assert "executions" in loaded[name]
+
+    assert loaded["order_accepted_no_fills.json"]["executions"] == []
+    assert loaded["missing_order_number.json"]["acceptance_response"]["odno"] == ""

@@ -8,6 +8,7 @@ from order_executor import execute_order_list
 from order_intent_store import compute_intent_id
 from runtime_safety import RuntimeSafetyGate, safety_block_result
 from test_runtime_safety import (
+    SYNTHETIC_ACCOUNT_FINGERPRINT,
     SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
     SYNTHETIC_CANO,
     SYNTHETIC_PRODUCT_CODE,
@@ -896,10 +897,16 @@ def test_ambiguous_latch_blocks_future_request_authorization(tmp_path):
 class TrackingIntentStore:
     def __init__(self):
         self.transitions = []
+        self.accepted = []
 
     def transition_status(self, intent_id, status):
         self.transitions.append((intent_id, status))
         return {"intent_id": intent_id, "status": status}
+
+    def record_accepted_order(self, intent_id, accepted_order):
+        self.accepted.append((intent_id, dict(accepted_order)))
+        self.transitions.append((intent_id, "SUBMITTED"))
+        return {"intent_id": intent_id, "status": "SUBMITTED", "accepted_order": dict(accepted_order)}
 
 
 def test_order_acceptance_transitions_official_intent_to_submitted_without_fill_or_t_update(
@@ -931,6 +938,13 @@ def test_order_acceptance_transitions_official_intent_to_submitted_without_fill_
     assert success is True
     assert failure == ""
     assert intent_store.transitions == [(order["intent_id"], "SUBMITTED")]
+    assert intent_store.accepted == [(order["intent_id"], {
+        "account_fingerprint": SYNTHETIC_ACCOUNT_FINGERPRINT,
+        "ticker": "SOXL",
+        "exchange": "AMEX",
+        "trade_date": "20260811",
+        "order_no": "LEGACY-1",
+    })]
     assert len(broker.calls) == 1
     assert len(cache) == 1
 
@@ -965,3 +979,51 @@ def test_order_acceptance_missing_order_number_fails_closed_before_submitted_or_
     assert intent_store.transitions == []
     assert "ORDER_ACCEPTED_WITHOUT_ORDER_NO" in messages
     assert "ORDER_ACCEPTED_WITHOUT_ORDER_NO" in failure
+
+
+def test_official_order_partial_reconciliation_guard_blocks_before_broker_call(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [official_order()],
+            set(),
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+            fill_reconciliation_guard=lambda ticker: True,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert "PARTIAL_FILL_OPEN" in messages
+    assert "PARTIAL_FILL_OPEN" in failure
+
+
+def test_legacy_order_ignores_partial_reconciliation_guard_for_backward_compatibility(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [{"side": "BUY", "qty": 1, "price": "100", "type": "LIMIT", "desc": "legacy"}],
+            set(),
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            fill_reconciliation_guard=lambda ticker: True,
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert len(broker.calls) == 1
