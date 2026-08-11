@@ -47,6 +47,20 @@ BASELINE_KEYS = (
 )
 BASELINE_KEY_SET = set(BASELINE_KEYS)
 
+APPROVED_BASELINE = {
+    "schema_version": 1,
+    "ticker": "SOXL",
+    "as_of": "2026-08-11",
+    "qty": 98,
+    "avg_price": "158.0735",
+    "available_cash": "1482.88",
+    "t": "18.32",
+    "reverse_active": False,
+    "source": "CEO_APPROVED_KIS_BASELINE",
+    "legacy_execution_count": 72,
+    "immutable": True,
+}
+
 
 class TradeStateStore:
     def __init__(self, baseline_path: str | os.PathLike[str], events_path: str | os.PathLike[str]):
@@ -96,6 +110,11 @@ class TradeStateStore:
                 parse_decimal(data[field], field)
             except ValueError as exc:
                 raise BaselineValidationError(str(exc)) from exc
+        for field in BASELINE_KEYS:
+            if data[field] != APPROVED_BASELINE[field]:
+                raise BaselineImmutableError(
+                    f"approved baseline mutation rejected: {field} must equal {APPROVED_BASELINE[field]!r}"
+                )
         return dict(data)
 
     def load_state(self, ticker: str) -> TState:

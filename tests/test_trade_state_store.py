@@ -70,9 +70,38 @@ def test_load_baseline_requires_exact_immutable_schema(tmp_path):
         TradeStateStore(baseline_path, events_path).load_baseline("SOXL")
 
     mutated = dict(BASELINE)
+    del mutated["t"]
+    write_json(baseline_path, mutated)
+    with pytest.raises(BaselineValidationError):
+        TradeStateStore(baseline_path, events_path).load_baseline("SOXL")
+
+    mutated = dict(BASELINE)
     mutated["immutable"] = False
     write_json(baseline_path, mutated)
     with pytest.raises(BaselineImmutableError):
+        TradeStateStore(baseline_path, events_path).load_baseline("SOXL")
+
+
+@pytest.mark.parametrize(
+    ("field", "mutated_value"),
+    [
+        ("as_of", "2026-08-12"),
+        ("qty", 999),
+        ("avg_price", "1.00"),
+        ("available_cash", "9999.99"),
+        ("t", "0.01"),
+        ("reverse_active", True),
+        ("legacy_execution_count", 73),
+    ],
+)
+def test_approved_immutable_baseline_values_cannot_be_mutated(tmp_path, field, mutated_value):
+    baseline_path = tmp_path / "baseline.json"
+    events_path = tmp_path / "events.jsonl"
+    mutated = dict(BASELINE)
+    mutated[field] = mutated_value
+    write_json(baseline_path, mutated)
+
+    with pytest.raises(BaselineImmutableError, match="baseline mutation|approved baseline"):
         TradeStateStore(baseline_path, events_path).load_baseline("SOXL")
 
 
