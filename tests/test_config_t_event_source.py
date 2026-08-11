@@ -43,6 +43,10 @@ def _isolated_strategy_config(tmp_path, events_path):
 def _strategy_plan(cfg):
     strategy = V4Strategy(cfg)
     strategy.load_daily_snapshot = lambda ticker: None
+    return _get_strategy_plan(strategy)
+
+
+def _get_strategy_plan(strategy):
     return strategy.get_plan(
         "SOXL",
         current_price=100.0,
@@ -52,6 +56,29 @@ def _strategy_plan(cfg):
         available_cash=1482.88,
         market_type="REG",
     )
+
+
+def _cached_order_snapshot():
+    cached_order = {"side": "BUY", "price": 1.23, "qty": 7, "type": "LOC", "desc": "CACHED_LEAK"}
+    return {
+        "orders": [cached_order.copy()],
+        "core_orders": [cached_order.copy()],
+        "bonus_orders": [{"side": "SELL", "price": 9.87, "qty": 3, "type": "LOC", "desc": "CACHED_LEAK"}],
+        "process_status": "CACHED",
+        "status": "CACHED",
+        "safety": None,
+    }
+
+
+def _assert_t_event_halt_without_cached_orders(plan):
+    assert plan["orders"] == []
+    assert plan["core_orders"] == []
+    assert plan["bonus_orders"] == []
+    assert plan["process_status"].startswith("⛔")
+    assert "T" in plan["process_status"]
+    assert "HALT" in plan["process_status"]
+    assert plan.get("safety", {}).get("halted") is True
+    assert "ledger" in plan.get("safety", {}).get("reason", "").lower()
 
 
 def test_strategy_halts_order_generation_when_event_ledger_missing(tmp_path):
@@ -81,6 +108,28 @@ def test_strategy_halts_order_generation_when_event_ledger_is_corrupt(tmp_path):
     assert plan["process_status"].startswith("⛔")
     assert plan.get("safety", {}).get("halted") is True
     assert "ledger" in plan.get("safety", {}).get("reason", "").lower()
+
+
+def test_strategy_missing_event_ledger_halts_before_cached_snapshot_orders_can_leak(tmp_path):
+    cfg = _isolated_strategy_config(tmp_path, tmp_path / "missing-events.jsonl")
+    strategy = V4Strategy(cfg)
+    strategy.load_daily_snapshot = lambda ticker: _cached_order_snapshot()
+
+    plan = _get_strategy_plan(strategy)
+
+    _assert_t_event_halt_without_cached_orders(plan)
+
+
+def test_strategy_corrupt_event_ledger_halts_before_cached_snapshot_orders_can_leak(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text('{"event_id": "broken"}', encoding="utf-8")
+    cfg = _isolated_strategy_config(tmp_path, events_path)
+    strategy = V4Strategy(cfg)
+    strategy.load_daily_snapshot = lambda ticker: _cached_order_snapshot()
+
+    plan = _get_strategy_plan(strategy)
+
+    _assert_t_event_halt_without_cached_orders(plan)
 
 
 def test_strategy_empty_existing_event_ledger_uses_baseline_t_without_overblocking(tmp_path):
