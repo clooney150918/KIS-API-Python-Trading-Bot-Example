@@ -11,6 +11,7 @@ import os
 import json
 import tempfile
 import logging
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from global_throttle import GlobalThrottle
@@ -33,13 +34,13 @@ class V4Strategy:
             return None, "invalid reverse day domain: missing day_count"
         raw = rev_state.get("day_count")
         try:
-            text = str(raw).strip().replace(',', '')
+            text = str(raw).strip()
             if not text:
-                raise ValueError("blank day_count")
-            value = float(text)
-        except Exception:
+                raise InvalidOperation("blank day_count")
+            value = Decimal(text)
+        except (InvalidOperation, ValueError):
             return None, "invalid reverse day domain: day_count must be numeric"
-        if math.isnan(value) or math.isinf(value) or value <= 0 or not value.is_integer():
+        if not value.is_finite() or value <= 0 or value != value.to_integral_value():
             return None, "invalid reverse day domain: day_count must be a positive integer"
         return int(value), ""
 
