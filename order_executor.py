@@ -8,7 +8,9 @@
 import asyncio
 import logging
 import html
+import hashlib
 import inspect
+import json
 import math
 from state_io_manager import save_slice_state_sync, save_aftermarket_state_sync
 from runtime_safety import (
@@ -16,6 +18,7 @@ from runtime_safety import (
     account_fingerprint,
     canonical_order_values,
     safety_block_result,
+    shadow_record_failure_decision,
 )
 from shadow_intent import ShadowIntentRecorder
 
@@ -48,6 +51,23 @@ def _safe_float(val):
     except Exception:
         return 0.0
 
+
+def _order_idempotency_key(trade_date, ticker, order_index, order, side, order_type):
+    """Build a stable retry key for one planned order occurrence."""
+    identity = {
+        "trade_date": str(trade_date),
+        "ticker": str(ticker).strip().upper(),
+        "order_index": order_index,
+        "description": str(order.get("desc", "")),
+        "side": side,
+        "quantity": str(order.get("qty")),
+        "price": str(order.get("price")),
+        "risk_reference_price": str(order.get("risk_reference_price")),
+        "order_type": order_type,
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None):
     msgs = ""
     all_success = True
@@ -56,7 +76,7 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
     if not isinstance(orders_list, list):
         return False, "🚨 <b>스냅샷 오염: 주문 리스트 결측</b>\n", "주문 리스트 타입 에러"
 
-    for o in orders_list:
+    for order_index, o in enumerate(orders_list):
         try:
             if not isinstance(o, dict): continue
 
@@ -65,6 +85,9 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             )
             o_qty = int(_safe_float(o.get('qty')))
             o_price = _safe_float(o.get('price'))
+            idempotency_key = _order_idempotency_key(
+                today_str, ticker, order_index, o, o_side, o_type
+            )
             
             if o_qty <= 0:
                 msgs += f"⚠️ {order_category}: 수량 0주 산출로 타격 바이패스 (안전 격리)\n"
@@ -110,16 +133,11 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                             price=o.get('price'),
                             order_type=o_type,
                             safety_revision=decision.revision,
+                            risk_reference_price=o.get('risk_reference_price'),
+                            idempotency_key=idempotency_key,
                         )
-                    except Exception:
-                        decision = RuntimeSafetyGate.denied(
-                            "SHADOW_INTENT_RECORD_FAILED",
-                            "shadow intent could not be durably recorded",
-                            shadow_only=True,
-                            revision=decision.revision,
-                            ticker=str(ticker),
-                            side=o_side,
-                        )
+                    except Exception as error:
+                        decision = shadow_record_failure_decision(decision, error)
                 blocked = safety_block_result(decision)
                 code = blocked['safety_decision']['code']
                 all_success = False
@@ -134,6 +152,9 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             )
             supports_risk_reference = _supports_keyword(
                 broker_method, "risk_reference_price"
+            )
+            supports_idempotency_key = _supports_keyword(
+                broker_method, "idempotency_key"
             )
             if o_type in _RISK_REFERENCE_ORDER_TYPES and not supports_risk_reference:
                 decision = RuntimeSafetyGate.denied(
@@ -167,11 +188,11 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                         res = {'rt_cd': '0', 'msg1': '로컬 자체 VWAP 엔진 위임 완료', 'odno': f'LOCAL_VWAP_{id(o)}'}
                         
                     elif is_market_active_now:
-                        kwargs = (
-                            {"risk_reference_price": o.get('risk_reference_price')}
-                            if supports_risk_reference
-                            else {}
-                        )
+                        kwargs = {}
+                        if supports_risk_reference:
+                            kwargs["risk_reference_price"] = o.get('risk_reference_price')
+                        if supports_idempotency_key:
+                            kwargs["idempotency_key"] = idempotency_key
                         res = await asyncio.wait_for(
                             asyncio.to_thread(
                                 broker_method,
@@ -185,11 +206,11 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                             timeout=15.0,
                         )
                     else:
-                        kwargs = (
-                            {"risk_reference_price": o.get('risk_reference_price')}
-                            if supports_risk_reference
-                            else {}
-                        )
+                        kwargs = {}
+                        if supports_risk_reference:
+                            kwargs["risk_reference_price"] = o.get('risk_reference_price')
+                        if supports_idempotency_key:
+                            kwargs["idempotency_key"] = idempotency_key
                         res = await asyncio.wait_for(
                             asyncio.to_thread(
                                 broker_method,

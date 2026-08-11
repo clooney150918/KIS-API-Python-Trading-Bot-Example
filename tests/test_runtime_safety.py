@@ -168,7 +168,7 @@ def test_shadow_only_returns_structured_simulation_and_does_not_call_sender(tmp_
     assert "SHADOW_ONLY" in result[2]
     records = [json.loads(line) for line in intent_path.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 1
-    assert records[0]["schema_version"] == 1
+    assert records[0]["schema_version"] == 2
     assert records[0]["status"] == "SHADOW_RECORDED"
     assert records[0]["ticker"] == "SOXL"
     assert records[0]["side"] == "BUY"
@@ -215,7 +215,7 @@ def test_shadow_recorder_failure_fails_closed_without_broker_call(tmp_path):
     assert "SHADOW_INTENT_RECORD_FAILED" in result[1]
 
 
-def test_shadow_recorder_appends_deterministic_intents(tmp_path):
+def test_shadow_recorder_returns_existing_intent_for_same_retry_key(tmp_path):
     from shadow_intent import ShadowIntentRecorder
 
     intent_path = tmp_path / "shadow_intents.jsonl"
@@ -227,14 +227,15 @@ def test_shadow_recorder_appends_deterministic_intents(tmp_path):
         "price": "100.00",
         "order_type": "LIMIT",
         "safety_revision": 1,
+        "idempotency_key": "stable-retry-key",
     }
 
     first = recorder.record(**intent)
     second = recorder.record(**intent)
     records = [json.loads(line) for line in intent_path.read_text(encoding="utf-8").splitlines()]
 
-    assert len(records) == 2
-    assert records[0]["intent_id"] == records[1]["intent_id"] == first["intent_id"]
+    assert len(records) == 1
+    assert records[0]["intent_id"] == first["intent_id"]
     assert second["intent_id"] == first["intent_id"]
 
 

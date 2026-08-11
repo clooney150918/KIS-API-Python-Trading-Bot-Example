@@ -25,6 +25,7 @@ from runtime_safety import (
     account_fingerprint,
     canonical_order_values,
     safety_block_result,
+    shadow_record_failure_decision,
 )
 from shadow_intent import ShadowIntentRecorder
 
@@ -53,7 +54,18 @@ class KisOrderEngine(MarketDataProvider):
         self.runtime_safety_gate = runtime_safety_gate or RuntimeSafetyGate()
         self.shadow_intent_recorder = shadow_intent_recorder or ShadowIntentRecorder()
 
-    def _blocked_order_result(self, decision, ticker, side, qty, price, order_type):
+    def _blocked_order_result(
+        self,
+        decision,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type,
+        *,
+        risk_reference_price=None,
+        idempotency_key=None,
+    ):
         """Durably record every KIS-bound SHADOW decision before returning."""
         if decision.code == "SHADOW_ONLY":
             recorder = getattr(self, "shadow_intent_recorder", None)
@@ -68,16 +80,11 @@ class KisOrderEngine(MarketDataProvider):
                     price=price,
                     order_type=order_type,
                     safety_revision=decision.revision,
+                    risk_reference_price=risk_reference_price,
+                    idempotency_key=idempotency_key,
                 )
-            except Exception:
-                decision = RuntimeSafetyGate.denied(
-                    "SHADOW_INTENT_RECORD_FAILED",
-                    "shadow intent could not be durably recorded",
-                    shadow_only=True,
-                    revision=decision.revision,
-                    ticker=str(ticker),
-                    side=str(side),
-                )
+            except Exception as error:
+                decision = shadow_record_failure_decision(decision, error)
         return safety_block_result(decision)
 
     def _authorize_order_submission(
@@ -128,6 +135,7 @@ class KisOrderEngine(MarketDataProvider):
         *,
         order_type="LIMIT",
         risk_reference_price=None,
+        idempotency_key=None,
     ):
         """Re-authorize actual submitted values immediately before KIS POST."""
         decision = self._authorize_order_submission(
@@ -140,7 +148,14 @@ class KisOrderEngine(MarketDataProvider):
         )
         if not decision.can_submit:
             return self._blocked_order_result(
-                decision, ticker, side, qty, price, order_type
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
             )
         capability = self._issue_order_transport_capability(decision)
         return self._call_api(
@@ -391,6 +406,7 @@ class KisOrderEngine(MarketDataProvider):
         end_time=None,
         *,
         risk_reference_price=None,
+        idempotency_key=None,
     ):
         side, order_type = canonical_order_values(side, order_type)
         decision = self._authorize_order_submission(
@@ -403,7 +419,14 @@ class KisOrderEngine(MarketDataProvider):
         )
         if not decision.can_submit:
             return self._blocked_order_result(
-                decision, ticker, side, qty, price, order_type
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
             )
         if order_type not in self._REGULAR_ORDER_TYPES.get(side, frozenset()):
             return self._unsupported_order_type_result(ticker, side, order_type)
@@ -449,6 +472,7 @@ class KisOrderEngine(MarketDataProvider):
                 body,
                 order_type=order_type,
                 risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
             )
             # 🚨 MODIFIED: [TypeError 붕괴 방어] msg1이 None일 경우 any() 루프에서 발생하는 예외 원천 봉쇄
             safe_msg = str(res.get('msg1') or '')
@@ -494,7 +518,15 @@ class KisOrderEngine(MarketDataProvider):
         return self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
 
     def send_daytime_order(
-        self, ticker, side, qty, price, order_type="LIMIT", *, risk_reference_price=None
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type="LIMIT",
+        *,
+        risk_reference_price=None,
+        idempotency_key=None,
     ):
         side, order_type = canonical_order_values(side, order_type)
         decision = self._authorize_order_submission(
@@ -507,7 +539,14 @@ class KisOrderEngine(MarketDataProvider):
         )
         if not decision.can_submit:
             return self._blocked_order_result(
-                decision, ticker, side, qty, price, order_type
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
             )
         if order_type not in self._DAYTIME_ORDER_TYPES:
             return self._unsupported_order_type_result(ticker, side, order_type)
@@ -531,6 +570,7 @@ class KisOrderEngine(MarketDataProvider):
             tr_id,
             "/uapi/overseas-stock/v1/trading/daytime-order",
             body,
+            idempotency_key=idempotency_key,
         )
         if 'safety_decision' in res:
             return res
@@ -560,6 +600,7 @@ class KisOrderEngine(MarketDataProvider):
         order_type="LIMIT",
         *,
         risk_reference_price=None,
+        idempotency_key=None,
     ):
         side, order_type = canonical_order_values(side, order_type)
         decision = self._authorize_order_submission(
@@ -572,7 +613,14 @@ class KisOrderEngine(MarketDataProvider):
         )
         if not decision.can_submit:
             return self._blocked_order_result(
-                decision, ticker, side, qty, price, order_type
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
             )
         if order_type not in self._RESERVATION_ORDER_TYPES.get(side, frozenset()):
             return self._unsupported_order_type_result(ticker, side, order_type)
@@ -606,6 +654,7 @@ class KisOrderEngine(MarketDataProvider):
             body,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
+            idempotency_key=idempotency_key,
         )
         if 'safety_decision' in res:
             return res

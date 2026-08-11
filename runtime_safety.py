@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import fcntl
 import hashlib
 import json
 from pathlib import Path
@@ -74,6 +75,9 @@ class RuntimeSafetyGate:
                 else self.state_path.with_name("runtime_safety.revision.json")
             )
         self.checkpoint_path = Path(checkpoint_path)
+        self.checkpoint_lock_path = self.checkpoint_path.with_name(
+            f"{self.checkpoint_path.name}.lock"
+        )
         self._highest_revision = 0
         self._lock = threading.Lock()
         key = str(self.checkpoint_path.resolve())
@@ -245,6 +249,69 @@ class RuntimeSafetyGate:
         side_text, order_type_text = canonical_order_values(side, order_type)
 
         with self._lock, self._checkpoint_lock:
+            lock_fd = None
+            locked = False
+            decision = None
+            try:
+                self.checkpoint_lock_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    lock_fd = os.open(
+                        self.checkpoint_lock_path, os.O_RDWR | os.O_CREAT, 0o600
+                    )
+                except OSError:
+                    # Read-only deployments may provide a pre-created lock inode.
+                    lock_fd = os.open(self.checkpoint_lock_path, os.O_RDONLY)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                locked = True
+                decision = self._authorize_under_checkpoint_lock(
+                    ticker_text,
+                    side_text,
+                    order_type_text,
+                    quantity,
+                    price,
+                    account_fingerprint,
+                    risk_reference_price,
+                )
+            except OSError:
+                decision = self.denied(
+                    "REVISION_LOCK_IO_ERROR",
+                    "runtime safety revision lock could not be acquired or released",
+                    ticker=ticker_text,
+                    side=side_text,
+                )
+            finally:
+                if locked:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except OSError:
+                        decision = self.denied(
+                            "REVISION_LOCK_IO_ERROR",
+                            "runtime safety revision lock could not be acquired or released",
+                            ticker=ticker_text,
+                            side=side_text,
+                        )
+                if lock_fd is not None:
+                    try:
+                        os.close(lock_fd)
+                    except OSError:
+                        decision = self.denied(
+                            "REVISION_LOCK_IO_ERROR",
+                            "runtime safety revision lock could not be acquired or released",
+                            ticker=ticker_text,
+                            side=side_text,
+                        )
+            return decision
+
+    def _authorize_under_checkpoint_lock(
+        self,
+        ticker_text,
+        side_text,
+        order_type_text,
+        quantity,
+        price,
+        account_fingerprint,
+        risk_reference_price,
+    ):
             state, load_error = self._load_state()
             if load_error is not None:
                 return load_error
@@ -348,6 +415,24 @@ def safety_block_result(decision):
         "rt_cd": "999",
         "msg1": f"runtime safety blocked order: {decision.code}",
         "odno": "",
-        "shadow": decision.code == "SHADOW_ONLY",
+        "shadow": decision.shadow_only,
         "safety_decision": decision.as_dict(),
     }
+
+
+def shadow_record_failure_decision(decision, error):
+    """Convert recorder failures to one stable fail-closed decision contract."""
+    code = getattr(error, "code", "SHADOW_INTENT_RECORD_FAILED")
+    reason = (
+        "shadow idempotency key conflicts with an existing intent"
+        if code == "IDEMPOTENCY_CONFLICT"
+        else "shadow intent could not be durably recorded"
+    )
+    return RuntimeSafetyGate.denied(
+        code,
+        reason,
+        shadow_only=True,
+        revision=decision.revision,
+        ticker=decision.ticker,
+        side=decision.side,
+    )

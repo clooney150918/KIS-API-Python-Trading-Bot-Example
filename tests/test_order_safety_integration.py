@@ -248,6 +248,9 @@ def test_direct_kis_shadow_recorder_failure_fails_closed(tmp_path):
     result = engine.send_order("SOXL", "BUY", 1, "100", "LIMIT")
 
     assert kis_calls == []
+    assert set(("rt_cd", "msg1", "odno", "shadow", "safety_decision")) <= set(result)
+    assert result["odno"] == ""
+    assert result["shadow"] is True
     assert result["safety_decision"]["code"] == "SHADOW_INTENT_RECORD_FAILED"
 
 
