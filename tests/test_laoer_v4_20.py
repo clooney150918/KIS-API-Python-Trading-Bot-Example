@@ -192,6 +192,115 @@ def test_normal_fail_closed_when_cash_cannot_buy_one_share_in_normal_phase(t_val
     assert plan.target_sell_quantity == 0
 
 
+def test_normal_negative_t_fails_closed_with_zero_quantities_and_domain_reason():
+    plan = calculate_normal_plan(
+        NormalState(
+            ticker="SOXL",
+            split=20,
+            quantity=10,
+            avg_price="100",
+            cash="1000000",
+            t="-1",
+            reverse=False,
+        )
+    )
+
+    assert plan.fail_closed is True
+    assert "t" in plan.reason.lower()
+    assert any(word in plan.reason.lower() for word in ["invalid", "domain"])
+    assert plan.star_buy_quantity == 0
+    assert plan.average_buy_quantity == 0
+    assert plan.quarter_sell_quantity == 0
+    assert plan.target_sell_quantity == 0
+
+
+@pytest.mark.parametrize("day", [0, -1])
+def test_reverse_day_zero_or_negative_fails_closed_with_zero_quantities_and_day_reason(day):
+    plan = calculate_reverse_plan(
+        ReverseState(
+            ticker="SOXL",
+            split=20,
+            quantity=10,
+            avg_price="100",
+            cash="1000",
+            t="19",
+            day=day,
+        )
+    )
+
+    assert plan.fail_closed is True
+    assert "day" in plan.reason.lower()
+    assert any(word in plan.reason.lower() for word in ["invalid", "domain"])
+    assert plan.sell_quantity == 0
+    assert plan.buy_quantity == 0
+    assert plan.sell_order_type == "NONE"
+
+
+@pytest.mark.parametrize("field,bad_value", [("avg_price", "NaN"), ("avg_price", "Infinity"), ("avg_price", "abc"), ("cash", "NaN"), ("cash", "Infinity"), ("cash", "abc"), ("t", "NaN"), ("t", "Infinity"), ("t", "abc")])
+def test_normal_malformed_decimal_state_fails_closed_without_exception(field, bad_value):
+    kwargs = {"quantity": 10, "avg_price": "100", "cash": "1000", "t": "1"}
+    kwargs[field] = bad_value
+
+    plan = calculate_normal_plan(NormalState(ticker="SOXL", split=20, reverse=False, **kwargs))
+
+    assert plan.fail_closed is True
+    assert "invalid" in plan.reason.lower()
+    assert plan.star_buy_quantity == 0
+    assert plan.average_buy_quantity == 0
+    assert plan.quarter_sell_quantity == 0
+    assert plan.target_sell_quantity == 0
+
+
+@pytest.mark.parametrize("field,bad_value", [("avg_price", "NaN"), ("avg_price", "Infinity"), ("avg_price", "abc"), ("cash", "NaN"), ("cash", "Infinity"), ("cash", "abc"), ("t", "NaN"), ("t", "Infinity"), ("t", "abc")])
+def test_reverse_malformed_decimal_state_fails_closed_without_exception(field, bad_value):
+    kwargs = {"quantity": 10, "avg_price": "100", "cash": "1000", "t": "19"}
+    kwargs[field] = bad_value
+
+    plan = calculate_reverse_plan(ReverseState(ticker="SOXL", split=20, day=1, **kwargs))
+
+    assert plan.fail_closed is True
+    assert "invalid" in plan.reason.lower()
+    assert plan.sell_quantity == 0
+    assert plan.buy_quantity == 0
+    assert plan.sell_order_type == "NONE"
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        NormalState(ticker="SPY", split=20, quantity=10, avg_price="abc", cash="1000", t="1", reverse=False),
+        NormalState(ticker="SOXL", split=10, quantity=10, avg_price="100", cash="abc", t="1", reverse=False),
+    ],
+)
+def test_normal_unsupported_ticker_or_split_with_malformed_numeric_fields_fails_closed_without_exception(state):
+    plan = calculate_normal_plan(state)
+
+    assert plan.fail_closed is True
+    assert "supported" in plan.reason.lower()
+    assert plan.star_buy_quantity == 0
+    assert plan.average_buy_quantity == 0
+    assert plan.quarter_sell_quantity == 0
+    assert plan.target_sell_quantity == 0
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        ReverseState(ticker="SPY", split=20, quantity=10, avg_price="abc", cash="1000", t="19", day=1),
+        ReverseState(ticker="SOXL", split=10, quantity=10, avg_price="100", cash="abc", t="19", day=1),
+    ],
+)
+def test_reverse_unsupported_ticker_or_split_with_malformed_numeric_fields_fails_closed_without_exception(state):
+    plan = calculate_reverse_plan(state)
+
+    assert plan.fail_closed is True
+    assert "supported" in plan.reason.lower()
+    assert plan.sell_quantity == 0
+    assert plan.buy_quantity == 0
+    assert plan.sell_order_type == "NONE"
+
+
+
 def test_reverse_first_day_sells_floor_one_tenth_moc_and_buys_nothing():
     plan = calculate_reverse_plan(
         ReverseState(

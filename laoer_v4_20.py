@@ -118,11 +118,22 @@ class ReversePlan:
 
 def _decimal(value: object) -> Decimal:
     if isinstance(value, Decimal):
-        return value
+        decimal_value = value
+    else:
+        try:
+            decimal_value = Decimal(str(value))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"invalid Decimal value: {value!r}") from exc
+    if not decimal_value.is_finite():
+        raise ValueError(f"invalid non-finite Decimal value: {value!r}")
+    return decimal_value
+
+
+def _parse_decimal(value: object) -> Decimal | None:
     try:
-        return Decimal(str(value))
-    except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"invalid Decimal value: {value!r}") from exc
+        return _decimal(value)
+    except ValueError:
+        return None
 
 
 def _money(value: object) -> Decimal:
@@ -130,7 +141,9 @@ def _money(value: object) -> Decimal:
 
 
 def _floor_int(value: object) -> int:
-    decimal_value = _decimal(value)
+    decimal_value = _parse_decimal(value)
+    if decimal_value is None:
+        return 0
     if decimal_value <= ZERO:
         return 0
     return int(decimal_value.to_integral_value(rounding=ROUND_FLOOR))
@@ -146,9 +159,20 @@ def _quantity_for_budget(budget: Decimal, price: Decimal) -> int:
     return _floor_int(budget / price)
 
 
-def _empty_normal_plan(state: NormalState, *, phase: str, reason: str = "") -> NormalPlan:
-    t = _decimal(state.t)
-    avg_price = _decimal(state.avg_price)
+def _empty_normal_plan(
+    state: NormalState,
+    *,
+    phase: str,
+    reason: str = "",
+    t: Decimal | None = None,
+    avg_price: Decimal | None = None,
+) -> NormalPlan:
+    t = _parse_decimal(state.t) if t is None else t
+    avg_price = _parse_decimal(state.avg_price) if avg_price is None else avg_price
+    if t is None:
+        t = ZERO
+    if avg_price is None:
+        avg_price = ZERO
     star_percent = TWENTY - (Decimal("2") * t)
     star_raw = avg_price * (ONE + (star_percent / Decimal("100"))) if avg_price > ZERO else ZERO
     star_point = _round_cent(star_raw) if star_raw > ZERO else ZERO
@@ -185,21 +209,25 @@ def calculate_normal_plan(state: NormalState) -> NormalPlan:
         return _empty_normal_plan(state, phase="UNSUPPORTED", reason="only SOXL 20-split is supported")
 
     quantity = _floor_int(state.quantity)
-    avg_price = _decimal(state.avg_price)
-    cash = _decimal(state.cash)
-    t = _decimal(state.t)
+    avg_price = _parse_decimal(state.avg_price)
+    cash = _parse_decimal(state.cash)
+    t = _parse_decimal(state.t)
+    if avg_price is None or cash is None or t is None:
+        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="invalid Decimal input")
     denominator = TWENTY - t
 
+    if t < ZERO:
+        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="invalid T domain: T must be non-negative", t=t, avg_price=avg_price)
     if t > Decimal("19"):
-        return _empty_normal_plan(state, phase="REVERSE_ENTRY", reason="T exceeds normal-mode range")
+        return _empty_normal_plan(state, phase="REVERSE_ENTRY", reason="T exceeds normal-mode range", t=t, avg_price=avg_price)
     if quantity <= 0:
-        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="quantity must be positive")
+        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="quantity must be positive", t=t, avg_price=avg_price)
     if avg_price <= ZERO:
-        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="average price must be positive")
+        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="average price must be positive", t=t, avg_price=avg_price)
     if cash <= ZERO:
-        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="cash must be positive")
+        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="cash must be positive", t=t, avg_price=avg_price)
     if denominator <= ZERO:
-        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="normal buy denominator must be positive")
+        return _empty_normal_plan(state, phase="FAIL_CLOSED", reason="normal buy denominator must be positive", t=t, avg_price=avg_price)
 
     star_percent = TWENTY - (Decimal("2") * t)
     star_raw = avg_price * (ONE + (star_percent / Decimal("100")))
@@ -224,6 +252,8 @@ def calculate_normal_plan(state: NormalState) -> NormalPlan:
             state,
             phase="FAIL_CLOSED",
             reason="insufficient cash: computed buy budget cannot buy one share",
+            t=t,
+            avg_price=avg_price,
         )
 
     star_buy_quantity = min(
@@ -280,8 +310,10 @@ def apply_fill_event(t_before: Decimal, event: FillEvent) -> Decimal:
     raise ValueError(f"unsupported fill event: {event!r}")
 
 
-def _empty_reverse_plan(state: ReverseState, *, reason: str = "") -> ReversePlan:
-    t = _decimal(state.t)
+def _empty_reverse_plan(state: ReverseState, *, reason: str = "", t: Decimal | None = None) -> ReversePlan:
+    t = _parse_decimal(state.t) if t is None else t
+    if t is None:
+        t = ZERO
     return ReversePlan(
         ticker=state.ticker,
         split=state.split,
@@ -305,7 +337,9 @@ def _empty_reverse_plan(state: ReverseState, *, reason: str = "") -> ReversePlan
 
 
 def _previous_five_close_average(previous_closes: Iterable[object]) -> Decimal:
-    closes = [_decimal(close) for close in previous_closes]
+    closes = [_parse_decimal(close) for close in previous_closes]
+    if any(close is None for close in closes):
+        return ZERO
     if len(closes) != 5 or any(close <= ZERO for close in closes):
         return ZERO
     return sum(closes, ZERO) / Decimal("5")
@@ -316,17 +350,24 @@ def calculate_reverse_plan(state: ReverseState) -> ReversePlan:
 
     if state.split != 20 or state.ticker.upper() != "SOXL":
         return _empty_reverse_plan(state, reason="only SOXL 20-split is supported")
+    if state.day <= 0:
+        return _empty_reverse_plan(state, reason="invalid reverse day domain: day must be >= 1")
 
     quantity = _floor_int(state.quantity)
     previous_quantity = _floor_int(state.previous_quantity if state.previous_quantity is not None else state.quantity)
-    avg_price = _decimal(state.avg_price)
-    cash = _decimal(state.cash)
-    t = _decimal(state.t)
+    avg_price = _parse_decimal(state.avg_price)
+    cash = _parse_decimal(state.cash)
+    t = _parse_decimal(state.t)
+    if avg_price is None or cash is None or t is None:
+        return _empty_reverse_plan(state, reason="invalid Decimal input")
 
     if quantity <= 0 or avg_price <= ZERO or t <= ZERO:
-        return _empty_reverse_plan(state, reason="quantity, average price, and T must be positive")
+        return _empty_reverse_plan(state, reason="quantity, average price, and T must be positive", t=t)
 
-    if state.confirmed_close is not None and _decimal(state.confirmed_close) > (avg_price * Decimal("0.80")):
+    confirmed_close = _parse_decimal(state.confirmed_close) if state.confirmed_close is not None else None
+    if state.confirmed_close is not None and confirmed_close is None:
+        return _empty_reverse_plan(state, reason="invalid Decimal input", t=t)
+    if confirmed_close is not None and confirmed_close > (avg_price * Decimal("0.80")):
         return ReversePlan(
             ticker=state.ticker,
             split=state.split,
@@ -370,7 +411,7 @@ def calculate_reverse_plan(state: ReverseState) -> ReversePlan:
 
     star_average = _previous_five_close_average(state.previous_closes)
     if star_average <= ZERO or cash <= ZERO:
-        return _empty_reverse_plan(state, reason="previous five closes and cash are required after first day")
+        return _empty_reverse_plan(state, reason="previous five closes and cash are required after first day", t=t)
 
     star_point = _round_cent(star_average)
     star_buy_price = star_point - CENT
