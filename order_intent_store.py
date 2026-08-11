@@ -75,6 +75,15 @@ def _require_non_empty_string(value: Any, field: str) -> str:
     return value.strip()
 
 
+def _require_iso8601(value: Any, field: str) -> str:
+    text = _require_non_empty_string(value, field)
+    try:
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InvalidOrderIntentError(f"{field} must be ISO-8601") from exc
+    return text
+
+
 def _normalize_price(value: Any) -> str:
     text = _require_non_empty_string(str(value) if value is not None else value, "price")
     if text.lower() in {"nan", "inf", "+inf", "-inf", "infinity", "+infinity", "-infinity"}:
@@ -210,6 +219,12 @@ class OrderIntentStore:
         return records
 
     def _validate_record(self, raw: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(raw, Mapping):
+            raise InvalidOrderIntentError("ledger record must be a mapping")
+        raw_keys = set(raw.keys())
+        expected_keys = set(LEDGER_FIELDS)
+        if raw_keys != expected_keys:
+            raise InvalidOrderIntentError("ledger schema keys must exactly match LEDGER_FIELDS")
         normalized = _normalize_plan(raw)
         record = dict(normalized)
         intent_id = _require_non_empty_string(raw.get("intent_id"), "intent_id")
@@ -221,7 +236,7 @@ class OrderIntentStore:
             raise InvalidOrderIntentError(f"invalid status: {status}")
         record["intent_id"] = intent_id
         record["status"] = status
-        record["created_at"] = _require_non_empty_string(raw.get("created_at"), "created_at")
+        record["created_at"] = _require_iso8601(raw.get("created_at"), "created_at")
         return record
 
     def _validate_sequence(self, records: list[dict[str, Any]]) -> None:

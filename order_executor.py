@@ -22,7 +22,11 @@ from runtime_safety import (
     safety_block_result,
     shadow_record_failure_decision,
 )
-from order_intent_store import STRATEGY as OFFICIAL_ORDER_STRATEGY, compute_intent_id
+from order_intent_store import (
+    InvalidOrderIntentError,
+    STRATEGY as OFFICIAL_ORDER_STRATEGY,
+    compute_intent_id,
+)
 from shadow_intent import ShadowIntentRecorder
 
 
@@ -78,10 +82,13 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     Legacy/non-official orders fall back to the existing transport idempotency key
     so old UI description strings never define cache identity.
     """
-    explicit_intent_id = order.get("intent_id")
-    if explicit_intent_id:
-        return str(explicit_intent_id)
-    if "event_type" not in order:
+    is_official_order = (
+        order.get("strategy") == OFFICIAL_ORDER_STRATEGY
+        or "strategy_revision" in order
+        or "t_revision" in order
+        or "event_type" in order
+    )
+    if not is_official_order:
         return fallback_key
     intent_payload = {
         "strategy": order.get("strategy", OFFICIAL_ORDER_STRATEGY),
@@ -95,7 +102,11 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
         "price": str(order.get("price")),
         "qty": order.get("qty"),
     }
-    return compute_intent_id(intent_payload)
+    canonical_intent_id = compute_intent_id(intent_payload)
+    explicit_intent_id = order.get("intent_id")
+    if explicit_intent_id and str(explicit_intent_id) != canonical_intent_id:
+        raise InvalidOrderIntentError("ORDER_INTENT_ID_MISMATCH")
+    return canonical_intent_id
 
 
 async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None):
@@ -125,9 +136,21 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             
             o_desc = html.escape(str(o.get('desc', '주문')))
 
-            order_key = _order_success_cache_key(
-                today_str, ticker, o, o_side, o_type, idempotency_key
-            )
+            try:
+                order_key = _order_success_cache_key(
+                    today_str, ticker, o, o_side, o_type, idempotency_key
+                )
+            except InvalidOrderIntentError as error:
+                code = (
+                    "ORDER_INTENT_ID_MISMATCH"
+                    if "ORDER_INTENT_ID_MISMATCH" in str(error)
+                    else "ORDER_INTENT_INVALID"
+                )
+                all_success = False
+                reason = html.escape(str(error))
+                loop_fail_reason = f"[{ticker}] {order_category} 주문 의도 검증 실패: {code} {reason}"
+                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code}: {reason})\n"
+                break
             if order_key in successful_orders_cache:
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ✅(기장전 보존)\n"
                 continue

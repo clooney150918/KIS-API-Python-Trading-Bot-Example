@@ -126,3 +126,28 @@ def test_invalid_status_transition_rejects_without_appending(tmp_path):
         store.transition_status(created["intent_id"], "FILLED")
 
     assert len(path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_ledger_rejects_invalid_created_at_timestamp(tmp_path):
+    store, path = make_store(tmp_path)
+    record = dict(planned_intent())
+    record["intent_id"] = compute_intent_id(record)
+    record["status"] = "PLANNED"
+    record["created_at"] = "not-a-timestamp"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(OrderIntentLedgerCorruptError, match="created_at"):
+        store.list_intents("SOXL")
+
+
+def test_ledger_rejects_extra_fields_exact_schema(tmp_path):
+    store, path = make_store(tmp_path)
+    record = dict(planned_intent())
+    record["intent_id"] = compute_intent_id(record)
+    record["status"] = "PLANNED"
+    record["created_at"] = "2026-08-11T12:34:56Z"
+    record["unexpected"] = "must fail closed"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+    with pytest.raises(OrderIntentLedgerCorruptError, match="schema"):
+        store.list_intents("SOXL")

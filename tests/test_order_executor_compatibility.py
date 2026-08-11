@@ -159,6 +159,60 @@ def test_success_cache_dedupes_same_intent_even_when_ui_description_changes(tmp_
     assert "✅(기장전 보존)" in messages
 
 
+def test_official_order_rejects_forged_intent_id_before_broker_call(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    forged = official_order(intent_id="FORGED-SAME")
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [forged],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_ID_MISMATCH" in messages
+    assert "ORDER_INTENT_ID_MISMATCH" in failure
+
+
+def test_official_order_rejects_missing_event_type_without_legacy_fallback(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    official_without_event_type = official_order()
+    official_without_event_type.pop("event_type")
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [official_without_event_type],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_INVALID" in messages
+    assert "event_type" in messages
+    assert "ORDER_INTENT_INVALID" in failure
+
+
 @pytest.mark.parametrize("market_active", [True, False])
 def test_limit_order_supports_legacy_positional_only_broker(
     tmp_path, monkeypatch, market_active
