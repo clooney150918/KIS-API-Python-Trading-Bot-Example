@@ -1,0 +1,11 @@
+FROM bots-soxl-trading-jinho:latest
+
+COPY requirements-test.txt /tmp/requirements-test.txt
+RUN python -m pip install --no-cache-dir -r /tmp/requirements-test.txt
+
+ENV OPERATOR_HALT=true \
+    LIVE_ARMED=false \
+    SHADOW_ONLY=true
+
+WORKDIR /app
+CMD ["python", "-m", "pytest", "-q"]
