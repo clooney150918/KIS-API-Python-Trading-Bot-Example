@@ -22,6 +22,7 @@ from runtime_safety import (
     safety_block_result,
     shadow_record_failure_decision,
 )
+from order_intent_store import STRATEGY as OFFICIAL_ORDER_STRATEGY, compute_intent_id
 from shadow_intent import ShadowIntentRecorder
 
 
@@ -71,6 +72,32 @@ def _order_idempotency_key(trade_date, ticker, order_index, order, side, order_t
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
+def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallback_key):
+    """Use official deterministic intent_id for successful-order de-dupe.
+
+    Legacy/non-official orders fall back to the existing transport idempotency key
+    so old UI description strings never define cache identity.
+    """
+    explicit_intent_id = order.get("intent_id")
+    if explicit_intent_id:
+        return str(explicit_intent_id)
+    if "event_type" not in order:
+        return fallback_key
+    intent_payload = {
+        "strategy": order.get("strategy", OFFICIAL_ORDER_STRATEGY),
+        "strategy_revision": order.get("strategy_revision", 1),
+        "t_revision": order.get("t_revision", 1),
+        "ticker": ticker,
+        "trade_date": order.get("trade_date", trade_date),
+        "event_type": order.get("event_type"),
+        "side": side,
+        "order_type": order_type,
+        "price": str(order.get("price")),
+        "qty": order.get("qty"),
+    }
+    return compute_intent_id(intent_payload)
+
+
 async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None):
     msgs = ""
     all_success = True
@@ -98,7 +125,9 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             
             o_desc = html.escape(str(o.get('desc', '주문')))
 
-            order_key = f"{ticker}_{o_desc}"
+            order_key = _order_success_cache_key(
+                today_str, ticker, o, o_side, o_type, idempotency_key
+            )
             if order_key in successful_orders_cache:
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ✅(기장전 보존)\n"
                 continue

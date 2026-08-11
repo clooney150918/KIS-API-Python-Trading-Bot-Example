@@ -5,6 +5,7 @@ import pytest
 
 import order_executor
 from order_executor import execute_order_list
+from order_intent_store import compute_intent_id
 from runtime_safety import RuntimeSafetyGate, safety_block_result
 from test_runtime_safety import (
     SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
@@ -13,6 +14,23 @@ from test_runtime_safety import (
     write_state,
 )
 from test_runtime_safety_authorization import ORDER_REQUEST, POLICY_REQUEST
+
+
+def official_order(**overrides):
+    order = {
+        "side": "BUY",
+        "qty": 1,
+        "price": "100",
+        "type": "LIMIT",
+        "strategy": "LAOER_V4_SOXL_20",
+        "strategy_revision": 1,
+        "t_revision": 3,
+        "trade_date": "2026-08-11",
+        "event_type": "FULL_BUY",
+        "desc": "same legacy desc",
+    }
+    order.update(overrides)
+    return order
 
 
 class LegacyPositionalBroker:
@@ -85,6 +103,60 @@ class BlockingBroker(LegacyPositionalBroker):
 
 async def no_sleep(_delay):
     return None
+
+
+def test_success_cache_uses_official_intent_id_not_legacy_description(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    first = official_order(event_type="FULL_BUY", desc="same desc")
+    second = official_order(event_type="HALF_BUY", desc="same desc")
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [first, second],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert len(broker.calls) == 2
+    assert "SOXL_same desc" not in cache
+    assert cache == {compute_intent_id(dict(first, ticker="SOXL", order_type="LIMIT")), compute_intent_id(dict(second, ticker="SOXL", order_type="LIMIT"))}
+
+
+def test_success_cache_dedupes_same_intent_even_when_ui_description_changes(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    first = official_order(desc="first UI text")
+    second = official_order(desc="second UI text")
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [first, second],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert len(broker.calls) == 1
+    assert cache == {compute_intent_id(dict(first, ticker="SOXL", order_type="LIMIT"))}
+    assert "✅(기장전 보존)" in messages
 
 
 @pytest.mark.parametrize("market_active", [True, False])
@@ -349,7 +421,8 @@ def test_prior_success_remains_cached_when_later_order_is_ambiguous(tmp_path, mo
 
     assert success is False
     assert len(broker.calls) == 2
-    assert "SOXL_first" in cache
+    assert len(cache) == 1
+    assert "SOXL_first" not in cache
     assert "SOXL_second" not in cache
     assert "SOXL_third" not in cache
     assert "ORDER_SUBMISSION_AMBIGUOUS" in failure
