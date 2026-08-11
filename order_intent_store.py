@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from laoer_v4_20 import FillEvent
+
 
 class InvalidOrderIntentError(ValueError):
     pass
@@ -33,6 +35,11 @@ class OrderIntentLedgerCorruptError(RuntimeError):
 
 
 STRATEGY = "LAOER_V4_SOXL_20"
+ALLOWED_TICKERS = frozenset({"SOXL"})
+ALLOWED_EVENT_TYPES = frozenset(
+    set(FillEvent.__members__) | {str(member.value) for member in FillEvent}
+)
+ALLOWED_ORDER_TYPES = frozenset({"LIMIT", "LOC", "MOC", "MOO", "LOO"})
 REQUIRED_PLAN_FIELDS = (
     "strategy",
     "strategy_revision",
@@ -60,10 +67,12 @@ ALLOWED_TRANSITIONS = {
 def _parse_positive_int(value: Any, field: str) -> int:
     if isinstance(value, bool):
         raise InvalidOrderIntentError(f"{field} must be a positive integer")
-    try:
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.isdigit():
         parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise InvalidOrderIntentError(f"{field} must be a positive integer") from exc
+    else:
+        raise InvalidOrderIntentError(f"{field} must be a positive integer")
     if parsed <= 0:
         raise InvalidOrderIntentError(f"{field} must be a positive integer")
     return parsed
@@ -108,8 +117,14 @@ def _normalize_plan(intent: Mapping[str, Any]) -> dict[str, Any]:
     }
     if normalized["strategy"] != STRATEGY:
         raise InvalidOrderIntentError(f"strategy must be {STRATEGY}")
+    if normalized["ticker"] not in ALLOWED_TICKERS:
+        raise InvalidOrderIntentError(f"ticker must be one of {sorted(ALLOWED_TICKERS)}")
+    if normalized["event_type"] not in ALLOWED_EVENT_TYPES:
+        raise InvalidOrderIntentError("event_type is not an official FillEvent")
     if normalized["side"] not in {"BUY", "SELL"}:
         raise InvalidOrderIntentError("side must be BUY or SELL")
+    if normalized["order_type"] not in ALLOWED_ORDER_TYPES:
+        raise InvalidOrderIntentError(f"order_type must be one of {sorted(ALLOWED_ORDER_TYPES)}")
     return normalized
 
 

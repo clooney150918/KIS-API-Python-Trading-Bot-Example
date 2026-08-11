@@ -80,13 +80,25 @@ def _order_idempotency_key(trade_date, ticker, order_index, order, side, order_t
 def _coerce_positive_int(value, field):
     if isinstance(value, bool):
         raise InvalidOrderIntentError(f"{field} must be a positive integer")
-    try:
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.isdigit():
         parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise InvalidOrderIntentError(f"{field} must be a positive integer") from exc
+    else:
+        raise InvalidOrderIntentError(f"{field} must be a positive integer")
     if parsed <= 0:
         raise InvalidOrderIntentError(f"{field} must be a positive integer")
     return parsed
+
+
+def _is_official_order(order):
+    return (
+        order.get("strategy") == OFFICIAL_ORDER_STRATEGY
+        or "intent_id" in order
+        or "strategy_revision" in order
+        or "t_revision" in order
+        or "event_type" in order
+    )
 
 
 def _current_t_revision_from_provider(provider, ticker):
@@ -126,22 +138,13 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     Legacy/non-official orders fall back to the existing transport idempotency key
     so old UI description strings never define cache identity.
     """
-    is_official_order = (
-        order.get("strategy") == OFFICIAL_ORDER_STRATEGY
-        or "intent_id" in order
-        or "strategy_revision" in order
-        or "t_revision" in order
-        or "event_type" in order
-    )
+    is_official_order = _is_official_order(order)
     if not is_official_order:
         return fallback_key
 
     missing_fields = []
     for field in REQUIRED_PLAN_FIELDS:
-        if field == "order_type":
-            if "order_type" not in order and "type" not in order:
-                missing_fields.append(field)
-        elif field not in order:
+        if field not in order:
             missing_fields.append(field)
     if missing_fields:
         raise InvalidOrderIntentError(
@@ -163,7 +166,7 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
         "trade_date": order.get("trade_date"),
         "event_type": order.get("event_type"),
         "side": side,
-        "order_type": order_type,
+        "order_type": order.get("order_type"),
         "price": str(order.get("price")),
         "qty": order.get("qty"),
     }
@@ -186,8 +189,10 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
         try:
             if not isinstance(o, dict): continue
 
+            official_order = _is_official_order(o)
             o_side, o_type = canonical_order_values(
-                o.get('side', 'BUY'), o.get('type', o.get('order_type', 'LOC'))
+                o.get('side', 'BUY'),
+                o.get('order_type') if official_order else o.get('type', o.get('order_type', 'LOC')),
             )
             o_qty = int(_safe_float(o.get('qty')))
             o_price = _safe_float(o.get('price'))

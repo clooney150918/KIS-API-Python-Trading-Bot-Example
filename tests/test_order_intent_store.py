@@ -65,6 +65,48 @@ def test_create_planned_intent_appends_schema_and_rejects_required_event_type_mi
         store.create_planned(planned_intent(event_type=None))
 
 
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("ticker", "TQQQ"),
+        ("event_type", "DROP_TABLE"),
+        ("order_type", "SHELL"),
+    ],
+)
+def test_official_intent_rejects_values_outside_semantic_domain(tmp_path, field, value):
+    store, _path = make_store(tmp_path)
+
+    with pytest.raises(InvalidOrderIntentError, match=field):
+        store.create_planned(planned_intent(**{field: value}))
+
+    created = store.create_planned(planned_intent(ticker="SOXL", event_type="FULL_BUY", order_type="LOC"))
+    assert created["ticker"] == "SOXL"
+    assert created["event_type"] == "FULL_BUY"
+    assert created["order_type"] == "LOC"
+
+
+@pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
+@pytest.mark.parametrize("value", [1.9, "1.9"])
+def test_official_intent_rejects_non_integer_numeric_values(tmp_path, field, value):
+    store, _path = make_store(tmp_path)
+
+    with pytest.raises(InvalidOrderIntentError, match=field):
+        store.create_planned(planned_intent(**{field: value}))
+
+
+@pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
+def test_official_intent_accepts_digit_integer_strings(tmp_path, field):
+    provider = (lambda _ticker: 1) if field == "t_revision" else current_revision_provider
+    store, _path = make_store(tmp_path, provider=provider)
+    overrides = {field: "1"}
+    if field != "t_revision":
+        overrides["t_revision"] = 3
+
+    created = store.create_planned(planned_intent(**overrides))
+
+    assert created[field] == 1
+
+
 def test_duplicate_intent_id_append_rejects_even_with_different_description(tmp_path):
     store, _path = make_store(tmp_path)
     store.create_planned(planned_intent(description="legacy first text"))

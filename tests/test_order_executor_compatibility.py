@@ -22,7 +22,7 @@ def official_order(**overrides):
         "side": "BUY",
         "qty": 1,
         "price": "100",
-        "type": "LIMIT",
+        "order_type": "LIMIT",
         "strategy": "LAOER_V4_SOXL_20",
         "strategy_revision": 1,
         "t_revision": 3,
@@ -333,7 +333,7 @@ def test_official_order_rejects_missing_event_type_without_legacy_fallback(tmp_p
         ("price", {"strategy": "LAOER_V4_SOXL_20"}),
         ("qty", {"strategy": "LAOER_V4_SOXL_20"}),
         ("event_type", {"strategy": "LAOER_V4_SOXL_20"}),
-        ("type", {"strategy": "LAOER_V4_SOXL_20"}),
+        ("order_type", {"strategy": "LAOER_V4_SOXL_20"}),
     ],
 )
 def test_official_order_missing_required_identity_field_fails_closed_without_defaults(
@@ -362,9 +362,97 @@ def test_official_order_missing_required_identity_field_fails_closed_without_def
     assert broker.calls == []
     assert cache == set()
     assert "ORDER_INTENT_INVALID" in messages
-    expected_missing_name = "order_type" if missing_field == "type" else missing_field
-    assert expected_missing_name in messages
+    assert missing_field in messages
     assert "ORDER_INTENT_INVALID" in failure
+
+
+def test_official_order_missing_exact_order_type_rejects_legacy_type_alias_without_broker_call(
+    tmp_path, monkeypatch
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    official_with_only_legacy_type = official_order(type="LIMIT")
+    official_with_only_legacy_type.pop("order_type")
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [official_with_only_legacy_type],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_INVALID" in messages
+    assert "order_type" in messages
+    assert "ORDER_INTENT_INVALID" in failure
+
+
+@pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
+@pytest.mark.parametrize("value", [1.9, "1.9"])
+def test_official_order_rejects_non_integer_numeric_values_before_broker_call(
+    tmp_path, monkeypatch, field, value
+):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    invalid = official_order(**{field: value})
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [invalid],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert cache == set()
+    assert "ORDER_INTENT_INVALID" in messages
+    assert field in messages
+    assert "ORDER_INTENT_INVALID" in failure
+
+
+@pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
+def test_official_order_accepts_digit_integer_strings(tmp_path, monkeypatch, field):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    cache = set()
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+    order = official_order(**{field: "3" if field == "t_revision" else "1"})
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [order],
+            cache,
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+        )
+    )
+
+    assert success is True
+    assert failure == ""
+    assert broker.calls == [("SOXL", "BUY", 1, 100.0, "LIMIT")]
 
 
 @pytest.mark.parametrize(
