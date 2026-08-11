@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "ticker": "SOXL",
+  "as_of": "2026-08-11",
+  "qty": 98,
+  "avg_price": "158.0735",
+  "available_cash": "1482.88",
+  "t": "18.32",
+  "reverse_active": false,
+  "source": "CEO_APPROVED_KIS_BASELINE",
+  "legacy_execution_count": 72,
+  "immutable": true
+}

@@ -61,6 +61,8 @@ class ConfigManager:
             "VERSION_CFG": "data/version_config.json",
             "REVERSE_CFG": "data/reverse_config.json",
             "T_STATE": "data/t_state.json",
+            "STRATEGY_BASELINE": "data/strategy_baseline_SOXL_2026-08-11.json",
+            "T_EVENTS": "data/t_events_SOXL.jsonl",
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
@@ -289,30 +291,21 @@ class ConfigManager:
             return bool(locks.get(f"{today}_{ticker}_{market_type}", False))
 
     def get_absolute_t_val(self, ticker, actual_qty, actual_avg_price):
-        rev_state = self.get_reverse_state(ticker)
-        split = self.get_split_count(ticker)
+        # V4.0: T는 승인된 immutable baseline + append-only 체결 이벤트 원장만이
+        # source of truth다. actual_qty/actual_avg_price는 원가 역산에 쓰지 않는다.
+        try:
+            from trade_state_store import TradeStateStore
 
-        # V4.0: T는 체결 이벤트 상태값이다. 수량×평단으로 역산하지 않는다.
-        t_states = self._load_json(self.FILES["T_STATE"], {})
-        t_state = t_states.get(ticker, {}) if isinstance(t_states, dict) else {}
-        stored_t = self._safe_float(t_state.get("t_val", 0.0)) if isinstance(t_state, dict) else 0.0
-        if self._safe_float(actual_qty) <= 0:
+            target = str(ticker).upper()
+            store = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"])
+            state = store.load_state(target)
+            t_val = float(state.t)
+            remaining_splits = max(1.0, 20.0 - t_val)
+            one_portion = float(state.available_cash) / remaining_splits
+            return round(t_val, 2), one_portion
+        except Exception as e:
+            logging.error(f"⛔ [{ticker}] T 이벤트 원장 로드 실패 — 원가 역산 없이 fail-safe 0 반환: {e}")
             return 0.0, 0.0
-
-        if rev_state.get("is_active", False):
-            dynamic_t = self._safe_float(rev_state.get("dynamic_t", stored_t))
-            rem_cash = self._safe_float(rev_state.get("rem_cash", 0.0))
-            one_portion = rem_cash / 4.0 if rem_cash > 0 else 0.0
-            return round(dynamic_t, 2), round(one_portion, 2)
-
-        seed = self.get_seed(ticker)
-        one_portion = seed / split if split > 0 else 1.0
-        if stored_t > 0:
-            return round(stored_t, 2), round(one_portion, 2)
-
-        # 상태값이 없으면 임의 역산하지 않고 HALT 신호(0)를 반환한다.
-        logging.error(f"⛔ [{ticker}] T 이벤트 상태값이 없어 원가 역산을 차단합니다.")
-        return 0.0, round(one_portion, 2)
 
     def apply_stock_split(self, ticker, ratio):
         safe_ratio = self._safe_float(ratio)
@@ -655,62 +648,21 @@ class ConfigManager:
         return False
 
     def calculate_v14_state(self, ticker):
-        rev_state = self.get_reverse_state(ticker)
-        split = self.get_split_count(ticker)
-        
-        if rev_state.get("is_active", False):
-            dynamic_t = self._safe_float(rev_state.get("dynamic_t", 0.0))
-            rem_cash = self._safe_float(rev_state.get("rem_cash", 0.0))
-            current_budget = rem_cash / 4.0 if rem_cash > 0 else 0.0
-            return max(0.0, round(dynamic_t, 4)), max(0.0, current_budget), max(0.0, rem_cash)
-            
-        ledger = self.get_ledger()
-        target_recs = sorted([r for r in ledger if isinstance(r, dict) and r.get('ticker') == ticker], key=lambda x: int(self._safe_float(x.get('id', 0))))
-        
-        seed = self.get_seed(ticker)
-        base_portion = seed / split if split > 0 else 1.0
-        
-        holdings = 0
-        rem_cash = seed
-        total_invested = 0.0
-        
-        for r in target_recs:
-            if holdings == 0:
-                rem_cash = seed
-                total_invested = 0.0
-        
-            qty = int(self._safe_float(r.get('qty', 0)))
-            price = self._safe_float(r.get('price', 0.0))
-            amt = qty * price
-            
-            if r.get('side') == 'BUY':
-                rem_cash -= amt
-                holdings += qty
-                total_invested += amt
-                
-            elif r.get('side') == 'SELL':
-                if qty >= holdings: 
-                    holdings = 0
-                    rem_cash = seed
-                    total_invested = 0.0
-                else: 
-                    if holdings > 0:
-                        avg_price = total_invested / holdings
-                        total_invested -= (qty * avg_price)
-                holdings -= qty
-                rem_cash += amt
-             
-        avg_price = total_invested / holdings if holdings > 0 else 0.0
-        t_val = (holdings * avg_price) / base_portion if base_portion > 0 else 0.0
-        
-        if holdings > 0:
-            safe_denom = max(1.0, split - t_val)
+        # Official Task 3 source: immutable KIS baseline + append-only T events.
+        # Do not reconstruct T from cost basis.
+        try:
+            from trade_state_store import TradeStateStore
+
+            target = str(ticker).upper()
+            state = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"]).load_state(target)
+            t_val = float(state.t)
+            rem_cash = float(state.available_cash)
+            safe_denom = max(1.0, 20.0 - t_val)
             current_budget = rem_cash / safe_denom
-        else:
-            current_budget = base_portion
-            t_val = 0.0
-             
-        return max(0.0, round(t_val, 4)), max(0.0, current_budget), max(0.0, rem_cash)
+            return max(0.0, round(t_val, 4)), max(0.0, current_budget), max(0.0, rem_cash)
+        except Exception as e:
+            logging.error(f"⛔ [{ticker}] V14 state ledger load failed; cost-basis inverse blocked: {e}")
+            return 0.0, 0.0, 0.0
 
     def archive_graduation(self, ticker, end_date, prev_close=0.0):
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
