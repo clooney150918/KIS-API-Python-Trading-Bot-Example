@@ -10,7 +10,8 @@ import logging
 import html
 import math
 from state_io_manager import save_slice_state_sync, save_aftermarket_state_sync
-from runtime_safety import RuntimeSafetyGate, safety_block_result
+from runtime_safety import RuntimeSafetyGate, account_fingerprint, safety_block_result
+from shadow_intent import ShadowIntentRecorder
 
 def _safe_float(val):
     try:
@@ -20,7 +21,7 @@ def _safe_float(val):
     except Exception:
         return 0.0
 
-async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None):
+async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None):
     msgs = ""
     all_success = True
     loop_fail_reason = ""
@@ -57,8 +58,40 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                     side=o_side,
                 )
             else:
-                decision = gate.authorize(ticker, o_side, o.get('qty'), o.get('price'))
+                fingerprint = account_fingerprint(
+                    getattr(broker, 'cano', None),
+                    getattr(broker, 'acnt_prdt_cd', None),
+                )
+                decision = gate.authorize(
+                    ticker,
+                    o_side,
+                    o.get('qty'),
+                    o.get('price'),
+                    account_fingerprint=fingerprint,
+                    order_type=o_type,
+                    risk_reference_price=o.get('risk_reference_price'),
+                )
             if not decision.can_submit:
+                if decision.code == "SHADOW_ONLY":
+                    recorder = shadow_intent_recorder or ShadowIntentRecorder()
+                    try:
+                        recorder.record(
+                            ticker=ticker,
+                            side=o_side,
+                            quantity=o.get('qty'),
+                            price=o.get('price'),
+                            order_type=o_type,
+                            safety_revision=decision.revision,
+                        )
+                    except Exception:
+                        decision = RuntimeSafetyGate.denied(
+                            "SHADOW_INTENT_RECORD_FAILED",
+                            "shadow intent could not be durably recorded",
+                            shadow_only=True,
+                            revision=decision.revision,
+                            ticker=str(ticker),
+                            side=o_side,
+                        )
                 blocked = safety_block_result(decision)
                 code = blocked['safety_decision']['code']
                 all_success = False
@@ -82,7 +115,18 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                         res = {'rt_cd': '0', 'msg1': '로컬 자체 VWAP 엔진 위임 완료', 'odno': f'LOCAL_VWAP_{id(o)}'}
                         
                     elif is_market_active_now:
-                        res = await asyncio.wait_for(asyncio.to_thread(broker.send_order, ticker, o_side, o_qty, o_price, o_type), timeout=15.0)
+                        res = await asyncio.wait_for(
+                            asyncio.to_thread(
+                                broker.send_order,
+                                ticker,
+                                o_side,
+                                o_qty,
+                                o_price,
+                                o_type,
+                                risk_reference_price=o.get('risk_reference_price'),
+                            ),
+                            timeout=15.0,
+                        )
                     else:
                         res = await asyncio.wait_for(asyncio.to_thread(broker.send_reservation_order, ticker, o_side, o_qty, o_price, o_type), timeout=15.0)
 

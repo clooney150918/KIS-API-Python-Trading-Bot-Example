@@ -19,7 +19,7 @@ import math
 import logging
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
-from runtime_safety import RuntimeSafetyGate, safety_block_result
+from runtime_safety import RuntimeSafetyGate, account_fingerprint, safety_block_result
 
 class KisOrderEngine(MarketDataProvider):
 
@@ -27,7 +27,9 @@ class KisOrderEngine(MarketDataProvider):
         super().__init__(app_key, app_secret, cano, acnt_prdt_cd)
         self.runtime_safety_gate = runtime_safety_gate or RuntimeSafetyGate()
 
-    def _authorize_order_submission(self, ticker, side, qty, price):
+    def _authorize_order_submission(
+        self, ticker, side, qty, price, *, order_type="LIMIT", risk_reference_price=None
+    ):
         gate = getattr(self, 'runtime_safety_gate', None)
         if gate is None:
             return RuntimeSafetyGate.denied(
@@ -36,11 +38,42 @@ class KisOrderEngine(MarketDataProvider):
                 ticker=str(ticker),
                 side=str(side),
             )
-        return gate.authorize(ticker, side, qty, price)
+        fingerprint = account_fingerprint(
+            getattr(self, "cano", None),
+            getattr(self, "acnt_prdt_cd", None),
+        )
+        return gate.authorize(
+            ticker,
+            side,
+            qty,
+            price,
+            account_fingerprint=fingerprint,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+        )
 
-    def _call_order_api(self, ticker, side, qty, price, tr_id, path, body):
-        """Re-authorize at the single final boundary immediately before KIS POST."""
-        decision = self._authorize_order_submission(ticker, side, qty, price)
+    def _call_order_api(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        tr_id,
+        path,
+        body,
+        *,
+        order_type="LIMIT",
+        risk_reference_price=None,
+    ):
+        """Re-authorize actual submitted values immediately before KIS POST."""
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+        )
         if not decision.can_submit:
             return safety_block_result(decision)
         return self._call_api(tr_id, path, "POST", body=body)
@@ -274,8 +307,26 @@ class KisOrderEngine(MarketDataProvider):
             time.sleep(0.3)
         return len(target_orders)
 
-    def send_order(self, ticker, side, qty, price, order_type="LIMIT", start_time=None, end_time=None):
-        decision = self._authorize_order_submission(ticker, side, qty, price)
+    def send_order(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type="LIMIT",
+        start_time=None,
+        end_time=None,
+        *,
+        risk_reference_price=None,
+    ):
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+        )
         if not decision.can_submit:
             return safety_block_result(decision)
 
@@ -313,11 +364,13 @@ class KisOrderEngine(MarketDataProvider):
             res = self._call_order_api(
                 ticker,
                 side,
-                qty,
-                price,
+                order_qty,
+                final_price,
                 tr_id,
                 "/uapi/overseas-stock/v1/trading/order",
                 body,
+                order_type=order_type,
+                risk_reference_price=risk_reference_price,
             )
             # 🚨 MODIFIED: [TypeError 붕괴 방어] msg1이 None일 경우 any() 루프에서 발생하는 예외 원천 봉쇄
             safe_msg = str(res.get('msg1') or '')
@@ -376,12 +429,13 @@ class KisOrderEngine(MarketDataProvider):
        
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
     
-        body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(self._ceil_2(price)), "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
+        final_price = self._ceil_2(price)
+        body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(final_price), "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
         res = self._call_order_api(
             ticker,
             side,
-            qty,
-            price,
+            order_qty,
+            final_price,
             tr_id,
             "/uapi/overseas-stock/v1/trading/daytime-order",
             body,
@@ -434,11 +488,12 @@ class KisOrderEngine(MarketDataProvider):
         res = self._call_order_api(
             ticker,
             side,
-            qty,
-            price,
+            order_qty,
+            final_price,
             tr_id,
             "/uapi/overseas-stock/v1/trading/order-resv",
             body,
+            order_type=order_type,
         )
         if 'safety_decision' in res:
             return res

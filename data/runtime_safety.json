@@ -9,6 +9,9 @@
   "allowed_tickers": [
     "SOXL"
   ],
+  "allowed_account_fingerprints": [
+    "UNCONFIGURED"
+  ],
   "max_order_quantity": 100,
   "max_order_notional": "25000.00"
 }
