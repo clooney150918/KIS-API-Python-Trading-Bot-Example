@@ -18,20 +18,36 @@ class InfiniteStrategy:
         self.v_avwap_plugin = _StubPlugin()
         self.v14_vwap_plugin = _StubPlugin()
 
+    def _halt_plan(self, ticker, reason):
+        return {
+            'strategy': 'LAOER_V4_SOXL_20',
+            'strategy_revision': 1,
+            'ticker': str(ticker or '').strip().upper(),
+            'core_orders': [], 'bonus_orders': [], 'orders': [],
+            't_val': 0.0, 'is_reverse': False, 'star_price': 0.0,
+            'star_ratio': 0.0, 'target_price': 0.0, 'one_portion': 0.0,
+            'process_status': '⛔VERSION_HALT', 'intent_ids': [],
+            'safety': {'halted': True, 'reason': reason},
+        }
+
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close,
                  ma_5day=0.0, market_type="REG", available_cash=0,
                  is_simulation=False, is_snapshot_mode=False, **kwargs):
         if not self.cfg:
             logging.error("🚨 [FATAL] Config 객체 결측. 플랜 생성 중단.")
-            return {'core_orders': [], 'bonus_orders': [], 'orders': [],
-                    't_val': 0.0, 'is_reverse': False, 'star_price': 0.0, 'one_portion': 0.0}
+            return self._halt_plan(ticker, "Config missing")
 
         safe_ticker = str(ticker or "").strip().upper()
         if not safe_ticker:
-            return {'core_orders': [], 'bonus_orders': [], 'orders': [],
-                    't_val': 0.0, 'is_reverse': False, 'star_price': 0.0, 'one_portion': 0.0}
+            return self._halt_plan(ticker, "Ticker missing")
 
-        self.cfg.set_version(safe_ticker, "LAOER_V4_SOXL_20")
+        try:
+            requested_version = str(self.cfg.get_version(safe_ticker) or "LAOER_V4_SOXL_20")
+        except ValueError as exc:
+            logging.error("⛔ [%s] unsupported legacy strategy version: %s", safe_ticker, exc)
+            return self._halt_plan(safe_ticker, str(exc))
+        if requested_version != "LAOER_V4_SOXL_20":
+            return self._halt_plan(safe_ticker, f"Unsupported strategy version for official routing: {requested_version}")
         return self.v4.get_plan(
             ticker=safe_ticker, current_price=current_price, avg_price=avg_price,
             qty=qty, prev_close=prev_close, ma_5day=ma_5day,

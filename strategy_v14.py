@@ -202,6 +202,13 @@ class V4Strategy:
         return order
 
     def _snapshot_matches_official_revision(self, snapshot, *, strategy_revision, t_revision):
+        """Legacy compatibility probe only; cached orders are never trusted.
+
+        Task 7 fail-closed rule: a same-revision snapshot can be contaminated with
+        arbitrary orders/bonus_orders or mismatched intent_ids. The official path
+        must recompute through laoer_v4_20 and may only save fresh canonical
+        results, never return cached snapshot orders.
+        """
         if not isinstance(snapshot, dict):
             return False
         try:
@@ -244,32 +251,13 @@ class V4Strategy:
             )
 
         if "STRATEGY_BASELINE" not in getattr(self.cfg, "FILES", {}):
-            rev_state_compat = self.cfg.get_reverse_state(target)
-            if bool(rev_state_compat.get("is_active", False)) and market_type == "REG":
-                if current_price <= 0.0:
-                    return {
-                        "orders": [], "core_orders": [], "bonus_orders": [],
-                        "total_q": qty, "avg_price": avg_price, "t_val": self._safe_float(rev_state_compat.get("dynamic_t", 0.0)),
-                        "one_portion": 0.0, "process_status": "⛔가격오류", "is_reverse": True,
-                        "star_price": 0.0, "star_ratio": 0.0, "target_price": 0.0,
-                        "real_cash_used": real_available_cash, "tracking_info": {}, "initial_qty": qty,
-                        "is_zero_start": False,
-                    }
-                sell_qty = qty // 10
-                orders = []
-                if sell_qty > 0:
-                    orders.append({
-                        "side": "SELL", "price": 0.0, "qty": sell_qty, "type": "MOC",
-                        "risk_reference_price": current_price, "desc": "공식리버스무조건매도(1일차)",
-                    })
-                return {
-                    "orders": orders, "core_orders": orders, "bonus_orders": [],
-                    "total_q": qty, "avg_price": avg_price, "t_val": self._safe_float(rev_state_compat.get("dynamic_t", 0.0)),
-                    "one_portion": 0.0, "process_status": "♻️공식리버스(1일차 진입)", "is_reverse": True,
-                    "star_price": 0.0, "star_ratio": 0.0, "target_price": 0.0,
-                    "real_cash_used": real_available_cash, "tracking_info": {}, "initial_qty": qty,
-                    "is_zero_start": False,
-                }
+            plan_result = self._empty_official_plan(
+                target, qty, avg_price,
+                reason="STRATEGY_BASELINE missing; official kernel baseline is required",
+                process_status="⛔공식기준원장HALT",
+            )
+            if is_snapshot_mode: self.save_daily_snapshot(target, plan_result)
+            return plan_result
 
         try:
             baseline, official_state = self._load_official_state(target)
@@ -303,9 +291,10 @@ class V4Strategy:
             return plan_result
 
         if not is_snapshot_mode:
-            snap = self.load_daily_snapshot(target)
-            if self._snapshot_matches_official_revision(snap, strategy_revision=strategy_revision, t_revision=t_revision):
-                return snap
+            # Never return cached snapshot orders on the official path. Same-revision
+            # snapshots are treated as stale metadata because historical files can
+            # contain legacy orders, bonus_orders, or forged intent_ids.
+            self.load_daily_snapshot(target)
 
         rev_state = self.cfg.get_reverse_state(target)
         is_rev_active = bool(rev_state.get("is_active", False)) or bool(official_state.reverse_active)
@@ -367,14 +356,18 @@ class V4Strategy:
                         desc="공식리버스매수",
                     ))
                 if reverse_plan.sell_quantity > 0:
-                    sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else (current_price or avg_price)
-                    orders.append(self._official_order(
-                        ticker=target, trade_date=trade_date, t_revision=t_revision,
-                        event_type="QUARTER", side="SELL", order_type=reverse_plan.sell_order_type,
-                        price=sell_price, qty=reverse_plan.sell_quantity,
-                        desc="공식리버스매도",
-                        risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
-                    ))
+                    if reverse_plan.sell_order_type == "MOC" and current_price <= 0.0:
+                        kernel_fail_closed = True
+                        kernel_reason = "MOC risk reference price must be positive and finite"
+                    else:
+                        sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else current_price
+                        orders.append(self._official_order(
+                            ticker=target, trade_date=trade_date, t_revision=t_revision,
+                            event_type="QUARTER", side="SELL", order_type=reverse_plan.sell_order_type,
+                            price=sell_price, qty=reverse_plan.sell_quantity,
+                            desc="공식리버스매도",
+                            risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
+                        ))
         else:
             normal_plan = laoer_v4_20.calculate_normal_plan(
                 laoer_v4_20.NormalState(
@@ -426,6 +419,9 @@ class V4Strategy:
                         price=normal_plan.target_sell_price, qty=normal_plan.target_sell_quantity,
                         desc="공식목표매도",
                     ))
+
+        if kernel_fail_closed:
+            orders = []
 
         plan_result = {
             "strategy": "LAOER_V4_SOXL_20",

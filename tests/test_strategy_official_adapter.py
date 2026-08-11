@@ -226,7 +226,82 @@ def test_stale_snapshot_revision_is_not_reused_for_orders(tmp_path):
     assert plan["t_revision"] == 1
 
 
-def test_version_config_only_routes_official_soxl20_and_forbids_mixed_v4_labels(tmp_path):
+def test_same_revision_snapshot_with_bonus_and_legacy_orders_is_not_reused(tmp_path):
+    cfg = isolated_cfg(tmp_path)
+    strategy = make_strategy(cfg)
+    contaminated_order = {"side": "BUY", "price": 1.23, "qty": 7, "type": "LOC", "desc": "SAME_REVISION_CONTAMINATED_LEAK"}
+    strategy.load_daily_snapshot = lambda ticker: {
+        "date": TRADE_DATE,
+        "strategy": STRATEGY,
+        "strategy_revision": STRATEGY_REVISION,
+        "t_revision": 1,
+        "intent_ids": ["legacy-looking-id"],
+        "orders": [contaminated_order],
+        "core_orders": [contaminated_order],
+        "bonus_orders": [{"side": "BUY", "price": 1.11, "qty": 1, "type": "LOC", "desc": "BONUS_LEAK"}],
+    }
+
+    plan = strategy.get_plan("SOXL", 100.0, 158.0735, 98, 99.0, available_cash=1482.88)
+
+    assert plan["bonus_orders"] == []
+    assert all(order.get("desc") != "SAME_REVISION_CONTAMINATED_LEAK" for order in plan["orders"])
+    assert all(order.get("desc") != "BONUS_LEAK" for order in plan["orders"])
+    assert plan["orders"]
+    assert all(order.get("strategy") == STRATEGY and order.get("intent_id") == compute_intent_id(order) for order in plan["orders"])
+    assert plan["intent_ids"] == [compute_intent_id(order) for order in plan["orders"]]
+
+
+def test_same_revision_snapshot_with_mismatched_intent_ids_is_not_reused(tmp_path):
+    cfg = isolated_cfg(tmp_path)
+    strategy = make_strategy(cfg)
+    official_order = {
+        "strategy": STRATEGY,
+        "strategy_revision": STRATEGY_REVISION,
+        "t_revision": 1,
+        "trade_date": TRADE_DATE,
+        "ticker": "SOXL",
+        "event_type": "FULL",
+        "side": "BUY",
+        "order_type": "LOC",
+        "type": "LOC",
+        "price": "1.23",
+        "qty": 7,
+        "desc": "MISMATCHED_INTENT_SNAPSHOT_LEAK",
+    }
+    official_order["intent_id"] = compute_intent_id(official_order)
+    strategy.load_daily_snapshot = lambda ticker: {
+        "date": TRADE_DATE,
+        "strategy": STRATEGY,
+        "strategy_revision": STRATEGY_REVISION,
+        "t_revision": 1,
+        "intent_ids": ["not-the-canonical-intent-id"],
+        "orders": [official_order],
+        "core_orders": [official_order],
+        "bonus_orders": [],
+    }
+
+    plan = strategy.get_plan("SOXL", 100.0, 158.0735, 98, 99.0, available_cash=1482.88)
+
+    assert all(order.get("desc") != "MISMATCHED_INTENT_SNAPSHOT_LEAK" for order in plan["orders"])
+    assert plan["intent_ids"] == [compute_intent_id(order) for order in plan["orders"]]
+
+
+def test_missing_strategy_baseline_cannot_emit_compatibility_reverse_order(tmp_path):
+    cfg = isolated_cfg(tmp_path, reverse_state={"is_active": True, "dynamic_t": 17.109, "rem_cash": 1482.88, "day_count": 1})
+    del cfg.FILES["STRATEGY_BASELINE"]
+    strategy = make_strategy(cfg)
+    strategy.load_daily_snapshot = lambda ticker: None
+
+    plan = strategy.get_plan("SOXL", 100.0, 158.0735, 98, 99.0, available_cash=1482.88, market_type="REG")
+
+    assert plan["orders"] == []
+    assert plan["core_orders"] == []
+    assert plan["bonus_orders"] == []
+    assert plan["safety"]["halted"] is True
+    assert "baseline" in plan["safety"]["reason"].lower() or "STRATEGY_BASELINE" in plan["safety"]["reason"]
+
+
+def test_version_config_rejects_legacy_labels_instead_of_normalizing(tmp_path):
     cfg = isolated_cfg(tmp_path, version={"SOXL": "V4", "TQQQ": "V4.0"})
     strategy = InfiniteStrategy(cfg)
     strategy.v4._get_logical_date_str = lambda: TRADE_DATE
@@ -235,14 +310,29 @@ def test_version_config_only_routes_official_soxl20_and_forbids_mixed_v4_labels(
     soxl_plan = strategy.get_plan("SOXL", 100.0, 158.0735, 98, 99.0, available_cash=1482.88)
     tqqq_plan = strategy.get_plan("TQQQ", 100.0, 100.0, 10, 99.0, available_cash=1000.0)
 
-    assert cfg.get_version("SOXL") == STRATEGY
-    assert cfg.get_version("TQQQ") == STRATEGY
-    assert soxl_plan["strategy"] == STRATEGY
+    try:
+        cfg.get_version("SOXL")
+    except ValueError as exc:
+        assert "legacy" in str(exc).lower() or "unsupported" in str(exc).lower()
+    else:
+        raise AssertionError("legacy V4 label must not be normalized to official strategy")
+    for legacy_label in ("V14", "V14.x"):
+        try:
+            cfg.set_version("SOXL", legacy_label)
+        except ValueError as exc:
+            assert "legacy" in str(exc).lower() or "unsupported" in str(exc).lower()
+        else:
+            raise AssertionError(f"legacy {legacy_label} label must be rejected on save")
+    assert soxl_plan["orders"] == []
+    assert soxl_plan["core_orders"] == []
+    assert soxl_plan["bonus_orders"] == []
+    assert soxl_plan["safety"]["halted"] is True
+    assert "legacy" in soxl_plan["safety"]["reason"].lower() or "unsupported" in soxl_plan["safety"]["reason"].lower()
     assert tqqq_plan["orders"] == []
     assert tqqq_plan["core_orders"] == []
     assert tqqq_plan["bonus_orders"] == []
     assert tqqq_plan["safety"]["halted"] is True
-    assert "SOXL" in tqqq_plan["safety"]["reason"]
+    assert "legacy" in tqqq_plan["safety"]["reason"].lower() or "unsupported" in tqqq_plan["safety"]["reason"].lower()
 
 
 def test_non_soxl_returns_zero_orders_and_halt_reason(tmp_path):

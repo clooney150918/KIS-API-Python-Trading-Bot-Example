@@ -19,10 +19,35 @@ from test_runtime_safety import (
 
 
 class ReverseDayOneConfig:
-    FILES = {}
+    def __init__(self, tmp_path):
+        self.FILES = {
+            "STRATEGY_BASELINE": str(tmp_path / "baseline.json"),
+            "T_EVENTS": str(tmp_path / "events.jsonl"),
+            "T_STATE": str(tmp_path / "t_state.json"),
+        }
+        baseline = {
+            "schema_version": 1,
+            "ticker": "SOXL",
+            "as_of": "2026-08-11",
+            "qty": 98,
+            "avg_price": "158.0735",
+            "available_cash": "1482.88",
+            "t": "18.32",
+            "reverse_active": False,
+            "source": "CEO_APPROVED_KIS_BASELINE",
+            "legacy_execution_count": 72,
+            "immutable": True,
+        }
+        tmp_path.joinpath("baseline.json").write_text(json.dumps(baseline), encoding="utf-8")
+        tmp_path.joinpath("events.jsonl").write_text("", encoding="utf-8")
+        tmp_path.joinpath("t_state.json").write_text("{}", encoding="utf-8")
 
     def _load_json(self, path, default):
-        return default
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
 
     def get_split_count(self, ticker):
         return 20
@@ -46,6 +71,14 @@ class ReverseDayOneConfig:
 
     def set_reverse_state(self, *args, **kwargs):
         raise AssertionError("reverse state must remain active in this scenario")
+
+
+class DummyOrderIntentStore:
+    def __init__(self):
+        self.submitted = []
+
+    def record_accepted_order(self, intent_id, accepted_order):
+        self.submitted.append((intent_id, accepted_order))
 
 
 class TransitionToShadowGate:
@@ -107,8 +140,8 @@ def read_records(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def build_reverse_day_one_plan(current_price):
-    strategy = V4Strategy(ReverseDayOneConfig())
+def build_reverse_day_one_plan(tmp_path, current_price):
+    strategy = V4Strategy(ReverseDayOneConfig(tmp_path))
     strategy.load_daily_snapshot = lambda ticker: None
     return strategy.get_plan(
         "SOXL",
@@ -122,7 +155,7 @@ def build_reverse_day_one_plan(current_price):
 
 
 def test_reverse_day_one_moc_current_price_flows_strategy_executor_to_kis(tmp_path):
-    plan = build_reverse_day_one_plan(100.0)
+    plan = build_reverse_day_one_plan(tmp_path, 100.0)
     moc = next(order for order in plan["orders"] if order["type"] == "MOC")
     assert moc["risk_reference_price"] == 100.0
 
@@ -144,6 +177,8 @@ def test_reverse_day_one_moc_current_price_flows_strategy_executor_to_kis(tmp_pa
             True,
             "20260811",
             runtime_safety_gate=engine.runtime_safety_gate,
+            order_intent_store=DummyOrderIntentStore(),
+            current_t_revision_provider=lambda ticker: 1,
         )
     )
 
@@ -155,7 +190,7 @@ def test_reverse_day_one_moc_current_price_flows_strategy_executor_to_kis(tmp_pa
 
 
 def test_reverse_day_one_moc_reference_reaches_kis_reservation_boundary(tmp_path):
-    plan = build_reverse_day_one_plan(100.0)
+    plan = build_reverse_day_one_plan(tmp_path, 100.0)
     state_path = write_state(
         tmp_path / "runtime_safety.json",
         max_order_notional="1000.00",
@@ -174,6 +209,8 @@ def test_reverse_day_one_moc_reference_reaches_kis_reservation_boundary(tmp_path
             False,
             "20260811",
             runtime_safety_gate=engine.runtime_safety_gate,
+            order_intent_store=DummyOrderIntentStore(),
+            current_t_revision_provider=lambda ticker: 1,
         )
     )
 
@@ -187,12 +224,13 @@ def test_reverse_day_one_moc_reference_reaches_kis_reservation_boundary(tmp_path
 
 
 @pytest.mark.parametrize("current_price", [0, -1, float("nan"), float("inf")])
-def test_reverse_day_one_moc_is_not_planned_without_positive_finite_current_price(current_price):
-    plan = build_reverse_day_one_plan(current_price)
+def test_reverse_day_one_moc_is_not_planned_without_positive_finite_current_price(tmp_path, current_price):
+    plan = build_reverse_day_one_plan(tmp_path, current_price)
 
     assert plan["orders"] == []
     assert plan["core_orders"] == []
-    assert plan["process_status"] == "⛔가격오류"
+    assert plan["safety"]["halted"] is True
+    assert "price" in plan["safety"]["reason"].lower() or "가격" in plan["safety"]["reason"]
 
 
 @pytest.mark.parametrize(

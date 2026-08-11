@@ -781,9 +781,7 @@ class ConfigManager:
             target = str(t or "").strip().upper()
             val = str(d.get(target, self.DEFAULT_VERSION.get(target, "LAOER_V4_SOXL_20")))
             if val in {"V4", "V14", "V4.0", "V14.x"}:
-                val = "LAOER_V4_SOXL_20"
-                d[target] = val
-                self._save_json(self.FILES["VERSION_CFG"], d)
+                raise ValueError(f"Unsupported legacy strategy version label for {target}: {val}")
             return val
         
     def set_version(self, t, v):
@@ -791,7 +789,7 @@ class ConfigManager:
             target = str(t or "").strip().upper()
             val = str(v or "LAOER_V4_SOXL_20")
             if val in {"V4", "V14", "V4.0", "V14.x"}:
-                val = "LAOER_V4_SOXL_20"
+                raise ValueError(f"Unsupported legacy strategy version label for {target}: {val}")
             d = self._load_json(self.FILES["VERSION_CFG"], self.DEFAULT_VERSION)
             d[target] = val
             self._save_json(self.FILES["VERSION_CFG"], d)
