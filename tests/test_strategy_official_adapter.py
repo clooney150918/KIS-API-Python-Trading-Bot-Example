@@ -401,6 +401,48 @@ def test_corrupt_reverse_day_zero_preserves_kernel_fail_closed_semantics(tmp_pat
     assert not any(order.get("side") == "SELL" and order.get("order_type") == "MOC" for order in plan["orders"])
 
 
+def test_active_reverse_missing_or_nonnumeric_day_count_fails_closed_without_orders(tmp_path):
+    for corrupt_day_count in (None, "abc"):
+        reverse_state = {
+            "is_active": True,
+            "exit_target": 0.0,
+            "last_update_date": "2026-08-11",
+            "last_t_update_date": "2026-08-11",
+            "dynamic_t": 17.109,
+            "rem_cash": 1482.88,
+            "is_day_one": False,
+        }
+        if corrupt_day_count is not None:
+            reverse_state["day_count"] = corrupt_day_count
+        case_dir = tmp_path / f"case_{corrupt_day_count or 'missing'}"
+        case_dir.mkdir()
+        cfg = isolated_cfg(case_dir, reverse_state=reverse_state)
+        strategy = make_strategy(cfg)
+        strategy.load_daily_snapshot = lambda ticker: None
+
+        plan = strategy.get_plan(
+            "SOXL",
+            current_price=100.0,
+            avg_price=158.0735,
+            qty=89,
+            prev_close=138.0,
+            ma_5day=134.0,
+            available_cash=1482.88,
+            market_type="REG",
+            previous_closes=["130", "132", "134", "136", "138"],
+        )
+
+        assert plan["orders"] == []
+        assert plan["core_orders"] == []
+        assert plan["bonus_orders"] == []
+        assert plan["intent_ids"] == []
+        assert plan["safety"]["halted"] is True
+        assert "day" in plan["safety"]["reason"].lower()
+        assert "HALT" in plan["process_status"]
+        assert not any(order.get("side") == "SELL" and order.get("order_type") == "MOC" for order in plan["orders"])
+        assert not any(order.get("order_type") == "LOC" for order in plan["orders"])
+
+
 def test_wrapper_forwards_reverse_context_kwargs_and_matches_direct_wait(tmp_path):
     reverse_state = {
         "is_active": True,

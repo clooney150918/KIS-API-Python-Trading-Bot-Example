@@ -28,6 +28,21 @@ class V4Strategy:
         except Exception:
             return 0.0
 
+    def _parse_reverse_day_count(self, rev_state):
+        if "day_count" not in rev_state:
+            return None, "invalid reverse day domain: missing day_count"
+        raw = rev_state.get("day_count")
+        try:
+            text = str(raw).strip().replace(',', '')
+            if not text:
+                raise ValueError("blank day_count")
+            value = float(text)
+        except Exception:
+            return None, "invalid reverse day domain: day_count must be numeric"
+        if math.isnan(value) or math.isinf(value) or value <= 0 or not value.is_integer():
+            return None, "invalid reverse day domain: day_count must be a positive integer"
+        return int(value), ""
+
     def _ceil(self, val): return math.ceil(self._safe_float(val) * 100) / 100.0
     def _floor(self, val): return math.floor(self._safe_float(val) * 100) / 100.0
 
@@ -311,61 +326,65 @@ class V4Strategy:
 
         if is_rev_active:
             is_reverse = True
+            process_status = "♻️공식리버스"
             reverse_t = rev_state.get("dynamic_t", t_val_dec) or t_val_dec
             reverse_cash = rev_state.get("rem_cash", official_cash) or official_cash
-            day = int(self._safe_float(rev_state.get("day_count", 1)))
-            previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
-            if day <= 1:
-                previous_closes = []
+            day, day_reason = self._parse_reverse_day_count(rev_state)
+            if day_reason:
+                kernel_fail_closed = True
+                kernel_reason = day_reason
             else:
-                previous_closes = kwargs.get("previous_closes") or []
-                if not previous_closes and ma_5day:
-                    previous_closes = [ma_5day] * 5
-                elif not previous_closes and prev_close:
-                    previous_closes = [prev_close] * 5
-            reverse_plan = laoer_v4_20.calculate_reverse_plan(
-                laoer_v4_20.ReverseState(
-                    ticker=target,
-                    split=20,
-                    quantity=qty,
-                    previous_quantity=previous_quantity,
-                    avg_price=laoer_v4_20.Decimal(str(avg_price)),
-                    cash=laoer_v4_20.Decimal(str(reverse_cash)),
-                    t=laoer_v4_20.Decimal(str(reverse_t)),
-                    day=day,
-                    previous_closes=previous_closes,
-                    confirmed_close=kwargs.get("confirmed_close"),
+                previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+                if day <= 1:
+                    previous_closes = []
+                else:
+                    previous_closes = kwargs.get("previous_closes") or []
+                    if not previous_closes and ma_5day:
+                        previous_closes = [ma_5day] * 5
+                    elif not previous_closes and prev_close:
+                        previous_closes = [prev_close] * 5
+                reverse_plan = laoer_v4_20.calculate_reverse_plan(
+                    laoer_v4_20.ReverseState(
+                        ticker=target,
+                        split=20,
+                        quantity=qty,
+                        previous_quantity=previous_quantity,
+                        avg_price=laoer_v4_20.Decimal(str(avg_price)),
+                        cash=laoer_v4_20.Decimal(str(reverse_cash)),
+                        t=laoer_v4_20.Decimal(str(reverse_t)),
+                        day=day,
+                        previous_closes=previous_closes,
+                        confirmed_close=kwargs.get("confirmed_close"),
+                    )
                 )
-            )
-            t_val = float(reverse_plan.t)
-            star_price = float(reverse_plan.star_point)
-            one_portion = float(reverse_plan.buy_budget)
-            kernel_fail_closed = bool(reverse_plan.fail_closed)
-            kernel_reason = reverse_plan.reason
-            process_status = "♻️공식리버스"
-            if reverse_plan.return_to_normal:
-                process_status = "♻️리버스복귀대기"
-            elif not reverse_plan.fail_closed:
-                if reverse_plan.buy_quantity > 0:
-                    orders.append(self._official_order(
-                        ticker=target, trade_date=trade_date, t_revision=t_revision,
-                        event_type="FULL", side="BUY", order_type="LOC",
-                        price=reverse_plan.star_buy_price, qty=reverse_plan.buy_quantity,
-                        desc="공식리버스매수",
-                    ))
-                if reverse_plan.sell_quantity > 0:
-                    if reverse_plan.sell_order_type == "MOC" and current_price <= 0.0:
-                        kernel_fail_closed = True
-                        kernel_reason = "MOC risk reference price must be positive and finite"
-                    else:
-                        sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else current_price
+                t_val = float(reverse_plan.t)
+                star_price = float(reverse_plan.star_point)
+                one_portion = float(reverse_plan.buy_budget)
+                kernel_fail_closed = bool(reverse_plan.fail_closed)
+                kernel_reason = reverse_plan.reason
+                if reverse_plan.return_to_normal:
+                    process_status = "♻️리버스복귀대기"
+                elif not reverse_plan.fail_closed:
+                    if reverse_plan.buy_quantity > 0:
                         orders.append(self._official_order(
                             ticker=target, trade_date=trade_date, t_revision=t_revision,
-                            event_type="QUARTER", side="SELL", order_type=reverse_plan.sell_order_type,
-                            price=sell_price, qty=reverse_plan.sell_quantity,
-                            desc="공식리버스매도",
-                            risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
+                            event_type="FULL", side="BUY", order_type="LOC",
+                            price=reverse_plan.star_buy_price, qty=reverse_plan.buy_quantity,
+                            desc="공식리버스매수",
                         ))
+                    if reverse_plan.sell_quantity > 0:
+                        if reverse_plan.sell_order_type == "MOC" and current_price <= 0.0:
+                            kernel_fail_closed = True
+                            kernel_reason = "MOC risk reference price must be positive and finite"
+                        else:
+                            sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else current_price
+                            orders.append(self._official_order(
+                                ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                event_type="QUARTER", side="SELL", order_type=reverse_plan.sell_order_type,
+                                price=sell_price, qty=reverse_plan.sell_quantity,
+                                desc="공식리버스매도",
+                                risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
+                            ))
         else:
             normal_plan = laoer_v4_20.calculate_normal_plan(
                 laoer_v4_20.NormalState(

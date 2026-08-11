@@ -55,6 +55,7 @@ class ReverseDayOneConfig:
     def get_reverse_state(self, ticker):
         return {
             "is_active": True,
+            "day_count": 1,
             "dynamic_t": 20.0,
             "rem_cash": 1000.0,
             "is_day_one": True,
