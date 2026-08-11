@@ -1,4 +1,5 @@
 import asyncio
+import ast
 import threading
 
 import pytest
@@ -133,6 +134,8 @@ def test_success_cache_uses_official_intent_id_not_legacy_description(tmp_path, 
             "20260811",
             runtime_safety_gate=gate,
             current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=TrackingIntentStore(),
+            fill_reconciliation_guard=lambda ticker: False,
         )
     )
 
@@ -161,6 +164,8 @@ def test_success_cache_dedupes_same_intent_even_when_ui_description_changes(tmp_
             "20260811",
             runtime_safety_gate=gate,
             current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=TrackingIntentStore(),
+            fill_reconciliation_guard=lambda ticker: False,
         )
     )
 
@@ -284,6 +289,8 @@ def test_official_order_with_matching_t_revision_still_submits_and_dedupes(
             "20260811",
             runtime_safety_gate=gate,
             current_t_revision_provider=current_t_revision_provider(3),
+            order_intent_store=TrackingIntentStore(),
+            fill_reconciliation_guard=lambda ticker: False,
         )
     )
 
@@ -477,6 +484,8 @@ def test_official_order_accepts_digit_integer_strings(tmp_path, monkeypatch, fie
             "20260811",
             runtime_safety_gate=gate,
             current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=TrackingIntentStore(),
+            fill_reconciliation_guard=lambda ticker: False,
         )
     )
 
@@ -996,6 +1005,7 @@ def test_official_order_partial_reconciliation_guard_blocks_before_broker_call(t
             "20260811",
             runtime_safety_gate=gate,
             current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=TrackingIntentStore(),
             fill_reconciliation_guard=lambda ticker: True,
         )
     )
@@ -1004,6 +1014,48 @@ def test_official_order_partial_reconciliation_guard_blocks_before_broker_call(t
     assert broker.calls == []
     assert "PARTIAL_FILL_OPEN" in messages
     assert "PARTIAL_FILL_OPEN" in failure
+
+
+def test_official_order_requires_intent_store_wiring_before_broker_call(tmp_path, monkeypatch):
+    gate = RuntimeSafetyGate(write_state(tmp_path / "runtime_safety.json"))
+    broker = LegacyPositionalBroker(gate)
+    monkeypatch.setattr(order_executor.asyncio, "sleep", no_sleep)
+
+    success, messages, failure = asyncio.run(
+        execute_order_list(
+            broker,
+            "SOXL",
+            [official_order()],
+            set(),
+            True,
+            "20260811",
+            runtime_safety_gate=gate,
+            current_t_revision_provider=current_t_revision_provider(),
+            order_intent_store=None,
+            fill_reconciliation_guard=lambda ticker: False,
+        )
+    )
+
+    assert success is False
+    assert broker.calls == []
+    assert "ORDER_INTENT_STORE_UNAVAILABLE" in messages
+    assert "ORDER_INTENT_STORE_UNAVAILABLE" in failure
+
+
+def test_scheduler_regular_passes_task5_order_safety_dependencies_to_executor():
+    source = __import__("pathlib").Path("scheduler_regular.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "execute_order_list"
+    ]
+
+    assert calls
+    for call in calls:
+        keywords = {keyword.arg for keyword in call.keywords if keyword.arg is not None}
+        assert "current_t_revision_provider" in keywords
+        assert "order_intent_store" in keywords
+        assert "fill_reconciliation_guard" in keywords
 
 
 def test_legacy_order_ignores_partial_reconciliation_guard_for_backward_compatibility(tmp_path, monkeypatch):

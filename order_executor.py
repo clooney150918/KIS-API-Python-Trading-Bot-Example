@@ -243,6 +243,12 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             if o_qty <= 0:
                 msgs += f"⚠️ {order_category}: 수량 0주 산출로 타격 바이패스 (안전 격리)\n"
                 continue
+            if official_order and order_intent_store is None:
+                code = "ORDER_INTENT_STORE_UNAVAILABLE"
+                all_success = False
+                loop_fail_reason = f"[{ticker}] {order_category} 주문 의도 원장 미연결: {code}"
+                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
+                break
             if official_order and _fill_guard_forbids_new_orders(fill_reconciliation_guard, ticker):
                 code = "PARTIAL_FILL_OPEN"
                 all_success = False

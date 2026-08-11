@@ -91,11 +91,66 @@ def test_fill_key_is_stable_but_matching_key_includes_account_ticker_exchange_da
     first = normalize_kis_execution(kis_fill(), account_fingerprint="acct-A")
     second = normalize_kis_execution(kis_fill(pdno="TQQQ"), account_fingerprint="acct-B")
 
-    assert build_fill_key(first) == "ODNO-1|223015|BUY|4|100.00"
-    assert build_fill_key(first) == build_fill_key(second)
+    assert build_fill_key(first) == "acct-A|SOXL|AMEX|20260812|ODNO-1|223015|BUY|4|100.00"
+    assert build_fill_key(first) != build_fill_key(second)
     assert build_matching_key(first) != build_matching_key(second)
     assert build_matching_key(first).startswith("acct-A|SOXL|AMEX|20260812|ODNO-1")
     assert build_matching_key(first) != "ODNO-1"
+
+
+def test_unclassified_manual_fill_halt_persists_across_duplicate_reconcile_runs(tmp_path):
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-1"), event_type="FULL_BUY", qty=4, price="100.00")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    manual_row = kis_fill(odno="MANUAL-DURABLE-1", ft_ccld_qty="1")
+
+    first = reconciler.reconcile("SOXL", [manual_row])
+    second = reconciler.reconcile("SOXL", [manual_row])
+
+    assert first["operator_halt"] is True
+    assert "UNCLASSIFIED_FILL" in first["codes"]
+    assert second["operator_halt"] is True
+    assert second["partial_open"] is True
+    assert reconciler.forbid_new_orders("SOXL") is True
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "SUBMITTED"
+    assert events_path.read_text(encoding="utf-8") == ""
+
+
+def test_fill_key_scope_prevents_cross_account_or_date_duplicate_suppression(tmp_path):
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
+    first = submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(account_fingerprint="acct-A", trade_date="20260812", order_no="ODNO-SAME"),
+        trade_date="2026-08-12",
+        event_type="FULL_BUY",
+        qty=4,
+        price="100.00",
+    )
+    second = submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(account_fingerprint="acct-B", trade_date="20260813", order_no="ODNO-SAME"),
+        trade_date="2026-08-13",
+        event_type="HALF_BUY",
+        qty=4,
+        price="100.00",
+    )
+
+    result_a = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A").reconcile(
+        "SOXL", [kis_fill(odno="ODNO-SAME", ord_dt="20260812", ord_tmd="223015")]
+    )
+    result_b = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-B").reconcile(
+        "SOXL", [kis_fill(odno="ODNO-SAME", ord_dt="20260813", ord_tmd="223015")]
+    )
+
+    assert result_a["new_fill_count"] == 1
+    assert result_b["new_fill_count"] == 1
+    latest = {record["intent_id"]: record for record in intent_store.list_intents("SOXL")}
+    assert latest[first["intent_id"]]["status"] == "FILLED"
+    assert latest[second["intent_id"]]["status"] == "FILLED"
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == 2
+    processed_lines = processed_path.read_text(encoding="utf-8").splitlines()
+    assert len(processed_lines) == 2
+    assert json.loads(processed_lines[0])["fill_key"] != json.loads(processed_lines[1])["fill_key"]
 
 
 
@@ -161,6 +216,33 @@ def test_append_event_failure_leaves_final_fill_retryable_without_terminal_statu
     assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
     assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
     assert len(processed_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_rollback_does_not_clobber_unrelated_intent_appended_after_snapshot(tmp_path, monkeypatch):
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
+    submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-ROLLBACK"), event_type="FULL_BUY", qty=4)
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    real_snapshot = reconciler._snapshot_ledgers
+
+    def snapshot_then_unrelated_append():
+        snapshots = real_snapshot()
+        intent_store.create_planned(planned_intent(trade_date="2026-08-13", event_type="HALF_BUY"))
+        return snapshots
+
+    def crash_after_t_event(intent_id, status):
+        raise RuntimeError("simulated crash after snapshot while unrelated writer appended")
+
+    monkeypatch.setattr(reconciler, "_snapshot_ledgers", snapshot_then_unrelated_append)
+    monkeypatch.setattr(intent_store, "transition_status", crash_after_t_event)
+
+    with pytest.raises(FillReconciliationError):
+        reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-ROLLBACK")])
+
+    intents = intent_store.list_intents("SOXL")
+    assert any(record["event_type"] == "HALF_BUY" and record["status"] == "PLANNED" for record in intents)
+    assert any(record["event_type"] == "FULL_BUY" and record["status"] == "SUBMITTED" for record in intents)
+    assert events_path.read_text(encoding="utf-8") == ""
+    assert processed_path.read_text(encoding="utf-8") == ""
 
 def test_order_acceptance_without_any_fill_keeps_submitted_and_does_not_append_t_event(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)

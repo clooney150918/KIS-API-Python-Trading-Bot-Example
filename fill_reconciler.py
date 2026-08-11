@@ -91,6 +91,10 @@ def _money_text(value: Decimal) -> str:
 
 def build_fill_key(fill: Mapping[str, Any]) -> str:
     return "|".join([
+        _text(fill.get("account_fingerprint")),
+        _text(fill.get("ticker")).upper(),
+        _text(fill.get("exchange")).upper(),
+        _text(fill.get("trade_date")),
         _text(fill.get("order_no")),
         _text(fill.get("execution_time")),
         _text(fill.get("side")).upper(),
@@ -181,13 +185,27 @@ class FillReconciler:
         self.processed_fill_store = processed_fill_store
         self.account_fingerprint = account_fingerprint
         self.tx_lock_path = processed_fill_store.ledger_path.with_suffix(".reconcile.lock")
+        self._rollback_context: dict[str, Any] | None = None
 
     def forbid_new_orders(self, ticker: str) -> bool:
+        ticker = _text(ticker).upper()
         try:
             latest = _latest_by_intent(self.intent_store.list_intents(ticker))
-        except OrderIntentLedgerCorruptError:
+            processed = self.processed_fill_store.list_records()
+        except (OrderIntentLedgerCorruptError, ProcessedFillLedgerCorruptError):
             return True
-        return any(record.get("status") == "PARTIAL" for record in latest.values())
+        if any(record.get("status") == "PARTIAL" for record in latest.values()):
+            return True
+        durable_halt_classifications = {
+            "UNCLASSIFIED",
+            "UNCLASSIFIED_AFTER_FILLED",
+            "CANCELLED_PARTIAL_REMAINS",
+        }
+        return any(
+            _text(record.get("ticker")).upper() == ticker
+            and record.get("classification") in durable_halt_classifications
+            for record in processed
+        )
 
     def reconcile(self, ticker: str, kis_execution_rows: list[Mapping[str, Any]]) -> dict[str, Any]:
         ticker = _text(ticker).upper()
@@ -251,6 +269,11 @@ class FillReconciler:
 
                 event = self._build_t_event(intent, fill, accumulated_qty, accumulated_amount)
                 snapshots = self._snapshot_ledgers()
+                self._rollback_context = {
+                    "intent_id": intent["intent_id"],
+                    "fill_key": event["fill_key"],
+                    "event_id": event["event_id"],
+                }
                 try:
                     self.trade_state_store.append_event(event)
                     self._record_processed(fill, intent["intent_id"], "FINAL")
@@ -258,10 +281,13 @@ class FillReconciler:
                 except Exception as exc:
                     self._restore_ledgers(snapshots)
                     raise FillReconciliationError("atomic fill finalization failed; retry required") from exc
+                finally:
+                    self._rollback_context = None
                 result["new_fill_count"] += 1
             result["partial_open"] = self.forbid_new_orders(ticker)
             if result["partial_open"]:
                 result["operator_halt"] = True
+                _add_code(result, "RECONCILIATION_HALT_OPEN")
         return result
 
     def _match_intent(self, ticker: str, fill: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -293,6 +319,11 @@ class FillReconciler:
 
     def _restore_ledgers(self, snapshots: Mapping[Path, bytes | None]) -> None:
         for path, content in snapshots.items():
+            current = path.read_bytes() if path.exists() else None
+            rollback_content = self._rollback_content_for_path(path, content, current)
+            if rollback_content == current:
+                continue
+            content = rollback_content
             if content is None:
                 try:
                     path.unlink()
@@ -309,6 +340,42 @@ class FillReconciler:
                 os.close(fd)
             os.replace(str(temp_path), str(path))
             _fsync_dir(path.parent)
+
+    def _rollback_content_for_path(self, path: Path, snapshot: bytes | None, current: bytes | None) -> bytes | None:
+        context = self._rollback_context or {}
+        if current is None:
+            return snapshot
+        snapshot_bytes = snapshot or b""
+        if not current.startswith(snapshot_bytes):
+            # Unknown concurrent rewrite: fail closed without clobbering newer content.
+            return current
+        suffix = current[len(snapshot_bytes):]
+        if not suffix:
+            return snapshot
+        preserved: list[bytes] = []
+        for raw_line in suffix.splitlines(keepends=True):
+            if not raw_line.strip():
+                preserved.append(raw_line)
+                continue
+            if not raw_line.endswith(b"\n"):
+                return current
+            try:
+                record = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return current
+            if self._is_transaction_record(path, record, context):
+                continue
+            preserved.append(raw_line)
+        return snapshot_bytes + b"".join(preserved)
+
+    def _is_transaction_record(self, path: Path, record: Mapping[str, Any], context: Mapping[str, Any]) -> bool:
+        if path == Path(self.trade_state_store.events_path):
+            return record.get("event_id") == context.get("event_id") or record.get("fill_key") == context.get("fill_key")
+        if path == Path(self.processed_fill_store.ledger_path):
+            return record.get("fill_key") == context.get("fill_key")
+        if path == Path(self.intent_store.ledger_path):
+            return record.get("intent_id") == context.get("intent_id") and record.get("status") == "FILLED"
+        return False
 
     def _fill_within_intent(self, intent: Mapping[str, Any], fill: Mapping[str, Any]) -> bool:
         if intent.get("side") != fill.get("side"):

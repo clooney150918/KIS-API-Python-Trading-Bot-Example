@@ -27,6 +27,23 @@ def _safe_float(val):
     except Exception:
         return 0.0
 
+
+def _task5_order_safety_kwargs(app_data):
+    """Forward Task 5 official-order reconciliation dependencies when provided.
+
+    Task 5 remains fail-closed inside ``order_executor`` when these dependencies
+    are absent or unhealthy.  The scheduler must not silently strip them from
+    production call sites, because official order acceptance and fill guards are
+    the boundary between KIS order receipt and T-event mutation.
+    """
+    if not isinstance(app_data, dict):
+        app_data = {}
+    return {
+        "current_t_revision_provider": app_data.get("current_t_revision_provider"),
+        "order_intent_store": app_data.get("order_intent_store"),
+        "fill_reconciliation_guard": app_data.get("fill_reconciliation_guard"),
+    }
+
 async def scheduled_early_regular_trade(context):
     is_open = False
     for attempt in range(3):
@@ -83,6 +100,7 @@ async def scheduled_early_regular_trade(context):
     MAX_RETRIES = 5
     RETRY_DELAY = 10
     successful_orders_cache = set()
+    order_safety_kwargs = _task5_order_safety_kwargs(app_data)
 
     async def _do_early_trade():
         est_z = ZoneInfo('America/New_York')
@@ -212,7 +230,10 @@ async def scheduled_early_regular_trade(context):
                         if not isinstance(target_orders, list): target_orders = []
                         
                         success_core, msg_core, fail_reason_core = await execute_order_list(
-                            broker, t, target_orders, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수"
+                            broker, t, target_orders, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수",
+                            current_t_revision_provider=order_safety_kwargs["current_t_revision_provider"],
+                            order_intent_store=order_safety_kwargs["order_intent_store"],
+                            fill_reconciliation_guard=order_safety_kwargs["fill_reconciliation_guard"],
                         )
                         msgs[t] += msg_core
 
@@ -226,7 +247,10 @@ async def scheduled_early_regular_trade(context):
                         
                         if all_success_map[t]:
                             success_bonus, msg_bonus, fail_reason_bonus = await execute_order_list(
-                                broker, t, target_bonus, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="2차 보너스"
+                                broker, t, target_bonus, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="2차 보너스",
+                                current_t_revision_provider=order_safety_kwargs["current_t_revision_provider"],
+                                order_intent_store=order_safety_kwargs["order_intent_store"],
+                                fill_reconciliation_guard=order_safety_kwargs["fill_reconciliation_guard"],
                             )
                             msgs[t] += msg_bonus
                             if not success_bonus:
@@ -384,6 +408,7 @@ async def scheduled_regular_trade_delayed(context):
     MAX_RETRIES = 15
     RETRY_DELAY = 60
     successful_orders_cache = set()
+    order_safety_kwargs = _task5_order_safety_kwargs(app_data)
 
     async def _do_delayed_trade():
         async with tx_lock:
@@ -562,7 +587,10 @@ async def scheduled_regular_trade_delayed(context):
                     is_capital_locked = capital_locked_map.get(t, False) 
                     
                     success_core, msg_core, fail_reason_core = await execute_order_list(
-                        broker, t, target_orders, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=is_capital_locked, order_category="1차 필수"
+                        broker, t, target_orders, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=is_capital_locked, order_category="1차 필수",
+                        current_t_revision_provider=order_safety_kwargs["current_t_revision_provider"],
+                        order_intent_store=order_safety_kwargs["order_intent_store"],
+                        fill_reconciliation_guard=order_safety_kwargs["fill_reconciliation_guard"],
                     )
                     msgs[t] += msg_core
 
@@ -578,7 +606,10 @@ async def scheduled_regular_trade_delayed(context):
                         msgs[t] += f"⚠️ 1차 필수 장전 실패로 2차 보너스 덫 보류 (중복 매매 방어)\n"
                     else:
                         success_bonus, msg_bonus, fail_reason_bonus = await execute_order_list(
-                            broker, t, target_bonus, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=is_capital_locked, order_category="2차 보너스"
+                            broker, t, target_bonus, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=is_capital_locked, order_category="2차 보너스",
+                            current_t_revision_provider=order_safety_kwargs["current_t_revision_provider"],
+                            order_intent_store=order_safety_kwargs["order_intent_store"],
+                            fill_reconciliation_guard=order_safety_kwargs["fill_reconciliation_guard"],
                         )
                         msgs[t] += msg_bonus
                         if not success_bonus:
