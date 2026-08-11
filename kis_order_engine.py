@@ -267,6 +267,7 @@ class KisOrderEngine(MarketDataProvider):
             path=path,
             body=body,
             account_fingerprint=fingerprint,
+            account_fingerprint_key=key,
             account_fingerprint_key_available=key is not None,
             order_type=order_type,
             risk_reference_price=risk_reference_price,
@@ -935,4 +936,3 @@ class KisOrderEngine(MarketDataProvider):
         if curr_qty > 0: ledger_records.append({'date': 'INCOMPLETE', 'side': 'UNKNOWN', 'qty': curr_qty, 'price': self._safe_float(t_info.get('avg', 0.0)), 'is_incomplete': True})
         ledger_records.reverse()
         return ledger_records, int(self._safe_float(t_info.get('qty', 0))), self._safe_float(t_info.get('avg', 0.0))
-

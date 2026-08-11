@@ -24,7 +24,12 @@ import tempfile
 import logging
 from zoneinfo import ZoneInfo
 from global_throttle import GlobalThrottle # 🚨 중앙 통제소 결속
-from runtime_safety import AuthorizationError, RuntimeSafetyGate, safety_block_result
+from runtime_safety import (
+    AuthorizationError,
+    RuntimeSafetyGate,
+    safety_block_result,
+    serialize_request_body_bytes,
+)
 
 
 _ORDER_SUBMISSION_TR_IDS = frozenset({
@@ -207,17 +212,14 @@ class KisApiClient:
                 return None, self._order_authorization_block(
                     "ORDER_AUTHORIZATION_REQUIRED"
                 )
-            tr_id = str((headers or {}).get("tr_id") or "")
+            header_snapshot = dict(headers or {})
+            tr_id = str(header_snapshot.get("tr_id") or "")
             path = str(url or "").split("?", 1)[0]
             base_url = str(getattr(self, "base_url", "") or "").rstrip("/")
             if base_url and path.startswith(base_url):
                 path = path[len(base_url):] or "/"
             try:
-                wire_payload = (
-                    json.dumps(data, ensure_ascii=False, allow_nan=False)
-                    if data is not None else None
-                )
-                wire_body = json.loads(wire_payload) if wire_payload is not None else None
+                wire_payload = serialize_request_body_bytes(data)
             except (TypeError, ValueError):
                 return None, self._order_authorization_block(
                     "ORDER_AUTHORIZATION_REQUEST_MISMATCH",
@@ -229,13 +231,13 @@ class KisApiClient:
                     method=method,
                     tr_id=tr_id,
                     path=path,
-                    body=wire_body,
+                    body=wire_payload,
                 ):
                     try:
                         GlobalThrottle.wait_api_sync()
                         res = requests.post(
                             url,
-                            headers=headers,
+                            headers=header_snapshot,
                             data=wire_payload,
                             timeout=10,
                         )
@@ -390,4 +392,3 @@ class KisApiClient:
 
         self._excg_cd_cache[ticker] = {'PRICE': price_cd, 'ORDER': order_cd}
         return price_cd if target_api == "PRICE" else order_cd
-

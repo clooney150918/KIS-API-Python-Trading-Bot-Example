@@ -8,6 +8,7 @@ import fcntl
 import hashlib
 import hmac
 import json
+import math
 from pathlib import Path
 import os
 import secrets
@@ -31,6 +32,26 @@ OVERSEAS_ORDER_TYPE_CODES = {
     "MOC": "33",
     "LOC": "34",
 }
+_OVERSEAS_ORDER_TYPES_BY_CODE = {
+    code: order_type for order_type, code in OVERSEAS_ORDER_TYPE_CODES.items()
+}
+_NEW_ORDER_WIRE_SCHEMAS = {
+    "/uapi/overseas-stock/v1/trading/order": {
+        "tr_ids": {"TTTT1002U": "BUY", "TTTT1006U": "SELL"},
+        "quantity_field": "ORD_QTY",
+        "price_field": "OVRS_ORD_UNPR",
+    },
+    "/uapi/overseas-stock/v1/trading/daytime-order": {
+        "tr_ids": {"TTTS6036U": "BUY", "TTTS6037U": "SELL"},
+        "quantity_field": "ORD_QTY",
+        "price_field": "OVRS_ORD_UNPR",
+    },
+    "/uapi/overseas-stock/v1/trading/order-resv": {
+        "tr_ids": {"TTTT3014U": "BUY", "TTTT3016U": "SELL"},
+        "quantity_field": "FT_ORD_QTY",
+        "price_field": "FT_ORD_UNPR3",
+    },
+}
 _CHECKPOINT_LOCKS = {}
 _CHECKPOINT_LOCKS_GUARD = threading.Lock()
 _MAX_AUTHORIZATION_TTL_SECONDS = 30
@@ -44,37 +65,51 @@ def canonical_order_values(side, order_type="LIMIT"):
     )
 
 
-def _canonical_request_value(value):
-    """Return a JSON-safe value without lossy Decimal/float conversion."""
-    if isinstance(value, bool) or value is None or isinstance(value, int):
+def _validate_json_request_value(value):
+    """Reject values outside the exact JSON data model before serialization."""
+    if value is None or type(value) in (bool, int):
         return value
-    if isinstance(value, Decimal):
-        if not value.is_finite():
-            raise ValueError("request body contains a non-finite Decimal")
-        return str(value)
-    if isinstance(value, float):
-        decimal_value = Decimal(str(value))
-        if not decimal_value.is_finite():
+    if type(value) is float:
+        if not math.isfinite(value):
             raise ValueError("request body contains a non-finite float")
-        return str(decimal_value)
-    if isinstance(value, str):
         return value
-    if isinstance(value, (list, tuple)):
-        return [_canonical_request_value(item) for item in value]
-    if isinstance(value, dict):
-        if any(not isinstance(key, str) for key in value):
+    if type(value) is str:
+        return value
+    if type(value) is list:
+        return [_validate_json_request_value(item) for item in value]
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
             raise ValueError("request body object keys must be strings")
-        return {key: _canonical_request_value(item) for key, item in value.items()}
+        return {key: _validate_json_request_value(item) for key, item in value.items()}
     raise ValueError("request body contains an unsupported value")
 
 
-def canonical_request_digest(method, tr_id, path, body):
+def serialize_request_body_bytes(body):
+    """Serialize a JSON request body once with deterministic type-preserving bytes."""
+    return json.dumps(
+        _validate_json_request_value(body),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def canonical_request_digest(method, tr_id, path, body=None, *, body_bytes=None):
     """Return a deterministic digest of an immutable HTTP order request."""
+    if body_bytes is None:
+        if isinstance(body, (bytes, bytearray)):
+            body_bytes = body
+        else:
+            body_bytes = serialize_request_body_bytes(body)
+    if not isinstance(body_bytes, (bytes, bytearray)):
+        raise ValueError("request body bytes are required")
     envelope = {
         "method": str(method or "").strip().upper(),
         "tr_id": str(tr_id or "").strip(),
         "path": str(path or "").strip(),
-        "body": _canonical_request_value(body),
+        "body_sha256": hashlib.sha256(bytes(body_bytes)).hexdigest(),
+        "body_length": len(body_bytes),
     }
     if not envelope["method"] or not envelope["tr_id"] or not envelope["path"]:
         raise ValueError("method, tr_id, and path are required")
@@ -425,6 +460,100 @@ class RuntimeSafetyGate:
         ).encode("utf-8")
         return hmac.new(self._authorization_secret, payload, hashlib.sha256).hexdigest()
 
+    @staticmethod
+    def _exact_body_string(body, field):
+        value = body.get(field)
+        if type(value) is not str or not value:
+            raise ValueError(f"{field} must be a JSON string")
+        return value
+
+    def _parse_new_order_wire(
+        self,
+        *,
+        method,
+        tr_id,
+        path,
+        body,
+        account_fingerprint_key=None,
+    ):
+        if str(method or "").strip().upper() != "POST":
+            raise ValueError("new order wire method must be POST")
+        path_text = str(path or "").strip()
+        tr_id_text = str(tr_id or "").strip()
+        schema = _NEW_ORDER_WIRE_SCHEMAS.get(path_text)
+        if schema is None:
+            raise ValueError("unsupported new order path")
+        side = schema["tr_ids"].get(tr_id_text)
+        if side is None:
+            raise ValueError("unsupported new order TR id")
+        if not isinstance(body, dict):
+            raise ValueError("new order body must be a JSON object")
+
+        cano = self._exact_body_string(body, "CANO")
+        product_code = self._exact_body_string(body, "ACNT_PRDT_CD")
+        ticker = self._exact_body_string(body, "PDNO")
+        quantity_text = self._exact_body_string(body, schema["quantity_field"])
+        price_text = self._exact_body_string(body, schema["price_field"])
+        order_code = self._exact_body_string(body, "ORD_DVSN")
+        order_type = _OVERSEAS_ORDER_TYPES_BY_CODE.get(order_code)
+        if order_type is None:
+            raise ValueError("unsupported order division code")
+        quantity = self._decimal(quantity_text)
+        price = self._decimal(price_text)
+        if quantity <= 0 or quantity != quantity.to_integral_value():
+            raise ValueError("wire quantity must be a positive integer string")
+        if price < 0:
+            raise ValueError("wire price must be a non-negative decimal string")
+
+        wire_account_fingerprint = None
+        if account_fingerprint_key is not None:
+            wire_account_fingerprint = account_fingerprint(
+                cano,
+                product_code,
+                key=account_fingerprint_key,
+            )
+        return {
+            "account_fingerprint": wire_account_fingerprint,
+            "ticker": ticker,
+            "side": side,
+            "quantity": quantity,
+            "price": price,
+            "order_type": order_type,
+        }
+
+    def _wire_values_match_metadata(
+        self,
+        wire,
+        *,
+        ticker,
+        side,
+        quantity,
+        price,
+        order_type,
+        account_fingerprint,
+    ):
+        try:
+            metadata_quantity = self._decimal(quantity)
+            metadata_price = self._decimal(price)
+        except ValueError:
+            return False
+        if wire["ticker"] != ticker:
+            return False
+        if wire["side"] != side:
+            return False
+        if wire["order_type"] != order_type:
+            return False
+        if wire["quantity"] != metadata_quantity:
+            return False
+        if wire["price"] != metadata_price:
+            return False
+        if (
+            wire["account_fingerprint"] is not None
+            and wire["account_fingerprint"] != account_fingerprint
+        ):
+            return False
+        return True
+
     def authorize_request(
         self,
         ticker,
@@ -437,6 +566,7 @@ class RuntimeSafetyGate:
         path,
         body,
         account_fingerprint=None,
+        account_fingerprint_key=None,
         account_fingerprint_key_available=True,
         order_type="LIMIT",
         risk_reference_price=None,
@@ -454,7 +584,7 @@ class RuntimeSafetyGate:
                 side=side_text,
             ), None
         try:
-            request_digest = canonical_request_digest(method, tr_id, path, body)
+            body_bytes = serialize_request_body_bytes(body)
         except (TypeError, ValueError):
             return self.denied(
                 "ORDER_REQUEST_INVALID",
@@ -462,13 +592,60 @@ class RuntimeSafetyGate:
                 ticker=ticker_text,
                 side=side_text,
             ), None
+        try:
+            wire = self._parse_new_order_wire(
+                method=method,
+                tr_id=tr_id,
+                path=path,
+                body=body,
+                account_fingerprint_key=account_fingerprint_key,
+            )
+        except (TypeError, ValueError):
+            return self.denied(
+                "ORDER_REQUEST_INVALID",
+                "order request does not match a supported KIS new-order wire schema",
+                ticker=ticker_text,
+                side=side_text,
+            ), None
+        if not self._wire_values_match_metadata(
+            wire,
+            ticker=ticker_text,
+            side=side_text,
+            quantity=quantity,
+            price=price,
+            order_type=order_type_text,
+            account_fingerprint=account_fingerprint,
+        ):
+            return self.denied(
+                "WIRE_REQUEST_MISMATCH",
+                "caller order metadata differs from the KIS wire request",
+                shadow_only=False,
+                ticker=ticker_text,
+                side=side_text,
+            ), None
+        try:
+            request_digest = canonical_request_digest(
+                method, tr_id, path, body_bytes=body_bytes
+            )
+        except (TypeError, ValueError):
+            return self.denied(
+                "ORDER_REQUEST_INVALID",
+                "order request cannot be canonically digested",
+                ticker=ticker_text,
+                side=side_text,
+            ), None
+        policy_account_fingerprint = (
+            wire["account_fingerprint"]
+            if wire["account_fingerprint"] is not None
+            else account_fingerprint
+        )
         policy_values = (
-            ticker_text,
-            side_text,
-            order_type_text,
-            quantity,
-            price,
-            account_fingerprint,
+            wire["ticker"],
+            wire["side"],
+            wire["order_type"],
+            wire["quantity"],
+            wire["price"],
+            policy_account_fingerprint,
             account_fingerprint_key_available,
             risk_reference_price,
             trusted_market_quote,

@@ -16,8 +16,13 @@ from runtime_safety import (
     OrderAuthorization,
     RuntimeSafetyGate,
     canonical_request_digest,
+    serialize_request_body_bytes,
 )
-from test_runtime_safety import SYNTHETIC_ACCOUNT_FINGERPRINT, write_state
+from test_runtime_safety import (
+    SYNTHETIC_ACCOUNT_FINGERPRINT,
+    SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    write_state,
+)
 
 
 ORDER_BODY = {
@@ -90,11 +95,27 @@ def test_canonical_request_digest_binds_method_tr_id_path_and_canonical_json():
     assert digest != canonical_request_digest(
         **{**ORDER_REQUEST, "body": {**ORDER_BODY, "ORD_QTY": "2"}}
     )
-    assert canonical_request_digest(
-        **{**ORDER_REQUEST, "body": decimal_body}
-    ) == canonical_request_digest(
-        **{**ORDER_REQUEST, "body": {**decimal_body, "OVRS_ORD_UNPR": "100.00"}}
+    with pytest.raises(ValueError):
+        canonical_request_digest(**{**ORDER_REQUEST, "body": decimal_body})
+
+
+def test_strict_body_serializer_accepts_only_json_types_and_preserves_number_type():
+    string_body = {**ORDER_BODY, "OVRS_ORD_UNPR": "100.0"}
+    number_body = {**ORDER_BODY, "OVRS_ORD_UNPR": 100.0}
+
+    with pytest.raises(ValueError):
+        serialize_request_body_bytes(
+            {**ORDER_BODY, "OVRS_ORD_UNPR": Decimal("100.00")}
+        )
+    with pytest.raises(ValueError):
+        serialize_request_body_bytes({**ORDER_BODY, "extra": ("not", "json")})
+
+    assert serialize_request_body_bytes(string_body) != serialize_request_body_bytes(
+        number_body
     )
+    assert canonical_request_digest(
+        **{**ORDER_REQUEST, "body": string_body}
+    ) != canonical_request_digest(**{**ORDER_REQUEST, "body": number_body})
 
 
 def test_gate_mints_frozen_request_bound_authorization_only_for_live_decision(tmp_path):
@@ -333,6 +354,52 @@ def test_authorize_request_refuses_non_post_methods(tmp_path):
     )
 
     assert decision.code == "ORDER_REQUEST_METHOD_INVALID"
+    assert authorization is None
+
+
+def test_gate_parses_wire_body_as_authority_and_rejects_metadata_mismatch(tmp_path):
+    state_path = write_state(tmp_path / "runtime_safety.json")
+    body = {
+        **ORDER_BODY,
+        "CANO": "99999999",
+        "PDNO": "TQQQ",
+        "ORD_QTY": "99",
+        "OVRS_ORD_UNPR": "0",
+        "ORD_DVSN": "33",
+    }
+
+    decision, authorization = RuntimeSafetyGate(state_path).authorize_request(
+        "SOXL",
+        "BUY",
+        1,
+        "100.00",
+        method="POST",
+        tr_id="TTTT1002U",
+        path="/uapi/overseas-stock/v1/trading/order",
+        body=body,
+        account_fingerprint=SYNTHETIC_ACCOUNT_FINGERPRINT,
+        account_fingerprint_key=SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+        order_type="LIMIT",
+    )
+
+    assert decision.code == "WIRE_REQUEST_MISMATCH"
+    assert authorization is None
+
+
+def test_gate_rejects_order_wire_schema_non_string_relevant_values(tmp_path):
+    state_path = write_state(tmp_path / "runtime_safety.json")
+    body = {**ORDER_BODY, "ORD_QTY": 1, "OVRS_ORD_UNPR": 100.0}
+
+    decision, authorization = RuntimeSafetyGate(state_path).authorize_request(
+        **POLICY_REQUEST,
+        method="POST",
+        tr_id="TTTT1002U",
+        path="/uapi/overseas-stock/v1/trading/order",
+        body=body,
+        account_fingerprint_key=SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    )
+
+    assert decision.code == "ORDER_REQUEST_INVALID"
     assert authorization is None
 
 

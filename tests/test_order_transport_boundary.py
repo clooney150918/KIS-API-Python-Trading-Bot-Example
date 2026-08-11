@@ -432,6 +432,68 @@ def test_authorized_order_sends_immutable_body_snapshot(tmp_path, monkeypatch):
     assert json.loads(calls[0][1]["data"])["ORD_QTY"] == "1"
 
 
+def test_string_number_digest_inequality_blocks_mutated_wire_before_http(
+    tmp_path, monkeypatch
+):
+    client = make_client()
+    approved_body = dict(ORDER_BODY, OVRS_ORD_UNPR="100.0")
+    mutated_body = dict(approved_body, OVRS_ORD_UNPR=100.0)
+    gate, authorization = issue_wire_authorization(tmp_path, body=approved_body)
+    calls = install_fake_transport(monkeypatch)
+
+    response, result = client._api_request(
+        "POST", ORDER_URL, client._get_header("TTTT1002U"), data=mutated_body,
+        _order_authorization=authorization, _order_gate=gate,
+    )
+
+    assert response is None
+    assert calls == []
+    assert result["safety_decision"]["code"] == "ORDER_AUTHORIZATION_REQUEST_MISMATCH"
+
+
+def test_header_mutation_during_throttle_cannot_change_authorized_wire_tr_id(
+    tmp_path, monkeypatch
+):
+    client = make_client()
+    gate, authorization = issue_wire_authorization(tmp_path)
+    calls = []
+    headers = client._get_header("TTTT1002U")
+    throttle_entered = threading.Event()
+    release_throttle = threading.Event()
+    outcome = {}
+
+    def block_in_throttle():
+        throttle_entered.set()
+        assert release_throttle.wait(timeout=2)
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeResponse()
+
+    def send_order():
+        outcome["response"], outcome["result"] = client._api_request(
+            "POST", ORDER_URL, headers, data=ORDER_BODY,
+            _order_authorization=authorization, _order_gate=gate,
+        )
+
+    monkeypatch.setattr(
+        kis_api_client.GlobalThrottle, "wait_api_sync", block_in_throttle
+    )
+    monkeypatch.setattr(kis_api_client.requests, "post", fake_post)
+
+    worker = threading.Thread(target=send_order)
+    worker.start()
+    assert throttle_entered.wait(timeout=2)
+    headers["tr_id"] = "TTTT1006U"
+    release_throttle.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive()
+    assert outcome["result"]["rt_cd"] == "0"
+    assert len(calls) == 1
+    assert calls[0][1]["headers"]["tr_id"] == "TTTT1002U"
+
+
 def test_actual_order_io_holds_gate_lock_until_response_is_processed(tmp_path, monkeypatch):
     client = make_client()
     gate, authorization = issue_wire_authorization(tmp_path)
