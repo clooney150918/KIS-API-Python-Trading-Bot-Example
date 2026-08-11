@@ -83,9 +83,9 @@ class ConfigManager:
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
-        self.DEFAULT_SPLIT = {"SOXL": 40.0, "TQQQ": 40.0}
-        self.DEFAULT_TARGET = {"SOXL": 12.0, "TQQQ": 10.0}
-        self.DEFAULT_VERSION = {"SOXL": "V14", "TQQQ": "V14"}
+        self.DEFAULT_SPLIT = {"SOXL": 20.0, "TQQQ": 20.0}
+        self.DEFAULT_TARGET = {"SOXL": 20.0, "TQQQ": 20.0}
+        self.DEFAULT_VERSION = {"SOXL": "LAOER_V4_SOXL_20", "TQQQ": "LAOER_V4_SOXL_20"}
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
@@ -777,15 +777,23 @@ class ConfigManager:
 
     def get_version(self, t): 
         with GlobalThrottle.get_file_lock(self.FILES["VERSION_CFG"]):
-            val = self._load_json(self.FILES["VERSION_CFG"], self.DEFAULT_VERSION).get(t, self.DEFAULT_VERSION.get(t, "V14"))
-            if t == "TQQQ": return "V14"
-            return str(val)
+            d = self._load_json(self.FILES["VERSION_CFG"], self.DEFAULT_VERSION)
+            target = str(t or "").strip().upper()
+            val = str(d.get(target, self.DEFAULT_VERSION.get(target, "LAOER_V4_SOXL_20")))
+            if val in {"V4", "V14", "V4.0", "V14.x"}:
+                val = "LAOER_V4_SOXL_20"
+                d[target] = val
+                self._save_json(self.FILES["VERSION_CFG"], d)
+            return val
         
     def set_version(self, t, v):
         with GlobalThrottle.get_file_lock(self.FILES["VERSION_CFG"]):
-            if t == "TQQQ": v = "V14"
+            target = str(t or "").strip().upper()
+            val = str(v or "LAOER_V4_SOXL_20")
+            if val in {"V4", "V14", "V4.0", "V14.x"}:
+                val = "LAOER_V4_SOXL_20"
             d = self._load_json(self.FILES["VERSION_CFG"], self.DEFAULT_VERSION)
-            d[t] = v
+            d[target] = val
             self._save_json(self.FILES["VERSION_CFG"], d)
 
     def get_split_count(self, t): 

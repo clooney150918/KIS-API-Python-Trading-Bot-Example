@@ -31,7 +31,7 @@ class InfiniteStrategy:
             return {'core_orders': [], 'bonus_orders': [], 'orders': [],
                     't_val': 0.0, 'is_reverse': False, 'star_price': 0.0, 'one_portion': 0.0}
 
-        self.cfg.set_version(safe_ticker, "V4")
+        self.cfg.set_version(safe_ticker, "LAOER_V4_SOXL_20")
         return self.v4.get_plan(
             ticker=safe_ticker, current_price=current_price, avg_price=avg_price,
             qty=qty, prev_close=prev_close, ma_5day=ma_5day,

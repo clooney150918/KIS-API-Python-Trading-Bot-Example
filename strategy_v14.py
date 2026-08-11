@@ -56,20 +56,28 @@ class V4Strategy:
         
         data = {
             "date": today_str,
+            "strategy": str(safe_plan.get('strategy', '')),
+            "strategy_revision": int(self._safe_float(safe_plan.get('strategy_revision', 0))),
+            "t_revision": int(self._safe_float(safe_plan.get('t_revision', 0))),
+            "trade_date": str(safe_plan.get('trade_date', today_str)),
+            "ticker": str(ticker or "").strip().upper(),
+            "intent_ids": safe_plan.get('intent_ids') or [],
+            "source_balance_at": str(safe_plan.get('source_balance_at', '')),
             "total_q": int(self._safe_float(safe_plan.get('total_q', 0))),
             "avg_price": self._safe_float(safe_plan.get('avg_price', 0.0)),
             "one_portion": self._safe_float(safe_plan.get('one_portion', 0.0)),
             "star_price": self._safe_float(safe_plan.get('star_price', 0.0)),
             "star_ratio": self._safe_float(safe_plan.get('star_ratio', 0.0)),
             "target_price": self._safe_float(safe_plan.get('target_price', 0.0)), 
-            "t_val": round(self._safe_float(safe_plan.get('t_val', 0)), 2),
+            "t_val": self._safe_float(safe_plan.get('t_val', 0)),
             "is_reverse": bool(safe_plan.get('is_reverse', False)),
             "is_zero_start": bool(safe_plan.get('is_zero_start', False)),
             "initial_qty": int(self._safe_float(safe_plan.get('initial_qty', 0))),
             "orders": safe_plan.get('orders') or [],
             "core_orders": safe_plan.get('core_orders') or [],
             "bonus_orders": safe_plan.get('bonus_orders') or [],
-            "process_status": str(safe_plan.get('process_status', ''))
+            "process_status": str(safe_plan.get('process_status', '')),
+            "safety": safe_plan.get('safety'),
         }
         
         with GlobalThrottle.get_file_lock(snap_file):
@@ -139,294 +147,311 @@ class V4Strategy:
             return res
         return _clean(c_orders), _clean(b_orders)
 
+    def _empty_official_plan(self, ticker, qty=0, avg_price=0.0, t_val=0.0, *, reason="", process_status="⛔OFFICIAL_HALTED"):
+        return {
+            "strategy": "LAOER_V4_SOXL_20",
+            "strategy_revision": 1,
+            "t_revision": 0,
+            "trade_date": self._get_logical_date_str(),
+            "ticker": str(ticker or "").strip().upper(),
+            "orders": [], "core_orders": [], "bonus_orders": [],
+            "total_q": int(self._safe_float(qty)), "avg_price": self._safe_float(avg_price),
+            "t_val": self._safe_float(t_val), "one_portion": 0.0,
+            "process_status": process_status, "is_reverse": False,
+            "star_price": 0.0, "star_ratio": 0.0, "target_price": 0.0,
+            "real_cash_used": 0.0, "tracking_info": {}, "initial_qty": int(self._safe_float(qty)),
+            "is_zero_start": int(self._safe_float(qty)) == 0,
+            "intent_ids": [], "source_balance_at": "",
+            "safety": {"halted": True, "reason": reason or process_status},
+        }
+
+    def _load_official_state(self, ticker):
+        from trade_state_store import TradeStateStore
+        target = str(ticker or "").strip().upper()
+        store = TradeStateStore(self.cfg.FILES["STRATEGY_BASELINE"], self.cfg.FILES["T_EVENTS"])
+        baseline = store.load_baseline(target)
+        state = store.load_state(target)
+        status_setter = getattr(self.cfg, "_set_t_event_status", None)
+        if callable(status_setter):
+            status_setter(target, True)
+        return baseline, state
+
+    def _official_intent_id(self, order):
+        from order_intent_store import compute_intent_id
+        return compute_intent_id(order)
+
+    def _official_order(self, *, ticker, trade_date, t_revision, event_type, side, order_type, price, qty, desc="", risk_reference_price=None):
+        price_text = f"{self._safe_float(price):.2f}"
+        order = {
+            "strategy": "LAOER_V4_SOXL_20",
+            "strategy_revision": 1,
+            "t_revision": int(t_revision),
+            "trade_date": trade_date,
+            "ticker": str(ticker).upper(),
+            "event_type": str(event_type).upper(),
+            "side": str(side).upper(),
+            "order_type": str(order_type).upper(),
+            "type": str(order_type).upper(),
+            "price": price_text,
+            "qty": int(qty),
+            "desc": desc,
+        }
+        if risk_reference_price is not None:
+            order["risk_reference_price"] = self._safe_float(risk_reference_price)
+        order["intent_id"] = self._official_intent_id(order)
+        return order
+
+    def _snapshot_matches_official_revision(self, snapshot, *, strategy_revision, t_revision):
+        if not isinstance(snapshot, dict):
+            return False
+        try:
+            return (
+                snapshot.get("strategy") == "LAOER_V4_SOXL_20"
+                and int(snapshot.get("strategy_revision")) == int(strategy_revision)
+                and int(snapshot.get("t_revision")) == int(t_revision)
+                and isinstance(snapshot.get("intent_ids"), list)
+            )
+        except Exception:
+            return False
+
     def get_plan(self, ticker, current_price, avg_price, qty, prev_close, ma_5day=0.0, market_type="REG", available_cash=0, is_simulation=False, is_snapshot_mode=False, **kwargs):
+        import laoer_v4_20
+
+        target = str(ticker or "").strip().upper()
         current_price = self._safe_float(current_price)
         avg_price = self._safe_float(avg_price)
         qty = int(self._safe_float(qty))
-        prev_close = self._safe_float(prev_close)
-        available_cash = self._safe_float(available_cash)
-        real_available_cash = max(0.0, available_cash)
-        ma_5day = self._safe_float(ma_5day)
-        snap = None
+        real_available_cash = max(0.0, self._safe_float(available_cash))
+        trade_date = self._get_logical_date_str()
+        strategy_revision = 1
+
+        if target != "SOXL":
+            return self._empty_official_plan(
+                target, qty, avg_price,
+                reason="Official strategy only supports SOXL 20-split; non-SOXL orders are halted",
+                process_status="⛔SOXL전용HALT",
+            )
 
         # KIS 체결 재구성에 수동검토 항목이 있으면 실제 주문만 HALT한다.
         t_states = self.cfg._load_json(self.cfg.FILES.get("T_STATE", "data/t_state.json"), {})
-        t_state = t_states.get(ticker, {}) if isinstance(t_states, dict) else {}
+        t_state = t_states.get(target, {}) if isinstance(t_states, dict) else {}
         if isinstance(t_state, dict) and t_state.get("needs_manual_review", False) and not is_simulation:
             t_val = round(self._safe_float(t_state.get("t_val", 0.0)), 2)
-            return {
-                "orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price,
-                "t_val": t_val, "one_portion": 0.0, "process_status": "⛔T값 수동검토",
-                "is_reverse": False, "star_price": 0.0, "star_ratio": 0.0,
-                "target_price": 0.0, "real_cash_used": real_available_cash,
-                "tracking_info": {}, "initial_qty": qty, "is_zero_start": qty == 0,
-                "safety": {"halted": True, "reason": t_state.get("review_reason", "T값 수동검토 필요")}
-            }
+            return self._empty_official_plan(
+                target, qty, avg_price, t_val,
+                reason=t_state.get("review_reason", "T값 수동검토 필요"),
+                process_status="⛔T값 수동검토",
+            )
 
-        # V4.0: T는 원가 역산값이 아니라 체결 이벤트 상태값이다.
-        # Authoritative T-event ledger availability must be verified before
-        # returning any cached daily snapshot, otherwise stale cached orders can
-        # bypass fail-closed ledger HALT semantics.
-        t_val, _ = self.cfg.get_absolute_t_val(ticker, qty, avg_price)
-        t_val = round(self._safe_float(t_val), 2)
-        t_event_status_getter = getattr(self.cfg, "get_t_event_state_status", None)
-        t_event_status = t_event_status_getter(ticker) if callable(t_event_status_getter) else {"ok": True, "error": ""}
-        if isinstance(t_event_status, dict) and not t_event_status.get("ok", True):
-            reason = t_event_status.get("error") or "T event ledger unavailable"
-            plan_result = {
-                "orders": [], "core_orders": [], "bonus_orders": [],
-                "total_q": qty, "avg_price": avg_price, "t_val": t_val,
-                "one_portion": 0.0, "process_status": "⛔T이벤트원장HALT",
-                "is_reverse": False, "star_price": 0.0, "star_ratio": 0.0,
-                "target_price": 0.0, "real_cash_used": real_available_cash,
-                "tracking_info": {}, "initial_qty": qty, "is_zero_start": qty == 0,
-                "safety": {"halted": True, "reason": f"T event ledger unavailable: {reason}"}
-            }
-            if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
+        if "STRATEGY_BASELINE" not in getattr(self.cfg, "FILES", {}):
+            rev_state_compat = self.cfg.get_reverse_state(target)
+            if bool(rev_state_compat.get("is_active", False)) and market_type == "REG":
+                if current_price <= 0.0:
+                    return {
+                        "orders": [], "core_orders": [], "bonus_orders": [],
+                        "total_q": qty, "avg_price": avg_price, "t_val": self._safe_float(rev_state_compat.get("dynamic_t", 0.0)),
+                        "one_portion": 0.0, "process_status": "⛔가격오류", "is_reverse": True,
+                        "star_price": 0.0, "star_ratio": 0.0, "target_price": 0.0,
+                        "real_cash_used": real_available_cash, "tracking_info": {}, "initial_qty": qty,
+                        "is_zero_start": False,
+                    }
+                sell_qty = qty // 10
+                orders = []
+                if sell_qty > 0:
+                    orders.append({
+                        "side": "SELL", "price": 0.0, "qty": sell_qty, "type": "MOC",
+                        "risk_reference_price": current_price, "desc": "공식리버스무조건매도(1일차)",
+                    })
+                return {
+                    "orders": orders, "core_orders": orders, "bonus_orders": [],
+                    "total_q": qty, "avg_price": avg_price, "t_val": self._safe_float(rev_state_compat.get("dynamic_t", 0.0)),
+                    "one_portion": 0.0, "process_status": "♻️공식리버스(1일차 진입)", "is_reverse": True,
+                    "star_price": 0.0, "star_ratio": 0.0, "target_price": 0.0,
+                    "real_cash_used": real_available_cash, "tracking_info": {}, "initial_qty": qty,
+                    "is_zero_start": False,
+                }
+
+        try:
+            baseline, official_state = self._load_official_state(target)
+        except Exception as exc:
+            status_setter = getattr(self.cfg, "_set_t_event_status", None)
+            if callable(status_setter):
+                status_setter(target, False, exc)
+            logging.error(f"⛔ [{target}] T 이벤트 원장 로드 실패 — official adapter fail-closed: {exc}")
+            plan_result = self._empty_official_plan(
+                target, qty, avg_price,
+                reason=f"T event ledger unavailable: {exc}",
+                process_status="⛔T이벤트원장HALT",
+            )
+            if is_snapshot_mode: self.save_daily_snapshot(target, plan_result)
+            return plan_result
+
+        t_revision = int(official_state.revision)
+        t_val_dec = official_state.t
+        t_val = float(t_val_dec)
+        official_cash = official_state.available_cash
+        split = int(self._safe_float(self.cfg.get_split_count(target)) or 20)
+        if split != 20:
+            plan_result = self._empty_official_plan(
+                target, qty, avg_price, t_val,
+                reason="Official strategy only supports SOXL 20-split; configured split is not 20",
+                process_status="⛔20분할전용HALT",
+            )
+            plan_result["t_revision"] = t_revision
+            plan_result["source_balance_at"] = baseline.get("as_of", "")
+            if is_snapshot_mode: self.save_daily_snapshot(target, plan_result)
             return plan_result
 
         if not is_snapshot_mode:
-            snap = self.load_daily_snapshot(ticker)
-            if snap:
-                is_zero_val = snap.get("is_zero_start")
-                is_zero_snap = bool(is_zero_val) if is_zero_val is not None else (int(self._safe_float(snap.get("total_q", -1))) == 0)
-                
-                if is_zero_snap and prev_close > 0.0:
-                    target_p1 = max(0.01, round(self._ceil(prev_close * 1.15) - 0.01, 2))
-                    is_polluted = False
-                    
-                    for o in snap.get("core_orders", []):
-                        if str(o.get("side")) == "BUY":
-                            p = self._safe_float(o.get("price"))
-                            if p > 0 and abs(p - target_p1) / target_p1 >= 0.01:
-                                is_polluted = True
-                                break
-                                
-                    if is_polluted:
-                        logging.warning(f"🚨 [{ticker}] 0주 스냅샷 오염 감지! YF 무결성 종가(${prev_close}) 기반으로 V14 타점을 즉각 자가 치유(Self-Healing)합니다.")
-                        one_portion_amt = self._safe_float(snap.get("one_portion", 0.0))
-                        
-                        half_budget = one_portion_amt * 0.5
-                        new_q1 = int(math.floor(half_budget / target_p1)) if target_p1 > 0 else 0
-                        new_q2 = int(math.floor((one_portion_amt - half_budget) / target_p1)) if target_p1 > 0 else 0
-                        
-                        if new_q1 == 0 and new_q2 == 0 and target_p1 > 0 and one_portion_amt >= target_p1:
-                            new_q1 = int(math.floor(one_portion_amt / target_p1))
-                            
-                        for o_list in [snap.get("core_orders", []), snap.get("orders", [])]:
-                            idx = 1
-                            for o in o_list:
-                                if str(o.get("side")) == "BUY" and "새출발" in str(o.get("desc", "")):
-                                    o["price"] = target_p1
-                                    o["qty"] = new_q1 if idx == 1 else new_q2
-                                    idx += 1
-                                    
-                        self.save_daily_snapshot(ticker, snap)
+            snap = self.load_daily_snapshot(target)
+            if self._snapshot_matches_official_revision(snap, strategy_revision=strategy_revision, t_revision=t_revision):
                 return snap
 
-        split = self._safe_float(self.cfg.get_split_count(ticker))
-        if split <= 0: split = 20.0
+        rev_state = self.cfg.get_reverse_state(target)
+        is_rev_active = bool(rev_state.get("is_active", False)) or bool(official_state.reverse_active)
 
-        rev_state = self.cfg.get_reverse_state(ticker)
-        is_rev_active = rev_state.get('is_active', False)
-
-        # 전날 스냅샷에 리버스 기록이 있으면 리버스 상태로 간주
-        # (전날 리버스였다가 오늘 일반모드로 복귀한 경우 대비)
-        if not is_rev_active:
-            snap = self.load_daily_snapshot(ticker)
-            if snap and snap.get('is_reverse', False):
-                is_rev_active = True
+        orders = []
+        is_reverse = False
+        process_status = "공식SOXL20"
+        star_price = 0.0
+        star_ratio = 0.0
+        target_price = 0.0
+        one_portion = 0.0
+        kernel_fail_closed = False
+        kernel_reason = ""
 
         if is_rev_active:
-            loss_pct = ((current_price - avg_price) / avg_price * 100.0) if avg_price > 0 else 0.0
-            escape_thresh = -15.0 if ticker == "TQQQ" else -20.0
-            
-            if loss_pct >= escape_thresh and qty > 0:
-                logging.info(f"🚀 [{ticker}] 손실률 {loss_pct:.2f}% 도달 (임계치 {escape_thresh}%). 리버스 모드 탈출 및 일반 모드 롤오버를 가동합니다.")
-                dynamic_t = round(self._safe_float(rev_state.get('dynamic_t', 0)), 2)
-                rem_cash = self._safe_float(rev_state.get('rem_cash', 0.0))
-                
-                # 리버스 탈출: seed 재설정·T 리셋 없음. T값 유지.
-                self.cfg.set_reverse_state(ticker, False, 0.0, 0.0, dynamic_t=dynamic_t, rem_cash=rem_cash, is_day_one=False)
-                is_rev_active = False
-
-        seed = self._safe_float(self.cfg.get_seed(ticker))
-        target_pct_val = self._safe_float(self.cfg.get_target_profit(ticker))
-        target_ratio = target_pct_val / 100.0
-        
-        portion = seed / split if split > 0 else 1.0
-
-        target_price = self._ceil(avg_price * (1 + target_ratio)) if avg_price > 0 else 0.0
-        
-        is_jackpot_reached = target_price > 0 and current_price >= target_price
-        
-        one_portion_amt = portion
-        
-        # SOXL 20분할 원문 방법론: 별% = N/2 - T
-        star_ratio_percent = (split / 2.0) - t_val
-        star_ratio = star_ratio_percent / 100.0
-        star_price = self._ceil(avg_price * (1 + star_ratio)) if avg_price > 0 else 0.0
-          
-        if qty == 0:
-            base_price = prev_close
-        else:
-            base_price = prev_close if prev_close > 0.0 else current_price
-
-        if base_price <= 0.0: 
-            plan_result = {"orders": [], "core_orders": [], "bonus_orders": [], "total_q": qty, "avg_price": avg_price, "t_val": t_val, "one_portion": one_portion_amt, "process_status": "⛔가격오류", "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "target_price": target_price, "real_cash_used": real_available_cash, "tracking_info": {}, "initial_qty": qty, "is_zero_start": False}
-            if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
-            return plan_result
-
-        core_orders = []
-        bonus_orders = []
-        process_status = "예방적방어선"
-        is_zero_start_fact = False
-
-        if market_type == "REG":
-            if is_rev_active or t_val > (split - 1):
-                if not is_rev_active:
-                    logging.info(f"🚨 [{ticker}] T값({t_val})이 {split-1}을 돌파하여 리버스 모드(소진 방어)로 강제 진입합니다.")
-                    self.cfg.set_reverse_state(ticker, True, 0, 0.0, dynamic_t=t_val, rem_cash=real_available_cash, is_day_one=True)
-                    is_rev_active = True
-                else:
-                    # 🚨 NEW: 리버스 장부 정산(잔액 역산 및 정수 T값 갱신)을 스냅샷 모드에서 원자적 1회 호출
-                    if is_snapshot_mode:
-                        self.cfg.apply_reverse_daily_settlement(ticker)
-
-                # 🚨 MODIFIED: 갱신된 리버스 상태 다시 로드
-                rev_state = self.cfg.get_reverse_state(ticker)
-                dynamic_t = round(self._safe_float(rev_state.get('dynamic_t', 0)), 2)
-                rem_cash = self._safe_float(rev_state.get('rem_cash', 0.0))
-                is_day_one = rev_state.get('is_day_one', True)
-                
-                # SOXL 20분할: floor(Q/20) — 원문 방법론 기준
-                N_div = int(split) if split > 0 else 20
-                sell_qty = math.floor(qty / N_div)
-                
-                if is_day_one:
-                    # get_plan() already receives the current quote used for the
-                    # reverse loss decision. Reuse that trusted, caller-supplied
-                    # quote for MOC notional risk; never fetch or invent a fallback.
-                    if current_price <= 0.0:
-                        process_status = "⛔가격오류"
-                    else:
-                        if sell_qty > 0:
-                            core_orders.append({
-                                "side": "SELL", "price": 0.0, "qty": sell_qty,
-                                "type": "MOC", "risk_reference_price": current_price,
-                                "desc": "🩸리버스무조건매도(1일차)"
-                            })
-                        process_status = "♻️리버스(1일차 진입)"
-                else:
-                    # 리버스 별지점: 직전 5거래일 확정 종가 평균 (ma_5day 대체)
-                    rev_star = ma_5day if ma_5day > 0.0 else (prev_close if prev_close > 0.0 else current_price)
-                    buy_price = max(0.01, round(rev_star - 0.01, 2))
-                    
-                    buy_budget = rem_cash / 4.0
-                    buy_qty = math.floor(buy_budget / buy_price) if buy_price > 0 else 0
-                    
-                    if buy_qty > 0:
-                        core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty, "type": "LOC", "desc": "🩸리버스쿼터매수"})
-                    if sell_qty > 0:
-                        core_orders.append({"side": "SELL", "price": round(rev_star, 2), "qty": sell_qty, "type": "LOC", "desc": "🩸리버스분할매도"})
-        
-                    process_status = "♻️리버스(진행중)"
-                
-                core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)
-                orders = core_orders + bonus_orders
-                
-                plan_result = {
-                    "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders,
-                    "total_q": qty, "avg_price": avg_price, "t_val": dynamic_t,
-                    "one_portion": rem_cash / 4.0, "process_status": process_status, "is_reverse": True,
-                    "star_price": rev_star if not is_day_one else 0.0, "star_ratio": 0.0, 
-                    "target_price": target_price, "real_cash_used": real_available_cash, 
-                    "tracking_info": {}, "initial_qty": qty, "is_zero_start": False
-                }
-                if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
-                return plan_result
-
-            if qty == 0:
-                is_zero_start_fact = True
-                process_status = "✨새출발"
-                buy_price = max(0.01, round(self._ceil(base_price * 1.15) - 0.01, 2))
-                half_budget = one_portion_amt * 0.5
-                buy_qty1 = int(math.floor(half_budget / buy_price)) if buy_price > 0 else 0
-                buy_qty2 = int(math.floor((one_portion_amt - half_budget) / buy_price)) if buy_price > 0 else 0
-                
-                if buy_qty1 == 0 and buy_qty2 == 0 and buy_price > 0 and one_portion_amt >= buy_price:
-                    buy_qty1 = int(math.floor(one_portion_amt / buy_price))
-                
-                if buy_qty1 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty1, "type": "LOC", "desc": "🆕새출발1"})
-                if buy_qty2 > 0: core_orders.append({"side": "BUY", "price": buy_price, "qty": buy_qty2, "type": "LOC", "desc": "🆕새출발2"})
-                
-            elif is_jackpot_reached and t_val > (split - 1):
-                process_status = "🎉대박익절"
-                if qty > 0:
-                    core_orders.append({"side": "SELL", "price": target_price, "qty": int(qty), "type": "LIMIT", "desc": "🎯전량대박익절"})
-                
+            is_reverse = True
+            reverse_t = rev_state.get("dynamic_t", t_val_dec) or t_val_dec
+            reverse_cash = rev_state.get("rem_cash", official_cash) or official_cash
+            day = int(self._safe_float(rev_state.get("day_count", 1)))
+            if day <= 0:
+                day = 1
+            previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+            if day <= 1:
+                previous_closes = []
             else:
-                safe_ceiling = min(avg_price, star_price) if star_price > 0 else avg_price
-                p_avg = max(0.01, round(safe_ceiling - 0.01, 2))
-                
-                process_status = "🌓전반전" if t_val < (split / 2) else "🌕후반전"
-                
-                if t_val < (split / 2):
-                    b1_budget = one_portion_amt * 0.5
-                    b2_budget = one_portion_amt - b1_budget
-                    p_star = max(0.01, round(star_price - 0.01, 2))
-                    
-                    q_avg = math.floor(b1_budget / p_avg) if p_avg > 0 else 0
-                    q_star = math.floor(b2_budget / p_star) if p_star > 0 else 0
-                    
-                    if q_avg == 0 and q_star == 0:
-                        if p_avg > 0 and one_portion_amt >= p_avg: q_avg = math.floor(one_portion_amt / p_avg)
-                        elif p_star > 0 and one_portion_amt >= p_star: q_star = math.floor(one_portion_amt / p_star)
-                    elif q_avg == 0 and q_star > 0: q_star = math.floor(one_portion_amt / p_star) if p_star > 0 else 0
-                    elif q_star == 0 and q_avg > 0: q_avg = math.floor(one_portion_amt / p_avg) if p_avg > 0 else 0
-                    
-                    if q_avg > 0: core_orders.append({"side": "BUY", "price": p_avg, "qty": q_avg, "type": "LOC", "desc": "⚓평단매수"})
-                    if q_star > 0: core_orders.append({"side": "BUY", "price": p_star, "qty": int(q_star), "type": "LOC", "desc": "💫별값매수"})
-                else: 
-                    p_star = max(0.01, round(star_price - 0.01, 2))
-                    if p_star > 0:
-                        q_star_total = int(math.floor(one_portion_amt / p_star))
-                        if q_star_total > 0:
-                            core_orders.append({"side": "BUY", "price": p_star, "qty": q_star_total, "type": "LOC", "desc": "💫별값매수(통합)"})
-
-                q_sell = math.floor(qty / 4)
-                rem_qty = int(qty - q_sell)
-                if star_price > 0 and q_sell > 0:
-                    core_orders.append({"side": "SELL", "price": star_price, "qty": q_sell, "type": "LOC", "desc": "🌟별값매도(쿼터)"})
-                if target_price > 0 and rem_qty > 0:
-                    core_orders.append({"side": "SELL", "price": target_price, "qty": rem_qty, "type": "LIMIT", "desc": "🎯목표매도(잔여)"})
-
-            if is_zero_start_fact and market_type != "AFTER":
-                 core_orders = [o for o in core_orders if isinstance(o, dict) and o.get("side") != "SELL"]
-
-            q_base = sum(int(self._safe_float(o.get('qty'))) for o in core_orders if isinstance(o, dict) and o.get('side') == 'BUY')
-            if q_base > 0:
-                bonus_orders.extend(sorted([{"side": "BUY", "price": math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0, "qty": 1, "type": "LOC", "desc": f"🧲줍줍(+{n}주)"} for n in range(1, 6) if math.floor((one_portion_amt / (q_base + n)) * 100) / 100.0 > 0.01], key=lambda x: x['price'], reverse=True))
-
-            core_orders, bonus_orders = self._apply_wash_trade_shield(core_orders, bonus_orders)        
-            orders = core_orders + bonus_orders
-            
-            plan_result = {
-                "orders": orders, "core_orders": core_orders, "bonus_orders": bonus_orders, "total_q": qty, "avg_price": avg_price,
-                "t_val": t_val, "one_portion": one_portion_amt, "process_status": process_status,
-                "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, "target_price": target_price,
-                "real_cash_used": real_available_cash, "tracking_info": {}, "initial_qty": qty, "is_zero_start": is_zero_start_fact
-            }
-            if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
-            return plan_result
+                previous_closes = kwargs.get("previous_closes") or []
+                if not previous_closes and ma_5day:
+                    previous_closes = [ma_5day] * 5
+                elif not previous_closes and prev_close:
+                    previous_closes = [prev_close] * 5
+            reverse_plan = laoer_v4_20.calculate_reverse_plan(
+                laoer_v4_20.ReverseState(
+                    ticker=target,
+                    split=20,
+                    quantity=qty,
+                    previous_quantity=previous_quantity,
+                    avg_price=laoer_v4_20.Decimal(str(avg_price)),
+                    cash=laoer_v4_20.Decimal(str(reverse_cash)),
+                    t=laoer_v4_20.Decimal(str(reverse_t)),
+                    day=day,
+                    previous_closes=previous_closes,
+                    confirmed_close=kwargs.get("confirmed_close"),
+                )
+            )
+            t_val = float(reverse_plan.t)
+            star_price = float(reverse_plan.star_point)
+            one_portion = float(reverse_plan.buy_budget)
+            kernel_fail_closed = bool(reverse_plan.fail_closed)
+            kernel_reason = reverse_plan.reason
+            process_status = "♻️공식리버스"
+            if reverse_plan.return_to_normal:
+                process_status = "♻️리버스복귀대기"
+            elif not reverse_plan.fail_closed:
+                if reverse_plan.buy_quantity > 0:
+                    orders.append(self._official_order(
+                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                        event_type="FULL", side="BUY", order_type="LOC",
+                        price=reverse_plan.star_buy_price, qty=reverse_plan.buy_quantity,
+                        desc="공식리버스매수",
+                    ))
+                if reverse_plan.sell_quantity > 0:
+                    sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else (current_price or avg_price)
+                    orders.append(self._official_order(
+                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                        event_type="QUARTER", side="SELL", order_type=reverse_plan.sell_order_type,
+                        price=sell_price, qty=reverse_plan.sell_quantity,
+                        desc="공식리버스매도",
+                        risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
+                    ))
+        else:
+            normal_plan = laoer_v4_20.calculate_normal_plan(
+                laoer_v4_20.NormalState(
+                    ticker=target,
+                    split=20,
+                    quantity=qty,
+                    avg_price=laoer_v4_20.Decimal(str(avg_price)),
+                    cash=official_cash,
+                    t=t_val_dec,
+                    reverse=False,
+                )
+            )
+            star_price = float(normal_plan.star_point)
+            star_ratio = float(normal_plan.star_percent / laoer_v4_20.Decimal("100")) if hasattr(laoer_v4_20, "Decimal") else float(normal_plan.star_percent / __import__('decimal').Decimal("100"))
+            target_price = float(normal_plan.target_sell_price)
+            one_portion = float(normal_plan.one_buy_budget)
+            kernel_fail_closed = bool(normal_plan.fail_closed)
+            kernel_reason = normal_plan.reason
+            process_status = "🌓공식전반전" if normal_plan.phase == "FIRST_HALF" else "🌕공식후반전"
+            if normal_plan.reverse_entry:
+                process_status = "♻️공식리버스진입대기"
+            elif not normal_plan.fail_closed:
+                if normal_plan.average_buy_quantity > 0:
+                    orders.append(self._official_order(
+                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                        event_type="HALF", side="BUY", order_type="LOC",
+                        price=normal_plan.average_buy_price, qty=normal_plan.average_buy_quantity,
+                        desc="공식평단매수",
+                    ))
+                if normal_plan.star_buy_quantity > 0:
+                    event_type = "HALF" if normal_plan.average_buy_quantity > 0 else "FULL"
+                    orders.append(self._official_order(
+                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                        event_type=event_type, side="BUY", order_type="LOC",
+                        price=normal_plan.star_buy_price, qty=normal_plan.star_buy_quantity,
+                        desc="공식별값매수",
+                    ))
+                if normal_plan.quarter_sell_quantity > 0:
+                    orders.append(self._official_order(
+                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                        event_type="QUARTER", side="SELL", order_type="LOC",
+                        price=normal_plan.star_point, qty=normal_plan.quarter_sell_quantity,
+                        desc="공식별값매도",
+                    ))
+                if normal_plan.target_sell_quantity > 0:
+                    orders.append(self._official_order(
+                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                        event_type="TARGET_FULL", side="SELL", order_type="LIMIT",
+                        price=normal_plan.target_sell_price, qty=normal_plan.target_sell_quantity,
+                        desc="공식목표매도",
+                    ))
 
         plan_result = {
-            "orders": [], "core_orders": [], "bonus_orders": [], 
-            "total_q": qty, "avg_price": avg_price, "t_val": t_val, 
-            "one_portion": one_portion_amt, "process_status": "대기중",
-            "is_reverse": False, "star_price": star_price, "star_ratio": star_ratio, 
-            "target_price": target_price, "real_cash_used": real_available_cash, 
-            "tracking_info": {}, "initial_qty": qty, "is_zero_start": is_zero_start_fact
+            "strategy": "LAOER_V4_SOXL_20",
+            "strategy_revision": strategy_revision,
+            "t_revision": t_revision,
+            "trade_date": trade_date,
+            "ticker": target,
+            "orders": orders,
+            "core_orders": orders,
+            "bonus_orders": [],
+            "total_q": qty,
+            "avg_price": avg_price,
+            "t_val": t_val,
+            "one_portion": one_portion,
+            "process_status": process_status if not kernel_fail_closed else "⛔공식커널HALT",
+            "is_reverse": is_reverse,
+            "star_price": star_price,
+            "star_ratio": star_ratio,
+            "target_price": target_price,
+            "real_cash_used": real_available_cash,
+            "tracking_info": {},
+            "initial_qty": qty,
+            "is_zero_start": qty == 0,
+            "intent_ids": [o["intent_id"] for o in orders],
+            "source_balance_at": baseline.get("as_of", ""),
+            "safety": None if not kernel_fail_closed else {"halted": True, "reason": kernel_reason},
         }
-        if is_snapshot_mode: self.save_daily_snapshot(ticker, plan_result)
+        if is_snapshot_mode: self.save_daily_snapshot(target, plan_result)
         return plan_result
