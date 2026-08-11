@@ -3,8 +3,10 @@
 - UTC snapshot: `20260811T040118Z`
 - Source repository: `/opt/bots/soxl-trading-jinho`
 - Source HEAD: `2aa0e5ab49e0a858559520e59ea692a021bd926e`
-- Source dirty-status SHA-256: `482e072363d71e51e42b1534c97e33d498c3a21ec96f465c4654ec52f026de5e`
-- Immutable backup: `/root/backups/soxl-trading-jinho/pre-v4-official-20split-20260811T040118Z`
+- Source dirty-status SHA-256: `482e072363d71e51e42b1534c97e33d498c3a21ec96f465c4654ec52f026de5e` (hash of the NUL-delimited output from `git status --porcelain=v1 -z`)
+- Read-only, integrity-checked backup: `/root/backups/soxl-trading-jinho/pre-v4-official-20split-20260811T040118Z`
+- Backup protection scope: directories/files are mode `0555`/`0444` and checksummed; `chattr +i` is not used, so this is not filesystem-immutable.
+- Secret handling: the full recovery archive may contain plaintext `.env` or token material. Keep it access-restricted under `/root`; encrypt it before any external replication.
 - Full archive SHA-256: `102c02d66d0d0fdac2eab89ce5fa997cf78e5a03a42afdb264e65857db9de9f8`
 - Worktree-content archive SHA-256: `a5d8b57f7ee4a4305b39c94a66f89d601f52055727ea2826cd54daaee1c94401`
 - Repository bundle SHA-256: `3042f728e3d2ea4d44bb239b917987f3abb8bc1254a02d905cd959e1d7b1c798`
@@ -33,4 +35,6 @@ c3d8161a84743a96ac6199bd5daf4953f2f27d7b84545fea4e5ca82e0b6c397d  data/kis_balan
 - Restored worktree regular-file hashes: 336/336 passed before baseline commit.
 - Credential guard: `.env` is ignored and unstaged; no sensitive credential filename or literal credential assignment was staged.
 - RED: base image returned `No module named pytest` (exit 1).
-- GREEN: isolated image under `--network none` returned `1 passed in 0.03s`.
+- GREEN (original harness): isolated image under `--network none` returned `1 passed in 0.03s`.
+- Hardened GREEN: `scripts/run_offline_tests.sh --rebuild` built from the pinned local base with hash-locked test dependencies, then the isolated runtime returned `15 passed in 0.11s`.
+- Normal reruns use `scripts/run_offline_tests.sh`; `--rebuild` is only for the explicit dependency-image preparation step, whose build context contains only `Dockerfile.test` and `requirements-test.txt`.

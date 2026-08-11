@@ -1,11 +1,15 @@
-FROM bots-soxl-trading-jinho:latest
+FROM bots-soxl-trading-jinho@sha256:9b428cb5148282aa2ab5c9c3bd289315bd8a963c576c6a38b593a62cbd96f4ac
 
 COPY requirements-test.txt /tmp/requirements-test.txt
-RUN python -m pip install --no-cache-dir -r /tmp/requirements-test.txt
+RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-test.txt \
+    && rm -f /tmp/requirements-test.txt
 
 ENV OPERATOR_HALT=true \
     LIVE_ARMED=false \
-    SHADOW_ONLY=true
+    SHADOW_ONLY=true \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HOME=/tmp/home
 
 WORKDIR /app
-CMD ["python", "-m", "pytest", "-q"]
+USER 65532:65532
+CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]
