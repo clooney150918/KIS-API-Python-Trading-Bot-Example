@@ -22,8 +22,22 @@ import os
 import math
 import tempfile
 import logging
+import threading
 from zoneinfo import ZoneInfo
 from global_throttle import GlobalThrottle # 🚨 중앙 통제소 결속
+from runtime_safety import RuntimeSafetyGate, safety_block_result
+
+
+_ORDER_SUBMISSION_TR_IDS = frozenset({
+    "TTTT1002U", "TTTT1006U",
+    "TTTS6036U", "TTTS6037U",
+    "TTTT3014U", "TTTT3016U",
+})
+_ORDER_SUBMISSION_PATHS = frozenset({
+    "/uapi/overseas-stock/v1/trading/order",
+    "/uapi/overseas-stock/v1/trading/daytime-order",
+    "/uapi/overseas-stock/v1/trading/order-resv",
+})
 
 class KisApiClient:
     
@@ -37,7 +51,56 @@ class KisApiClient:
         self.token_file = f"data/token_{cano}.dat" 
         self.token = None
         self._excg_cd_cache = {} 
+        self._order_transport_capabilities = set()
+        self._order_transport_capability_lock = threading.Lock()
         self._get_access_token()
+
+    def _transport_capability_state(self):
+        if not hasattr(self, "_order_transport_capability_lock"):
+            self._order_transport_capability_lock = threading.Lock()
+            self._order_transport_capabilities = set()
+        return self._order_transport_capability_lock, self._order_transport_capabilities
+
+    def _issue_order_transport_capability(self, safety_decision):
+        """Mint a one-use identity token only for a completed LIVE authorization."""
+        if (
+            getattr(safety_decision, "can_submit", False) is not True
+            or getattr(safety_decision, "code", None) != "LIVE_AUTHORIZED"
+        ):
+            raise PermissionError("order transport capability requires LIVE authorization")
+        capability = object()
+        lock, capabilities = self._transport_capability_state()
+        with lock:
+            capabilities.add(capability)
+        return capability
+
+    @staticmethod
+    def _is_order_submission(method, url, headers):
+        if str(method or "").upper() != "POST":
+            return False
+        tr_id = str((headers or {}).get("tr_id") or "").upper()
+        path = str(url or "").split("?", 1)[0]
+        return tr_id in _ORDER_SUBMISSION_TR_IDS or any(
+            path.endswith(order_path) for order_path in _ORDER_SUBMISSION_PATHS
+        )
+
+    def _consume_order_transport_capability(self, capability):
+        lock, capabilities = self._transport_capability_state()
+        with lock:
+            if capability not in capabilities:
+                return False
+            capabilities.remove(capability)
+            return True
+
+    @staticmethod
+    def _transport_capability_block(code):
+        decision = RuntimeSafetyGate.denied(
+            code,
+            "authorized one-use order transport capability is required",
+            shadow_only=False,
+        )
+        return safety_block_result(decision)
+
 
     def _safe_float(self, value):
         """ 🚨 [수학 연산 붕괴 방어] 맹독성 결측치 쉴드 복구 완료 """
@@ -148,7 +211,20 @@ class KisApiClient:
             "custtype": "P"
         }
 
-    def _api_request(self, method, url, headers, params=None, data=None):
+    def _api_request(
+        self, method, url, headers, params=None, data=None, *,
+        order_transport_capability=None,
+    ):
+        if self._is_order_submission(method, url, headers):
+            if order_transport_capability is None:
+                return None, self._transport_capability_block(
+                    "ORDER_TRANSPORT_CAPABILITY_REQUIRED"
+                )
+            if not self._consume_order_transport_capability(order_transport_capability):
+                return None, self._transport_capability_block(
+                    "ORDER_TRANSPORT_CAPABILITY_INVALID"
+                )
+
         # 🚨 MODIFIED: [맹독성 에러 키워드 스펙트럼 확장] 정기점검 후 KIS 서버의 비표준 Reject 에러 키워드 일괄 결속
         TOKEN_EXPIRY_KEYWORDS = frozenset([
             'expired', '인증', 'authorization', 'egt0001', 'egt0002', 'oauth', 
@@ -209,10 +285,16 @@ class KisApiClient:
                 time.sleep(1.0 * (2 ** attempt))
         return None, {}
 
-    def _call_api(self, tr_id, url_path, method="GET", params=None, body=None):
+    def _call_api(
+        self, tr_id, url_path, method="GET", params=None, body=None, *,
+        order_transport_capability=None,
+    ):
         headers = self._get_header(tr_id)
         url = f"{self.base_url}{url_path}"
-        res, resp_json = self._api_request(method, url, headers, params=params, data=body)
+        res, resp_json = self._api_request(
+            method, url, headers, params=params, data=body,
+            order_transport_capability=order_transport_capability,
+        )
         if not resp_json: return {'rt_cd': '999', 'msg1': '통신 오류 또는 최대 재시도 횟수 초과'}
         return resp_json
 

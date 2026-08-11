@@ -19,10 +19,26 @@ import math
 import logging
 from zoneinfo import ZoneInfo
 from market_data_provider import MarketDataProvider
-from runtime_safety import RuntimeSafetyGate, account_fingerprint, safety_block_result
+from runtime_safety import (
+    OVERSEAS_ORDER_TYPE_CODES,
+    RuntimeSafetyGate,
+    account_fingerprint,
+    canonical_order_values,
+    safety_block_result,
+)
 from shadow_intent import ShadowIntentRecorder
 
 class KisOrderEngine(MarketDataProvider):
+
+    _REGULAR_ORDER_TYPES = {
+        "BUY": frozenset({"LIMIT", "LOO", "LOC"}),
+        "SELL": frozenset(OVERSEAS_ORDER_TYPE_CODES),
+    }
+    _DAYTIME_ORDER_TYPES = frozenset({"LIMIT"})
+    _RESERVATION_ORDER_TYPES = {
+        "BUY": frozenset({"LIMIT", "LOO", "LOC"}),
+        "SELL": frozenset(OVERSEAS_ORDER_TYPE_CODES),
+    }
 
     def __init__(
         self,
@@ -89,6 +105,17 @@ class KisOrderEngine(MarketDataProvider):
             risk_reference_price=risk_reference_price,
         )
 
+    @staticmethod
+    def _unsupported_order_type_result(ticker, side, order_type):
+        decision = RuntimeSafetyGate.denied(
+            "UNSUPPORTED_ORDER_TYPE",
+            "order type is not supported by this KIS endpoint and side",
+            shadow_only=False,
+            ticker=str(ticker),
+            side=str(side),
+        )
+        return safety_block_result(decision)
+
     def _call_order_api(
         self,
         ticker,
@@ -115,7 +142,14 @@ class KisOrderEngine(MarketDataProvider):
             return self._blocked_order_result(
                 decision, ticker, side, qty, price, order_type
             )
-        return self._call_api(tr_id, path, "POST", body=body)
+        capability = self._issue_order_transport_capability(decision)
+        return self._call_api(
+            tr_id,
+            path,
+            "POST",
+            body=body,
+            order_transport_capability=capability,
+        )
     
     def get_account_balance(self):
         """ 🚨 [Case 03 준수] API 잔고 응답 중복 합산 절대 방어 락온 """
@@ -358,6 +392,7 @@ class KisOrderEngine(MarketDataProvider):
         *,
         risk_reference_price=None,
     ):
+        side, order_type = canonical_order_values(side, order_type)
         decision = self._authorize_order_submission(
             ticker,
             side,
@@ -370,6 +405,8 @@ class KisOrderEngine(MarketDataProvider):
             return self._blocked_order_result(
                 decision, ticker, side, qty, price, order_type
             )
+        if order_type not in self._REGULAR_ORDER_TYPES.get(side, frozenset()):
+            return self._unsupported_order_type_result(ticker, side, order_type)
 
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
@@ -381,7 +418,7 @@ class KisOrderEngine(MarketDataProvider):
             tr_id = "TTTT1002U" if side == "BUY" else "TTTT1006U"
             excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         
-            ord_dvsn = {"LOC": "34", "MOC": "33", "LOO": "32", "MOO": "31", "VWAP": "36"}.get(order_type, "00")
+            ord_dvsn = OVERSEAS_ORDER_TYPE_CODES[order_type]
             final_price = 0 if order_type in ["MOC", "MOO"] else self._ceil_2(price)
          
             if order_type not in ["MOC", "MOO"] and final_price <= 0.0: return {'rt_cd': '999', 'msg1': f'가격 오류: {price}'}
@@ -456,12 +493,24 @@ class KisOrderEngine(MarketDataProvider):
         # 🚨 MODIFIED: [Case 30 팩트 교정] 취소 주문 API 응답 객체 반환 배선 강제 이식
         return self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
 
-    def send_daytime_order(self, ticker, side, qty, price):
-        decision = self._authorize_order_submission(ticker, side, qty, price)
+    def send_daytime_order(
+        self, ticker, side, qty, price, order_type="LIMIT", *, risk_reference_price=None
+    ):
+        side, order_type = canonical_order_values(side, order_type)
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+        )
         if not decision.can_submit:
             return self._blocked_order_result(
-                decision, ticker, side, qty, price, "LIMIT"
+                decision, ticker, side, qty, price, order_type
             )
+        if order_type not in self._DAYTIME_ORDER_TYPES:
+            return self._unsupported_order_type_result(ticker, side, order_type)
 
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [최종 무결성 수술] 수동 주문 시 Float 수량이 주입되어 KIS 서버에서 리젝되는 현상을 막기 위해 int 강제 형변환 쉴드 주입
@@ -512,6 +561,7 @@ class KisOrderEngine(MarketDataProvider):
         *,
         risk_reference_price=None,
     ):
+        side, order_type = canonical_order_values(side, order_type)
         decision = self._authorize_order_submission(
             ticker,
             side,
@@ -524,6 +574,8 @@ class KisOrderEngine(MarketDataProvider):
             return self._blocked_order_result(
                 decision, ticker, side, qty, price, order_type
             )
+        if order_type not in self._RESERVATION_ORDER_TYPES.get(side, frozenset()):
+            return self._unsupported_order_type_result(ticker, side, order_type)
 
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
@@ -532,19 +584,17 @@ class KisOrderEngine(MarketDataProvider):
         
         tr_id = "TTTT3014U" if side == "BUY" else "TTTT3016U"
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
-        final_price = str(self._ceil_2(price))
+        final_price = (
+            "0" if order_type in {"MOC", "MOO"} else str(self._ceil_2(price))
+        )
         
         body = {
             "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker,
             "OVRS_EXCG_CD": excg_cd, "FT_ORD_QTY": str(order_qty)
         }
       
-        if order_type == "LOC":
-            body["ORD_DVSN"] = "34" 
-            body["FT_ORD_UNPR3"] = final_price
-        else:
-            body["ORD_DVSN"] = "00" 
-            body["FT_ORD_UNPR3"] = final_price
+        body["ORD_DVSN"] = OVERSEAS_ORDER_TYPE_CODES[order_type]
+        body["FT_ORD_UNPR3"] = final_price
            
         res = self._call_order_api(
             ticker,

@@ -1,5 +1,6 @@
 import asyncio
 import json
+from decimal import Decimal
 
 import pytest
 
@@ -169,7 +170,9 @@ def test_reverse_day_one_moc_reference_reaches_kis_reservation_boundary(tmp_path
     assert failure == ""
     assert "INVALID_RISK_REFERENCE_PRICE" not in messages
     assert len(kis_calls) == 1
-    assert kis_calls[0][1]["body"]["FT_ORD_UNPR3"] == "0.0"
+    body = kis_calls[0][1]["body"]
+    assert Decimal(body["FT_ORD_UNPR3"]) == Decimal("0")
+    assert body["ORD_DVSN"] == "33"
 
 
 @pytest.mark.parametrize("current_price", [0, -1, float("nan"), float("inf")])

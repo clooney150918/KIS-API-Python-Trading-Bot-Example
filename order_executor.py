@@ -8,10 +8,37 @@
 import asyncio
 import logging
 import html
+import inspect
 import math
 from state_io_manager import save_slice_state_sync, save_aftermarket_state_sync
-from runtime_safety import RuntimeSafetyGate, account_fingerprint, safety_block_result
+from runtime_safety import (
+    RuntimeSafetyGate,
+    account_fingerprint,
+    canonical_order_values,
+    safety_block_result,
+)
 from shadow_intent import ShadowIntentRecorder
+
+
+_RISK_REFERENCE_ORDER_TYPES = frozenset({"MARKET", "MOC", "MOO"})
+
+
+def _supports_keyword(callable_obj, keyword):
+    """Return whether callable_obj explicitly accepts keyword or arbitrary kwargs."""
+    try:
+        parameters = inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+    parameter = parameters.get(keyword)
+    if parameter is not None and parameter.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }:
+        return True
+    return any(
+        candidate.kind == inspect.Parameter.VAR_KEYWORD
+        for candidate in parameters.values()
+    )
 
 def _safe_float(val):
     try:
@@ -33,8 +60,9 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
         try:
             if not isinstance(o, dict): continue
 
-            o_type = str(o.get('type', 'LOC'))
-            o_side = str(o.get('side', 'BUY'))
+            o_side, o_type = canonical_order_values(
+                o.get('side', 'BUY'), o.get('type', 'LOC')
+            )
             o_qty = int(_safe_float(o.get('qty')))
             o_price = _safe_float(o.get('price'))
             
@@ -99,6 +127,30 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
                 continue
 
+            broker_method = (
+                broker.send_order
+                if is_market_active_now
+                else broker.send_reservation_order
+            )
+            supports_risk_reference = _supports_keyword(
+                broker_method, "risk_reference_price"
+            )
+            if o_type in _RISK_REFERENCE_ORDER_TYPES and not supports_risk_reference:
+                decision = RuntimeSafetyGate.denied(
+                    "BROKER_CAPABILITY_MISSING",
+                    "broker order method cannot carry required risk reference price",
+                    shadow_only=False,
+                    revision=decision.revision,
+                    ticker=str(ticker),
+                    side=o_side,
+                )
+                blocked = safety_block_result(decision)
+                code = blocked['safety_decision']['code']
+                all_success = False
+                loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
+                msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
+                continue
+
             res = {}
             
             for attempt in range(3):
@@ -115,28 +167,38 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                         res = {'rt_cd': '0', 'msg1': '로컬 자체 VWAP 엔진 위임 완료', 'odno': f'LOCAL_VWAP_{id(o)}'}
                         
                     elif is_market_active_now:
+                        kwargs = (
+                            {"risk_reference_price": o.get('risk_reference_price')}
+                            if supports_risk_reference
+                            else {}
+                        )
                         res = await asyncio.wait_for(
                             asyncio.to_thread(
-                                broker.send_order,
+                                broker_method,
                                 ticker,
                                 o_side,
                                 o_qty,
                                 o_price,
                                 o_type,
-                                risk_reference_price=o.get('risk_reference_price'),
+                                **kwargs,
                             ),
                             timeout=15.0,
                         )
                     else:
+                        kwargs = (
+                            {"risk_reference_price": o.get('risk_reference_price')}
+                            if supports_risk_reference
+                            else {}
+                        )
                         res = await asyncio.wait_for(
                             asyncio.to_thread(
-                                broker.send_reservation_order,
+                                broker_method,
                                 ticker,
                                 o_side,
                                 o_qty,
                                 o_price,
                                 o_type,
-                                risk_reference_price=o.get('risk_reference_price'),
+                                **kwargs,
                             ),
                             timeout=15.0,
                         )
@@ -148,6 +210,9 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                         await asyncio.sleep(1.0 * (2 ** attempt))
                     else:
                         res = {'rt_cd': '999', 'msg1': 'API 통신 타임아웃 (10~15초 초과)'}
+                except TypeError as e:
+                    res = {'rt_cd': '999', 'msg1': f'통신/I/O 오류: {str(e)}'}
+                    break
                 except Exception as e:
                     if attempt < 2:
                         await asyncio.sleep(1.0 * (2 ** attempt))

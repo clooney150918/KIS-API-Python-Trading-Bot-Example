@@ -16,8 +16,23 @@ DEFAULT_STATE_PATH = Path(__file__).resolve().parent / "data" / "runtime_safety.
 DEFAULT_CHECKPOINT_PATH = Path(__file__).resolve().parent / "data" / "runtime_safety.revision.json"
 _VALID_SIDES = frozenset({"BUY", "SELL"})
 _MARKET_ORDER_TYPES = frozenset({"MARKET", "MOC", "MOO"})
+OVERSEAS_ORDER_TYPE_CODES = {
+    "LIMIT": "00",
+    "MOO": "31",
+    "LOO": "32",
+    "MOC": "33",
+    "LOC": "34",
+}
 _CHECKPOINT_LOCKS = {}
 _CHECKPOINT_LOCKS_GUARD = threading.Lock()
+
+
+def canonical_order_values(side, order_type="LIMIT"):
+    """Return the one canonical representation used by policy and KIS wiring."""
+    return (
+        str(side or "").strip().upper(),
+        str(order_type or "").strip().upper(),
+    )
 
 
 def account_fingerprint(cano, product_code):
@@ -227,7 +242,7 @@ class RuntimeSafetyGate:
         risk_reference_price=None,
     ):
         ticker_text = str(ticker or "").strip().upper()
-        side_text = str(side or "").strip().upper()
+        side_text, order_type_text = canonical_order_values(side, order_type)
 
         with self._lock, self._checkpoint_lock:
             state, load_error = self._load_state()
@@ -282,7 +297,6 @@ class RuntimeSafetyGate:
             if order_quantity <= 0 or order_quantity != order_quantity.to_integral_value():
                 return self.denied("INVALID_QUANTITY", "quantity must be a positive integer", **context)
 
-            order_type_text = str(order_type or "").strip().upper()
             if order_type_text in _MARKET_ORDER_TYPES:
                 try:
                     order_price = self._decimal(risk_reference_price)
