@@ -102,6 +102,32 @@ class ConfigManager:
         target = str(ticker).upper()
         return self._last_t_event_status.get(target, {"ok": True, "error": ""}).copy()
 
+    def get_official_t_state(self, ticker):
+        """Return current official T state from immutable baseline + T events only."""
+        target = str(ticker).upper()
+        try:
+            from trade_state_store import TradeStateStore
+
+            state = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"]).load_state(target)
+            self._set_t_event_status(target, True)
+            return {
+                "ticker": state.ticker,
+                "t": float(state.t),
+                "revision": int(state.revision),
+                "available_cash": float(state.available_cash),
+                "reverse_active": bool(state.reverse_active),
+            }
+        except Exception as e:
+            self._set_t_event_status(target, False, e)
+            raise
+
+    def append_kis_confirmed_execution_fact(self, fill):
+        """Append one post-cutoff confirmed KIS fill to the official execution ledger."""
+        from ledger_migration import ExecutionLedger
+
+        ledger = ExecutionLedger(self.FILES["EXECUTION_LEDGER"])
+        return ledger.append_confirmed_fill(fill)
+
     def _safe_float(self, value):
         try:
             f_val = float(str(value or 0.0).replace(',', ''))

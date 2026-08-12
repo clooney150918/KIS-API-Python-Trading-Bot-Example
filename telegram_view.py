@@ -421,22 +421,27 @@ class TelegramView:
 
             is_zero_start = bool(t_info.get('is_zero_start'))
 
+            plan_dict = t_info.get('plan') or {}
+            official_balance = t_info.get('official_balance') or t_info.get('kis_balance') or {}
+            local_ledger = t_info.get('local_ledger') or {}
+            official_t_state = t_info.get('official_t_state') or {}
+
             safe_seed = self._safe_float(t_info.get('seed') or 0.0)
-            safe_one_portion = self._safe_float(t_info.get('one_portion') or 0.0)
+            safe_one_portion = self._safe_float(plan_dict.get('one_portion') if plan_dict.get('one_portion') is not None else (t_info.get('one_portion') or 0.0))
             safe_curr = self._safe_float(t_info.get('curr') or 0.0)
-            safe_avg = self._safe_float(t_info.get('avg') or 0.0)
-            fact_qty = int(self._safe_float(t_info.get('qty') or 0))
+            safe_avg = self._safe_float(official_balance.get('avg') if official_balance.get('avg') is not None else (t_info.get('avg') or 0.0))
+            fact_qty = int(self._safe_float(official_balance.get('qty') if official_balance.get('qty') is not None else (t_info.get('qty') or 0)))
             safe_profit_amt = self._safe_float(t_info.get('profit_amt') or 0.0)
             safe_profit_pct = self._safe_float(t_info.get('profit_pct') or 0.0)
             safe_split = self._safe_float(t_info.get('split') or 40.0)
-            safe_t_val = self._safe_float(t_info.get('t_val') or 0.0)
+            safe_t_val = self._safe_float(official_t_state.get('t') if official_t_state.get('t') is not None else (plan_dict.get('t_val') if plan_dict.get('t_val') is not None else (t_info.get('t_val') or 0.0)))
+            safe_t_revision = int(self._safe_float(official_t_state.get('revision') if official_t_state.get('revision') is not None else (plan_dict.get('t_revision') if plan_dict.get('t_revision') is not None else (t_info.get('t_revision') or 0))))
 
             v_mode_display = ""
             main_icon = ""
             bdg_txt = ""
             is_rev_logic = bool(t_info.get('is_reverse'))
 
-            plan_dict = t_info.get('plan') or {}
             proc_status = html.escape(str(plan_dict.get('process_status') or ''))
             tracking_info = t_info.get('tracking_info') or {}
 
@@ -475,7 +480,68 @@ class TelegramView:
                 body_msg += f"📈 진행: <b>{safe_t_val:.4f}T / {int(safe_split)}분할</b>\n"
 
             body_msg += f"💵 총 시드: ${safe_seed:,.0f}\n🛒 <b>{bdg_txt}</b>\n"
-            body_msg += f"💰 현재 ${safe_curr:,.2f} / 평단 ${safe_avg:,.2f} ({fact_qty}주)\n"
+            body_msg += f"💰 현재 ${safe_curr:,.2f} / 평단 ${safe_avg:.2f} ({fact_qty}주)\n"
+
+            auto_discrepancy_reason = ""
+            if official_balance:
+                kis_cash = self._safe_float(
+                    official_balance.get('orderable_cash')
+                    if official_balance.get('orderable_cash') is not None
+                    else official_balance.get('available_cash')
+                )
+                local_qty = int(self._safe_float(local_ledger.get('qty') or 0))
+                local_avg = self._safe_float(local_ledger.get('avg') or local_ledger.get('avg_price') or 0.0)
+                local_cash = self._safe_float(
+                    local_ledger.get('orderable_cash')
+                    if local_ledger.get('orderable_cash') is not None
+                    else local_ledger.get('available_cash')
+                )
+                body_msg += "🏦 <b>[KIS Source of Truth]</b>\n"
+                body_msg += f"▫️ KIS 보유수량: <b>{fact_qty}주</b>\n"
+                body_msg += f"▫️ KIS 평단: <b>${safe_avg:.2f}</b>\n"
+                body_msg += f"▫️ KIS 주문가능 예수금: <b>${kis_cash:,.2f}</b>\n"
+                if local_ledger:
+                    if local_ledger.get('unavailable'):
+                        body_msg += f"▫️ 로컬 장부: <b>UNAVAILABLE/CORRUPT</b> (비권위 비교값 로드 실패)\n"
+                    else:
+                        body_msg += f"▫️ 로컬 장부: {local_qty}주 @ ${local_avg:.2f} (비권위 비교값)\n"
+                        diffs = []
+                        if local_qty != fact_qty:
+                            diffs.append(f"qty {fact_qty} vs {local_qty}")
+                        if abs(local_avg - safe_avg) >= 0.005:
+                            diffs.append(f"avg {safe_avg:.4f} vs {local_avg:.4f}")
+                        if abs(local_cash - kis_cash) >= 0.005:
+                            diffs.append(f"cash {kis_cash:.2f} vs {local_cash:.2f}")
+                        if diffs:
+                            auto_discrepancy_reason = "KIS/local mismatch: " + ", ".join(diffs)
+
+            body_msg += f"📐 공식 T: <b>{safe_t_val:.2f}T</b> (revision <b>{safe_t_revision}</b>)\n"
+            raw_status_for_mode = str(plan_dict.get('process_status') or '')
+            if '리버스' in raw_status_for_mode or is_rev_logic:
+                official_mode = '리버스'
+            elif '전반' in raw_status_for_mode:
+                official_mode = '전반'
+            elif '후반' in raw_status_for_mode:
+                official_mode = '후반'
+            else:
+                official_mode = raw_status_for_mode or '미확인'
+            star_ratio_raw = plan_dict.get('star_ratio') if plan_dict.get('star_ratio') is not None else t_info.get('star_ratio')
+            if star_ratio_raw is not None:
+                official_star_pct = self._safe_float(star_ratio_raw) * 100.0
+            else:
+                official_star_pct = self._safe_float(t_info.get('star_pct') or 0.0)
+            official_star_point = self._safe_float(plan_dict.get('star_price') if plan_dict.get('star_price') is not None else (t_info.get('star_price') or 0.0))
+            body_msg += f"🧭 공식 모드: <b>{html.escape(str(official_mode))}</b>\n"
+            body_msg += f"⭐ 별%: <b>{official_star_pct:.2f}%</b> | 별지점: <b>${official_star_point:.2f}</b> | 1회 매수금: <b>${safe_one_portion:,.2f}</b>\n"
+            discrepancy = t_info.get('discrepancy') or {}
+            safety = plan_dict.get('safety') or {}
+            halt_reason = discrepancy.get('reason') or auto_discrepancy_reason or safety.get('reason') or ''
+            if discrepancy.get('halted') or bool(auto_discrepancy_reason) or safety.get('halted'):
+                body_msg += f"⛔ <b>HALT:</b> {html.escape(str(halt_reason))}\n"
+            order_status_warning = t_info.get('order_status_warning') or {}
+            if order_status_warning.get('halted'):
+                warning_reason = order_status_warning.get('reason') or 'order intent ledger unavailable'
+                body_msg += f"⛔ <b>HALT 주문 상태 원장:</b> {html.escape(str(warning_reason))}\n"
 
             if prev_close > 0 and day_high > 0 and day_low > 0:
                 high_pct = (day_high - prev_close) / prev_close * 100
@@ -549,6 +615,20 @@ class TelegramView:
                 if is_manual_vwap and not is_rev_logic:
                     body_msg += "⏱️ <b>스케줄:</b> 17:05 KST 선제 주문계획 장전 ➔ 로컬 1분 VWAP 슬라이싱\n"
                 body_msg += f"📋 <b>[주문 계획 - {proc_status}]</b>\n"
+                order_statuses = t_info.get('order_statuses') or plan_dict.get('order_statuses') or {}
+                if isinstance(order_statuses, dict) and order_statuses:
+                    status_labels = [
+                        ('SUBMITTED', '주문접수'),
+                        ('PARTIAL', '부분체결'),
+                        ('FILLED', '체결완료'),
+                        ('CANCELLED', '취소'),
+                        ('REJECTED', '거절'),
+                    ]
+                    body_msg += "🧾 <b>[주문 상태]</b>\n"
+                    for status_key, status_label in status_labels:
+                        entries = order_statuses.get(status_key) or []
+                        count = len(entries) if isinstance(entries, list) else int(self._safe_float(entries))
+                        body_msg += f" ▫️ {status_label}({status_key}): <b>{count}건</b>\n"
 
                 plan_orders = plan_dict.get('orders') or []
                 if plan_orders:

@@ -46,6 +46,125 @@ class TelegramCommands:
         except Exception:
             return 0.0
 
+    def _build_official_balance_for_sync(self, cash, holding):
+        holding = holding if isinstance(holding, dict) else {}
+        return {
+            "qty": int(self._safe_float(holding.get("qty", 0))),
+            "avg": self._safe_float(holding.get("avg", holding.get("avg_price", 0.0))),
+            "orderable_cash": self._safe_float(cash),
+        }
+
+    def _build_local_ledger_summary_for_sync(self, ticker):
+        try:
+            from pathlib import Path
+
+            configured = getattr(self.cfg, "FILES", {}).get("LEDGER") if hasattr(self.cfg, "FILES") else None
+            if configured and not Path(str(configured)).exists():
+                raise FileNotFoundError(f"local/manual ledger unavailable: {configured}")
+            ledger_rows = self.cfg.get_ledger() if hasattr(self.cfg, "get_ledger") else []
+            if not isinstance(ledger_rows, list):
+                raise ValueError("local/manual ledger corrupt: expected JSON array")
+            if hasattr(self.cfg, "calculate_holdings"):
+                qty, avg, invested, sold = self.cfg.calculate_holdings(ticker, ledger_rows)
+            else:
+                ticker_rows = [r for r in ledger_rows if isinstance(r, dict) and r.get("ticker") == ticker]
+                qty = sum(
+                    int(self._safe_float(r.get("qty", 0))) * (1 if r.get("side") == "BUY" else -1)
+                    for r in ticker_rows
+                )
+                buy_amount = sum(
+                    self._safe_float(r.get("price", 0.0)) * int(self._safe_float(r.get("qty", 0)))
+                    for r in ticker_rows if r.get("side") == "BUY"
+                )
+                buy_qty = sum(
+                    int(self._safe_float(r.get("qty", 0)))
+                    for r in ticker_rows if r.get("side") == "BUY"
+                )
+                avg = (buy_amount / buy_qty) if buy_qty > 0 else 0.0
+                invested, sold = buy_amount, 0.0
+            return {
+                "qty": max(0, int(self._safe_float(qty))),
+                "avg": self._safe_float(avg),
+                "invested": self._safe_float(invested),
+                "sold": self._safe_float(sold),
+            }
+        except Exception as e:
+            reason = f"local/manual ledger unavailable or corrupt: {e}"
+            logging.warning(f"⚠️ [{ticker}] 로컬 장부 비교값 로드 실패: {e}")
+            return {"unavailable": True, "error": reason}
+
+    def _build_kis_local_discrepancy_for_sync(self, official_balance, local_ledger):
+        official_balance = official_balance if isinstance(official_balance, dict) else {}
+        local_ledger = local_ledger if isinstance(local_ledger, dict) else {}
+        if local_ledger.get("unavailable"):
+            return {"halted": True, "reason": local_ledger.get("error") or "local/manual ledger unavailable"}
+        if not official_balance:
+            return {"halted": False, "reason": ""}
+        if not local_ledger:
+            return {"halted": True, "reason": "local/manual ledger unavailable or corrupt"}
+        kis_qty = int(self._safe_float(official_balance.get("qty", 0)))
+        kis_avg = self._safe_float(official_balance.get("avg", official_balance.get("avg_price", 0.0)))
+        kis_cash = self._safe_float(
+            official_balance.get("orderable_cash")
+            if official_balance.get("orderable_cash") is not None
+            else official_balance.get("available_cash", 0.0)
+        )
+        local_qty = int(self._safe_float(local_ledger.get("qty", 0)))
+        local_avg = self._safe_float(local_ledger.get("avg", local_ledger.get("avg_price", 0.0)))
+        diffs = []
+        if kis_qty != local_qty:
+            diffs.append(f"qty {kis_qty} vs {local_qty}")
+        if abs(kis_avg - local_avg) >= 0.005:
+            diffs.append(f"avg {kis_avg:.4f} vs {local_avg:.4f}")
+        if local_ledger.get("orderable_cash") is not None or local_ledger.get("available_cash") is not None:
+            local_cash = self._safe_float(
+                local_ledger.get("orderable_cash")
+                if local_ledger.get("orderable_cash") is not None
+                else local_ledger.get("available_cash", 0.0)
+            )
+            if abs(kis_cash - local_cash) >= 0.005:
+                diffs.append(f"cash {kis_cash:.2f} vs {local_cash:.2f}")
+        return {
+            "halted": bool(diffs),
+            "reason": "KIS/local mismatch: " + ", ".join(diffs) if diffs else "",
+        }
+
+    def _load_order_statuses_for_sync(self, ticker):
+        statuses = {key: [] for key in ["SUBMITTED", "PARTIAL", "FILLED", "CANCELLED", "REJECTED"]}
+        try:
+            from pathlib import Path
+            from order_intent_store import OrderIntentStore
+
+            configured = getattr(self.cfg, "FILES", {}).get("ORDER_INTENTS") if hasattr(self.cfg, "FILES") else None
+            if configured:
+                path_text = str(configured)
+                path = Path(path_text.format(ticker=ticker, TICKER=ticker)) if "{" in path_text else Path(path_text)
+            else:
+                path = Path("data") / f"order_intents_{ticker}.jsonl"
+            if not path.exists():
+                return statuses
+
+            def _current_revision(symbol):
+                if hasattr(self.cfg, "get_official_t_state"):
+                    state = self.cfg.get_official_t_state(symbol)
+                    if isinstance(state, dict) and state.get("revision") is not None:
+                        return int(self._safe_float(state.get("revision")))
+                return 1
+
+            store = OrderIntentStore(path, current_t_revision_provider=_current_revision)
+            latest_by_intent = {}
+            for record in store.list_intents(ticker):
+                latest_by_intent[record.get("intent_id")] = record
+            for record in latest_by_intent.values():
+                status = str(record.get("status", "")).upper()
+                if status in statuses:
+                    statuses[status].append(record)
+        except Exception as e:
+            reason = f"order intent ledger corrupt or unavailable: {e}"
+            logging.warning(f"⚠️ [{ticker}] 주문 상태 원장 표시 로드 실패 — HALT로 표시: {e}")
+            statuses["_warning"] = {"halted": True, "reason": reason}
+        return statuses
+
     async def _retry_api(self, func, *args, timeout=15.0, default=None, **kwargs):
         for attempt in range(3):
             try:
@@ -352,9 +471,29 @@ class TelegramCommands:
 
             upward_sniper_mode_on = await self._retry_api(self.cfg.get_upward_sniper_mode, t, default=False)
             target_val = await self._retry_api(self.cfg.get_target_profit, t, default=10.0)
+
+            official_balance = self._build_official_balance_for_sync(cash, h)
+            local_ledger = self._build_local_ledger_summary_for_sync(t)
+            official_t_state = {}
+            if hasattr(self.cfg, 'get_official_t_state'):
+                official_t_state = await self._retry_api(self.cfg.get_official_t_state, t, default={}) or {}
+                if not isinstance(official_t_state, dict):
+                    official_t_state = {}
+            discrepancy = self._build_kis_local_discrepancy_for_sync(official_balance, local_ledger)
+            order_statuses = self._load_order_statuses_for_sync(t)
+            order_status_warning = {}
+            if isinstance(order_statuses, dict) and "_warning" in order_statuses:
+                order_status_warning = order_statuses.pop("_warning") or {}
             
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
+                'official_balance': official_balance,
+                'kis_balance': official_balance,
+                'local_ledger': local_ledger,
+                'official_t_state': official_t_state,
+                'discrepancy': discrepancy,
+                'order_statuses': order_statuses,
+                'order_status_warning': order_status_warning,
                 'profit_amt': (curr - actual_avg) * actual_qty if actual_qty > 0 else 0, 
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
                 'upward_sniper': "ON" if upward_sniper_mode_on else "OFF",

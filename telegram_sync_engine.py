@@ -46,6 +46,46 @@ class TelegramSyncEngine:
             return f_val
         except Exception: return 0.0
 
+    def _official_trade_date(self, value):
+        text = str(value or "").strip()
+        if len(text) == 8 and text.isdigit():
+            return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+        if len(text) >= 10:
+            return text[:10]
+        return text
+
+    def sync_official_execution_facts(self, ticker, kis_execution_rows, *, account_fingerprint):
+        """Append confirmed KIS facts to the official execution ledger only.
+
+        This deliberately does not mutate/overwrite manual_ledger or legacy history.
+        """
+        from fill_reconciler import build_fill_key, normalize_kis_execution
+        from ledger_migration import OFFICIAL_FILL_SOURCE
+
+        target = str(ticker or "").strip().upper()
+        appended = []
+        for row in kis_execution_rows or []:
+            normalized = normalize_kis_execution(row, account_fingerprint=account_fingerprint)
+            if normalized.get("ticker") != target:
+                continue
+            price = normalized["price"]
+            official_record = {
+                "source": OFFICIAL_FILL_SOURCE,
+                "trade_date": self._official_trade_date(normalized.get("trade_date")),
+                "ticker": target,
+                "exchange": str(normalized.get("exchange") or "").upper(),
+                "side": normalized["side"],
+                "qty": int(normalized["qty"]),
+                "price": format(price, "f"),
+                "kis_order_no": normalized["order_no"],
+                "execution_time": str(normalized.get("execution_time") or ""),
+                "account_fingerprint": str(account_fingerprint or ""),
+                "fill_key": build_fill_key(normalized),
+                "confirmed": True,
+            }
+            appended.append(self.cfg.append_kis_confirmed_execution_fact(official_record))
+        return {"appended_count": len(appended), "fills": appended}
+
     async def _retry_api(self, func, *args, timeout=15.0, default=None, **kwargs):
         """ 🚨 [Case 31, 32] 3단 지수 백오프 및 GlobalThrottle 중앙 집중형 TPS 방어망 결속 """
         for attempt in range(3):
@@ -139,7 +179,7 @@ class TelegramSyncEngine:
                 # KIS 실계좌 평단 저장 — 장부 대신 KIS 기준으로 모든 계산
                 if actual_qty > 0 and actual_avg > 0:
                     await self._retry_api(self.cfg._save_json, "data/kis_balance.json",
-                        {"SOXL": {"qty": actual_qty, "avg_price": actual_avg, "last_update": datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M')}},
+                        {"SOXL": {"qty": actual_qty, "avg_price": actual_avg, "last_update": datetime.datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M')}},
                         timeout=5.0)
 
                 full_ledger = await self._retry_api(self.cfg.get_ledger, default=[])
@@ -241,12 +281,22 @@ class TelegramSyncEngine:
                         return "체결 원장 조회(get_execution_history) 실패 - API 서버 무응답 또는 거절"
                     target_execs = filter_to_est(raw_execs)
 
-                calibrated_count = 0
+                official_append_result = {"appended_count": 0, "fills": []}
                 if target_execs:
-                    calibrated_count = await self._retry_api(self.cfg.calibrate_ledger_prices, ticker, target_ledger_str, target_execs, timeout=10.0, default=0)
-                    if calibrated_count > 0:
-                        snapshot_needs_regen = True # 🚨 트리거 발동
-                        logging.info(f"🔧 [{ticker}] LOC/MOC 주문 {calibrated_count}건에 대해 실제 체결 단가 소급 업데이트를 완료했습니다.")
+                    account_fingerprint = ""
+                    if hasattr(self.cfg, "get_account_fingerprint"):
+                        account_fingerprint = await self._retry_api(self.cfg.get_account_fingerprint, default="") or ""
+                    official_append_result = await self._retry_api(
+                        self.sync_official_execution_facts,
+                        ticker,
+                        target_execs,
+                        account_fingerprint=account_fingerprint,
+                        timeout=10.0,
+                        default={"appended_count": 0, "fills": []},
+                    )
+                    appended_count = int(self._safe_float((official_append_result or {}).get("appended_count", 0)))
+                    if appended_count > 0:
+                        logging.info(f"🏛️ [{ticker}] KIS 확정 체결 {appended_count}건을 공식 체결 원장에 append했습니다. legacy/manual ledger는 변경하지 않습니다.")
 
                 full_ledger = await self._retry_api(self.cfg.get_ledger, default=[])
                 recs = [r for r in (full_ledger or []) if isinstance(r, dict) and r.get('ticker') == ticker]
@@ -270,67 +320,43 @@ class TelegramSyncEngine:
                 needs_reconstruction = (diff != 0)
 
                 if not needs_reconstruction and price_diff >= 0.01:
-                    snapshot_needs_regen = True # 🚨 트리거 발동
-                    await self._retry_api(self.cfg.calibrate_avg_price, ticker, actual_avg, timeout=10.0)
-                    await self._safe_send(context, chat_id, f"🔧 <b>[{html.escape(str(ticker))}] 장부 평단가 미세 오차({price_diff:.4f}) 교정 완료!</b>", parse_mode='HTML')
+                    logging.error(f"⛔ [{ticker}] legacy avg-price calibration blocked; official KIS fills are append-only.")
+                    await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] 로컬/수동 장부 평단 보정을 차단했습니다.</b>\n▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n▫️ legacy/manual ledger는 덮어쓰지 않습니다.", parse_mode='HTML')
+                    return "legacy manual ledger avg-price calibration blocked - official KIS facts append-only"
                 elif needs_reconstruction:
-                    snapshot_needs_regen = True # 🚨 트리거 발동
-                    temp_recs = [r for r in recs if r.get('date') != target_ledger_str or 'INIT' in str(r.get('exec_id', ''))]
-                    
-                    temp_res = await self._retry_api(self.cfg.calculate_holdings, ticker, temp_recs, default=(0, 0.0, 0.0, 0.0))
-                    temp_sim_qty = temp_res[0] if isinstance(temp_res, tuple) and len(temp_res) > 0 else 0
-                    temp_sim_avg = temp_res[1] if isinstance(temp_res, tuple) and len(temp_res) > 1 else 0.0
-                    
-                    new_target_records = []
-                    
-                    today_valid_recs = [r for r in recs if r.get('date') == target_ledger_str and 'INIT' not in str(r.get('exec_id', '')) and 'CALIB' not in str(r.get('exec_id', ''))]
-                    new_target_records.extend(today_valid_recs)
-                    
-                    current_ledger_qty = temp_sim_qty + sum(r.get('qty', 0) if r.get('side') == 'BUY' else -r.get('qty', 0) for r in today_valid_recs)
-                    
-                    gap_qty = safe_actual_qty_for_vrev - current_ledger_qty
-                    
-                    if gap_qty != 0:
-                        calib_side = "BUY" if gap_qty > 0 else "SELL"
-                        calib_price = actual_avg
-                        
-                        actual_clear_price_calib = 0.0
-                        if target_execs:
-                            sell_execs_calib = [ex for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01"]
-                            if sell_execs_calib:
-                                tot_amt_calib = sum(int(self._safe_float(ex.get('ft_ccld_qty'))) * self._safe_float(ex.get('ft_ccld_unpr3')) for ex in sell_execs_calib)
-                                tot_q_calib = sum(int(self._safe_float(ex.get('ft_ccld_qty'))) for ex in sell_execs_calib)
-                                if tot_q_calib > 0: actual_clear_price_calib = round(tot_amt_calib / tot_q_calib, 4)
-                        
-                        if calib_side == "SELL" and actual_avg <= 0.0:
-                            if actual_clear_price_calib > 0.0: calib_price = actual_clear_price_calib
-                            else: calib_price = temp_sim_avg if temp_sim_avg > 0 else 0.01
-                            calib_avg = temp_sim_avg
-                        elif calib_side == "BUY" and actual_avg <= 0.0:
-                            if actual_clear_price_calib > 0.0:
-                                calib_price = actual_clear_price_calib
-                                calib_avg = actual_clear_price_calib
-                            else:
-                                calib_price = temp_sim_avg if temp_sim_avg > 0 else 0.01
-                                calib_avg = temp_sim_avg
-                        else:
-                            calib_price = actual_avg if actual_avg > 0 else temp_sim_avg
-                            calib_avg = actual_avg if actual_avg > 0 else temp_sim_avg
-                            
-                        logging.error(f"⛔ [{ticker}] legacy CALIB synthetic ledger generation blocked; use confirmed post-cutoff KIS fills only.")
-                        await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] CALIB 합성 장부 생성을 차단했습니다.</b>\n▫️ 기존 KIS 72건은 LEGACY_HISTORY로만 보존됩니다.\n▫️ 새 공식 원장은 2026-08-11 이후 KIS 확정 체결만 append합니다.", parse_mode='HTML')
-                        return "CALIB synthetic ledger generation blocked - legacy facts are audit-only"
-                    if new_target_records:
-                        if safe_actual_qty_for_vrev > 0:
-                            for r in new_target_records: r['avg_price'] = actual_avg
-                
-                    await self._retry_api(self.cfg.overwrite_incremental_ledger, ticker, temp_recs, new_target_records, timeout=10.0)
-                    if gap_qty != 0: await self._safe_send(context, chat_id, f"🔧 <b>[{html.escape(str(ticker))}] 통합 메인 장부(MAIN LEDGER) 비파괴 보정 완료!</b>\n▫️ KIS 실잔고 오차 수량({gap_qty}주)을 역사 보존 상태로 안전하게 교정했습니다.", parse_mode='HTML')
+                    logging.error(f"⛔ [{ticker}] legacy incremental ledger overwrite blocked; official KIS fills are append-only.")
+                    await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] 로컬/수동 장부 재구성을 차단했습니다.</b>\n▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n▫️ legacy/manual ledger는 덮어쓰지 않습니다.", parse_mode='HTML')
+                    return "legacy manual ledger reconstruction blocked - official KIS facts append-only"
 
                 if is_rev:
                     q_data_before = await self._retry_api(self.queue_ledger.get_queue, ticker, default=[])
                     vrev_ledger_qty = sum(int(self._safe_float(item.get("qty"))) for item in q_data_before if isinstance(item, dict))
                     sold_today_vrev = sum(int(self._safe_float(ex.get('ft_ccld_qty'))) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01") if target_execs else 0
+
+                    vrev_mutation_block_reason = None
+                    if safe_actual_qty_for_vrev == 0 and (vrev_ledger_qty > 0 or sold_today_vrev > 0):
+                        vrev_mutation_block_reason = "queue/history/seed/snapshot graduation mutation"
+                    elif safe_actual_qty_for_vrev > 0 and safe_actual_qty_for_vrev <= vrev_ledger_qty:
+                        vrev_mutation_block_reason = "queue/vwap-state broker sync mutation"
+                    elif safe_actual_qty_for_vrev > 0 and safe_actual_qty_for_vrev > vrev_ledger_qty:
+                        vrev_mutation_block_reason = "snapshot regeneration mutation"
+
+                    if vrev_mutation_block_reason:
+                        appended_count = int(self._safe_float((official_append_result or {}).get("appended_count", 0)))
+                        logging.error(
+                            f"⛔ [{ticker}] V-REV legacy {vrev_mutation_block_reason} blocked; "
+                            f"official KIS fills are append-only (appended={appended_count})."
+                        )
+                        await self._safe_send(
+                            context,
+                            chat_id,
+                            f"⛔ <b>[{html.escape(str(ticker))}] V-REV 로컬 큐/히스토리/스냅샷 변경을 차단했습니다.</b>\n"
+                            f"▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n"
+                            f"▫️ legacy V-REV queue/history/seed/snapshot/vwap 상태는 덮어쓰기·삭제하지 않습니다.\n"
+                            f"▫️ 공식 append 체결 수: <b>{appended_count}건</b>",
+                            parse_mode='HTML'
+                        )
+                        return "V-REV legacy queue/history/snapshot mutation blocked - official KIS facts append-only"
                     
                     if safe_actual_qty_for_vrev == 0 and (vrev_ledger_qty > 0 or sold_today_vrev > 0):
                         if sold_today_vrev == 0 and vrev_ledger_qty > 0:
@@ -542,40 +568,9 @@ class TelegramSyncEngine:
                             await self._safe_send(context, chat_id, f"🚨 <b>[{html.escape(str(ticker))} 유령 잔고 방어 가동]</b>\nKIS 실잔고가 0주로 조회되었으나, 당일 매도 체결 내역이 0건입니다. 통신 오류(Ghost Balance)일 가능성이 매우 높아 장부 강제 소각(자동 졸업)을 차단합니다.\n▫️ HTS 등을 통해 수동으로 100% 전량 매도한 상태라면 <code>/reset</code> 명령어를 사용하여 봇을 초기화하십시오.", parse_mode='HTML')
                             return "유령 잔고(Ghost Balance) 강제 차단 - 매도 체결 없이 KIS 잔고 0주 리턴됨"
 
-                        today_est_str = now_est.strftime('%Y-%m-%d')
-                        prev_c = await self._retry_api(self.broker.get_previous_close, ticker, default=0.0)
-                        
-                        grad_res = await self._retry_api(self.cfg.archive_graduation, ticker, today_est_str, prev_c, timeout=10.0, default=(None, 0.0))
-                        new_hist, added_seed = grad_res if isinstance(grad_res, tuple) and len(grad_res) >= 2 else (None, 0.0)
-
-                        if new_hist and isinstance(new_hist, dict):
-                            msg = f"🎉 <b>[{html.escape(str(ticker))} 졸업 확인!]</b>\n장부를 명예의 전당에 저장하고 새 사이클을 준비합니다."
-                            if added_seed > 0: msg += f"\n💸 <b>자동 복리 +${added_seed:,.0f}</b> 이 다음 운용 시드에 완벽하게 추가되었습니다!"
-                            await self._safe_send(context, chat_id, msg, parse_mode='HTML')
-                            
-                            img_path = await self._retry_api(
-                                self.view.create_profit_image,
-                                ticker=ticker, 
-                                profit=self._safe_float(new_hist.get('profit', 0.0)), 
-                                yield_pct=self._safe_float(new_hist.get('yield', 0.0)),
-                                invested=self._safe_float(new_hist.get('invested', 0.0)), 
-                                revenue=self._safe_float(new_hist.get('revenue', 0.0)), 
-                                end_date=new_hist.get('end_date', target_ledger_str),
-                                timeout=15.0, default=None
-                            )
-                            if img_path:
-                                def _read_img4(p):
-                                    with open(p, 'rb') as f_in: return f_in.read()
-                                try:
-                                    img_bytes4 = await self._retry_api(_read_img4, img_path)
-                                    if str(img_path).lower().endswith('.gif'): await context.bot.send_animation(chat_id=chat_id, animation=img_bytes4)
-                                    else: await context.bot.send_photo(chat_id=chat_id, photo=img_bytes4)
-                                except OSError: pass
-                        else:
-                            full_ledger2 = await self._retry_api(self.cfg.get_ledger, default=[])
-                            all_recs = [r for r in full_ledger2 if isinstance(r, dict) and r.get('ticker') != ticker]
-                            await self._retry_api(self.cfg._save_json, self.cfg.FILES["LEDGER"], all_recs, timeout=10.0)
-                            await self._safe_send(context, chat_id, f"⚠️ <b>[{html.escape(str(ticker))} 강제 정산 완료]</b>\n잔고가 0주이나 마이너스 수익 상태이므로 명예의 전당 박제 없이 장부를 비우고 새출발 타점을 장전합니다.", parse_mode='HTML')
+                        logging.error(f"⛔ [{ticker}] legacy graduation/manual ledger clearing blocked; official KIS fills are append-only.")
+                        await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] 로컬/수동 장부 졸업·초기화를 차단했습니다.</b>\n▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n▫️ legacy/manual ledger는 삭제하거나 덮어쓰지 않습니다.", parse_mode='HTML')
+                        return "legacy manual ledger graduation/clearing blocked - official KIS facts append-only"
 
                 is_after_market = now_est.time() >= datetime.time(16, 0)
                 
