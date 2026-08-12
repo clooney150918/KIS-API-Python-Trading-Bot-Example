@@ -23,13 +23,9 @@ TARGET_FILES = [
     "scheduler_sniper.py",
     "scheduler_vwap.py",
     "global_throttle.py",
-    "vwap_core_engine.py",
-    "vwap_aftermarket_engine.py",
     "strategy.py",
     "strategy_reversion.py",
     "strategy_v14.py",
-    "strategy_v14_vwap.py",
-    "strategy_v_avwap.py",
     "telegram_avwap_console.py",
     "telegram_bot.py",
     "telegram_callbacks.py",
@@ -43,7 +39,6 @@ TARGET_FILES = [
     "callback_order_handler.py",
     "callback_avwap_handler.py",
     "callback_config_handler.py",
-    "short_squeeze_engine.py",
     "assassin_ledger.py"
 ]
 
