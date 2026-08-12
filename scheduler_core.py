@@ -10,6 +10,7 @@ import logging
 import datetime
 from zoneinfo import ZoneInfo
 import asyncio
+import inspect
 import math
 import os
 import time
@@ -75,12 +76,32 @@ async def async_retry(func, *args, default=None, timeout=10.0, **kwargs):
             if attempt < 2: await asyncio.sleep(1.0 * (2 ** attempt))
             else: return default
 
+def is_official_trading_day_at(moment=None, calendar_provider=mcal):
+    """Return whether NYSE is officially open for the given New York date.
+
+    Calendar uncertainty is fail-closed: unofficial schedule execution must not
+    continue merely because the date looks like a weekday.
+    """
+    est = ZoneInfo('America/New_York')
+    current = moment or datetime.datetime.now(est)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=est)
+    current_est = current.astimezone(est)
+    if current_est.weekday() >= 5:
+        return False
+    try:
+        nyse = calendar_provider.get_calendar('NYSE')
+        schedule = nyse.schedule(start_date=current_est.date(), end_date=current_est.date())
+        return not schedule.empty
+    except Exception as e:
+        logging.error(f"⚠️ official trading calendar unavailable; fail-closed: {e}")
+        return False
+
+
 def is_market_open():
-    """ 🚨 MODIFIED: 전역 인메모리 캐싱 파이프라인 결속으로 스케줄 병목 현상 완벽 소각 """
+    """Official trading-day check with per-day cache and fail-closed uncertainty."""
     est = ZoneInfo('America/New_York')
     today = datetime.datetime.now(est)
-    if today.weekday() >= 5: return False
-   
     date_str = today.strftime('%Y-%m-%d')
     if date_str in _MCAL_CACHE:
         return _MCAL_CACHE[date_str]
@@ -88,18 +109,70 @@ def is_market_open():
     for attempt in range(3):
         try:
             GlobalThrottle.wait_api_sync() # 🚨 MODIFIED: 중앙 통제소 락온
-            nyse = mcal.get_calendar('NYSE')
-            schedule = nyse.schedule(start_date=today.date(), end_date=today.date())
-            is_open = not schedule.empty
-            
-            _MCAL_CACHE[date_str] = is_open # 🚨 팩트 캐싱
+            is_open = is_official_trading_day_at(today)
+            _MCAL_CACHE[date_str] = is_open
             return is_open
         except Exception as e:
+            logging.error(f"⚠️ official trading-day check failed; retrying fail-closed: {e}")
             if attempt == 2:
-                fail_open = True
-                _MCAL_CACHE[date_str] = fail_open # 🚨 Fail-Open 캐싱
-                return fail_open
+                _MCAL_CACHE[date_str] = False
+                return False
             time.sleep(1.0 * (2 ** attempt))
+
+
+def _resolve_scheduler_gate(app_data):
+    if not isinstance(app_data, dict):
+        return None
+    gate = app_data.get('scheduler_safety_gate') or app_data.get('runtime_safety_gate')
+    if gate is not None:
+        return gate
+    broker = app_data.get('broker')
+    return getattr(broker, 'runtime_safety_gate', None)
+
+
+def _coerce_gate_result(result):
+    if isinstance(result, tuple):
+        allowed = bool(result[0]) if result else False
+        reason = str(result[1]) if len(result) > 1 else "scheduler gate blocked"
+        return allowed, reason
+    if isinstance(result, dict):
+        if 'allowed' in result:
+            return bool(result.get('allowed')), str(result.get('reason', 'scheduler gate blocked'))
+        if 'can_submit' in result:
+            return bool(result.get('can_submit')), str(result.get('reason', 'scheduler gate blocked'))
+    if hasattr(result, 'can_submit'):
+        return bool(result.can_submit), str(getattr(result, 'reason', 'scheduler gate blocked'))
+    return bool(result), "allowed" if result else "scheduler gate blocked"
+
+
+def _runtime_state_allows_scheduler(gate, schedule_name, boundary):
+    if gate is None:
+        return False, "scheduler runtime safety gate is not configured"
+    if hasattr(gate, 'assert_scheduler_execution_allowed'):
+        return _coerce_gate_result(gate.assert_scheduler_execution_allowed(schedule_name, boundary))
+    if hasattr(gate, '_load_state'):
+        state, decision = gate._load_state()
+        if decision is not None:
+            return False, getattr(decision, 'reason', 'runtime safety state rejected scheduler')
+        if not isinstance(state, dict):
+            return False, "runtime safety state is invalid"
+        if state.get('operator_halt') is True:
+            return False, str(state.get('reason') or 'operator halt is active')
+        if boundary == 'before_order_submit' and not (state.get('live_armed') is True or state.get('shadow_only') is True):
+            return False, "live trading is not armed and shadow mode is not enabled"
+        return True, "allowed"
+    return False, "scheduler runtime safety gate does not expose a supported preflight"
+
+
+async def ensure_scheduler_runtime_allowed(app_data, schedule_name, boundary):
+    gate = _resolve_scheduler_gate(app_data)
+    result = _runtime_state_allows_scheduler(gate, schedule_name, boundary)
+    if inspect.isawaitable(result):
+        result = await result
+    allowed, reason = _coerce_gate_result(result)
+    if not allowed:
+        logging.warning(f"🛑 [{schedule_name}] scheduler safety gate blocked at {boundary}: {reason}")
+    return allowed
 
 def get_budget_allocation(cash, tickers, cfg):
     sorted_tickers = sorted(tickers or [], key=lambda x: 0 if x == "SOXL" else (1 if x == "TQQQ" else 2))
@@ -193,8 +266,10 @@ async def scheduled_force_reset(context):
             try:
                 is_open = await asyncio.wait_for(asyncio.to_thread(is_market_open), timeout=10.0)
                 break
-            except Exception:
-                if attempt == 2: is_open = now_est.weekday() < 5
+            except Exception as e:
+                if attempt == 2:
+                    logging.error(f"⚠️ is_market_open 달력 API 오류/타임아웃. 달력 불확실성으로 강제 초기화를 fail-closed 스킵합니다: {e}")
+                    is_open = False
                 else: await asyncio.sleep(1.0 * (2 ** attempt))
 
         job = getattr(context, 'job', None)
@@ -484,39 +559,22 @@ async def process_realtime_graduation(ticker, cfg, broker, queue_ledger, chat_id
                                 except Exception as e: logging.error(f"🚨 조기졸업 새출발 연산 타임아웃: {e}")
                                 
                                 if isinstance(plan, dict) and plan.get('core_orders'):
-                                    sent_orders = 0
-                                    for o in plan['core_orders']:
-                                        if not isinstance(o, dict) or str(o.get('side')) != 'BUY': continue
-                                        
-                                        o_qty = int(_safe_float(o.get('qty')))
-                                        o_price = _safe_float(o.get('price'))
-                                        o_type = str(o.get('type', 'LOC'))
-                                        
-                                        for s_attempt in range(3):
-                                            try:
-                                                await asyncio.sleep(0.06)
-                                                if o_type == 'VWAP':
-                                                    o_type = 'LOC'  
-                                                    
-                                                ord_res = await asyncio.wait_for(
-                                                    asyncio.to_thread(broker.send_order, ticker, 'BUY', o_qty, o_price, o_type), 
-                                                    timeout=15.0
-                                                )
-                                                if isinstance(ord_res, dict) and ord_res.get('rt_cd') == '0':
-                                                    sent_orders += 1
-                                                break
-                                            except Exception as e:
-                                                if s_attempt == 2: logging.error(f"🚨 [{ticker}] 재진입 덫 장전 에러: {e}")
-                                                else: await asyncio.sleep(1.0 * (2 ** s_attempt))
-                                                
-                                    if sent_orders > 0:
-                                        reentry_msg = f"🔄 <b>[{html.escape(str(ticker))}] 당일 조기 졸업 ➔ 새 사이클(15% 고정 예산) 재진입 완료!</b>\n▫️ 0주 새출발 타점을 산출하여 LOC 매수 덫을 성공적으로 전송했습니다."
-                                        try: 
-                                            await asyncio.wait_for(
-                                                context.bot.send_message(chat_id, reentry_msg, parse_mode='HTML'),
-                                                timeout=15.0
-                                            )
-                                        except Exception: pass
+                                    logging.warning(
+                                        f"🛑 [{ticker}] 조기 졸업 후 직접 재진입 주문 경로 차단: "
+                                        "공식 V4 주문 스케줄러만 주문 제출 가능"
+                                    )
+                                    try:
+                                        await asyncio.wait_for(
+                                            context.bot.send_message(
+                                                chat_id,
+                                                f"🛑 <b>[{html.escape(str(ticker))}] 직접 재진입 주문 차단</b>\n"
+                                                "▫️ 공식 V4 주문 스케줄러 외 주문 제출은 안전정책상 중단되었습니다.",
+                                                parse_mode='HTML'
+                                            ),
+                                            timeout=15.0
+                                        )
+                                    except Exception:
+                                        pass
                         except Exception as re_e:
                             logging.error(f"🚨 [{ticker}] 조기 졸업 후 강제 재진입 파이프라인 에러: {re_e}")
 
