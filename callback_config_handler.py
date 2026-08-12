@@ -25,6 +25,7 @@ import telegram.error
 from telegram import Update
 from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle
+from telegram_auth import UNSUPPORTED_OFFICIAL_SOXL_MESSAGE
 
 class CallbackConfigHandler:
     def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
@@ -65,51 +66,29 @@ class CallbackConfigHandler:
             except Exception as e:
                 logging.warning(f"⚠️ [Callback] 콜백 쿼리 응답 타임아웃/실패 (진행 계속됨): {e}")
 
-        if action == "UPDATE":
-            if sub == "CONFIRM":
-                try: 
-                    await asyncio.wait_for(query.answer("⏳ 깃허브 코드 동기화 중...", show_alert=False), timeout=5.0)
-                except Exception: pass
-                
-                from plugin_updater import SystemUpdater
+        if action == "RESET" and sub in ["REV", "CONFIRM", "AVWAP", "AVWAP_CONFIRM"]:
+            if sub in ["REV", "AVWAP"]:
+                safe_ticker = html.escape(str(ticker or "SOXL"))
+                msg = f"🛡️ <b>[{safe_ticker} 안전상태·당일 주문계획 초기화 확인]</b>\n\n"
+                msg += "실제 장부와 거래·매수 내역은 삭제하지 않습니다.\n"
+                msg += "당일 주문계획/잠금 상태만 초기화하는 안전 확인 단계입니다."
                 try:
-                    updater = await asyncio.wait_for(asyncio.to_thread(SystemUpdater), timeout=5.0)
-                except Exception as e:
-                    logging.error(f"🚨 업데이터 코어 로드 실패: {e}")
-                    try: await asyncio.wait_for(query.edit_message_text(f"❌ <b>[로드 실패]</b> 시스템 모듈을 초기화할 수 없습니다.", parse_mode='HTML'), timeout=10.0)
-                    except Exception: pass
-                    return
-                
+                    await asyncio.wait_for(query.edit_message_text(msg, parse_mode='HTML'), timeout=10.0)
+                except Exception:
+                    pass
+            else:
                 try:
-                    success, msg = await updater.pull_latest_code()
-                    safe_msg = html.escape(str(msg)) 
-                    if success:
-                        try: 
-                            await asyncio.wait_for(query.edit_message_text(f"✅ <b>[업데이트 완료]</b> {safe_msg}\n\n🔄 시스템 데몬(pipiosbot)을 OS 단에서 재가동합니다. 다운타임 후 봇이 다시 깨어납니다.", parse_mode='HTML'), timeout=10.0)
-                        except telegram.error.BadRequest as e:
-                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                        except Exception: pass
-                        await updater.restart_daemon()
-                    else:
-                        try: 
-                            await asyncio.wait_for(query.edit_message_text(f"❌ <b>[동기화 실패]</b>\n▫️ 사유: {safe_msg}", parse_mode='HTML'), timeout=10.0)
-                        except telegram.error.BadRequest as e:
-                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                        except Exception: pass
-                except Exception as e:
-                    safe_err = html.escape(str(e))
-                    try: 
-                        await asyncio.wait_for(query.edit_message_text(f"🚨 <b>[치명적 오류]</b> 프로세스 예외 발생: {safe_err}", parse_mode='HTML'), timeout=10.0)
-                    except telegram.error.BadRequest as e:
-                        if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                    except Exception: pass
+                    await asyncio.wait_for(query.answer(UNSUPPORTED_OFFICIAL_SOXL_MESSAGE, show_alert=True), timeout=5.0)
+                except Exception:
+                    pass
+            return
 
-            elif sub == "CANCEL":
-                try: 
-                    await asyncio.wait_for(query.edit_message_text("❌ 자가 업데이트를 취소했습니다.", parse_mode='HTML'), timeout=10.0)
-                except telegram.error.BadRequest as e:
-                    if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                except Exception: pass
+        if action == "UPDATE":
+            try:
+                await asyncio.wait_for(query.answer(UNSUPPORTED_OFFICIAL_SOXL_MESSAGE, show_alert=True), timeout=5.0)
+            except Exception:
+                pass
+            return
 
         elif action == "VERSION":
             history_data = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_full_version_history), timeout=10.0) or []

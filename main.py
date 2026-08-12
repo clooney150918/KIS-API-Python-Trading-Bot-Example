@@ -30,6 +30,7 @@ from telegram_bot import TelegramController
 from queue_ledger import QueueLedger
 from runtime_safety import RuntimeSafetyGate
 from shadow_intent import ShadowIntentRecorder
+from telegram_auth import build_official_bot_commands
 
 from scheduler_core import (
     scheduled_token_check,
@@ -103,6 +104,7 @@ async def post_init(application: Application):
     application.bot_data['bot_controller'].callbacks_handler.order_handler.tx_lock = tx_lock
     application.bot_data['bot_controller'].callbacks_handler.avwap_handler.tx_lock = tx_lock
     application.bot_data['bot_controller'].callbacks_handler.config_handler.tx_lock = tx_lock
+    await application.bot.set_my_commands(build_official_bot_commands())
 
 def main():
     est_zone = ZoneInfo('America/New_York')

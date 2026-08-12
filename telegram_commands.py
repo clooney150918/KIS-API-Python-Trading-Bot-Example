@@ -24,9 +24,8 @@ from telegram.ext import ContextTypes
 import telegram.error
 
 from scheduler_core import get_budget_allocation
-from telegram_avwap_console import AvwapConsolePlugin
-from plugin_updater import SystemUpdater
 from global_throttle import GlobalThrottle # 🚨 NEW: 중앙 통제소 결속
+from telegram_auth import UNSUPPORTED_OFFICIAL_SOXL_MESSAGE
 
 class TelegramCommands:
     def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
@@ -539,53 +538,25 @@ class TelegramCommands:
             await self._safe_reply(update.effective_message, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
     async def cmd_ticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        active_tickers = await self._retry_api(self.cfg.get_active_tickers, default=[])
-        if not isinstance(active_tickers, list): active_tickers = []
-        msg, markup = self.view.get_ticker_menu(active_tickers)
-        
+        msg = "🔄 <b>[ 운용 종목 상태 ]</b>\n현재 공식 프로필은 <b>SOXL 전용</b>으로 고정되어 있습니다.\n종목 변경은 비활성화된 읽기 전용 화면입니다."
         is_callback = update.callback_query is not None
         if is_callback:
-            await self._safe_edit(update.effective_message, msg, reply_markup=markup, parse_mode='HTML')
+            await self._safe_edit(update.effective_message, msg, parse_mode='HTML')
         else:
-            await self._safe_reply(update.effective_message, msg, reply_markup=markup, parse_mode='HTML')
+            await self._safe_reply(update.effective_message, msg, parse_mode='HTML')
 
     async def cmd_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        active_tickers = await self._retry_api(self.cfg.get_active_tickers, default=[])
-        if not isinstance(active_tickers, list): active_tickers = []
-        
-        report = "📊 <b>[ 자율주행 변동성 마스터 지표 상세 분석 ]</b>\n\n"
-        report += "<b>[ 🧭 지수 범위 범례 (ON/OFF 권장) ]</b>\n"
-        report += "🧊 <code>~ 15.00</code> : 극저변동성 (OFF)\n"
-        report += "🟩 <code>15.00 ~ 20.00</code> : 정상 궤도 (OFF)\n"
-        report += "🟨 <code>20.00 ~ 25.00</code> : 변동성 확대 (ON)\n"
-        report += "🟥 <code>25.00 이상 </code> : 패닉 셀링 (ON)\n\n"
-        
-        for t in active_tickers:
-            idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
-            dynamic_pct_obj = await self._retry_api(self.broker.get_dynamic_sniper_target, idx_ticker)
-            
-            real_val = self._safe_float(getattr(dynamic_pct_obj, 'metric_val', 0.0))
-            real_name = html.escape(str(getattr(dynamic_pct_obj, 'metric_name', '지표')))
-            
-            if real_val <= 15.0: diag_text = "극저변동성 (우측 꼬리 절단 방지를 위해 OFF 권장)"; status_icon = "🧊"
-            elif real_val <= 20.0: diag_text = "정상 궤도 안착 (OFF 권장)"; status_icon = "🟩"
-            elif real_val <= 25.0: diag_text = "변동성 확대 장세 (계좌 방어를 위해 ON 권장)"; status_icon = "🟨"
-            else: diag_text = "패닉 셀링 및 시스템 충격 (필수 가동 권장)"; status_icon = "🟥"
-            report += f"💠 <b>[ {html.escape(str(t))} 국면 분석 ]</b>\n▫️ 당일 절대 지수({real_name}): {real_val:.2f}\n▫️ 진단 : {status_icon} {diag_text}\n\n"
-                 
-        report += "🎯 <b>[ 변동성 지표 분석 수동 제어 ]</b>\n"
-        keyboard = []
-        for t in active_tickers:
-            is_sniper = await self._retry_api(self.cfg.get_upward_sniper_mode, t, default=False)
-            status_txt = 'ON (가동중)' if is_sniper else 'OFF (대기중)'
-            report += f"▫️ {html.escape(str(t))} 현재 상태 : {status_txt}\n"
-            keyboard.append([InlineKeyboardButton(f"{html.escape(str(t))} ⚪ OFF", callback_data=f"MODE:OFF:{html.escape(str(t))}"), InlineKeyboardButton(f"{html.escape(str(t))} 🎯 ON", callback_data=f"MODE:ON:{html.escape(str(t))}")])
-        
+        revision_getter = getattr(self.strategy, 'get_official_revision', None)
+        revision = revision_getter() if callable(revision_getter) else "V4.0-SOXL20"
+        msg = "🛡️ <b>[ 공식 SOXL 안전상태 ]</b>\n\n"
+        msg += f"▫️ 전략 revision: <code>{html.escape(str(revision))}</code>\n"
+        msg += "▫️ 현재 상태: <b>SHADOW/HALT 우선</b> (LIVE 전환 비활성)\n"
+        msg += "▫️ LIVE 전환은 관리자 2단계 확인, revision 표시, 만료시간 입력이 필요하며 현재 구현 단계에서는 사용할 수 없습니다."
         is_callback = update.callback_query is not None
         if is_callback:
-            await self._safe_edit(update.effective_message, report, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+            await self._safe_edit(update.effective_message, msg, parse_mode='HTML')
         else:
-            await self._safe_reply(update.effective_message, report, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+            await self._safe_reply(update.effective_message, msg, parse_mode='HTML')
 
     async def cmd_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         history_data = await self._retry_api(self.cfg.get_full_version_history, default=[])
@@ -598,169 +569,24 @@ class TelegramCommands:
             await self._safe_reply(update.effective_message, msg, parse_mode='HTML', reply_markup=markup)
 
     async def cmd_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if not args: 
-            await self._safe_reply(update.effective_message, "❌ 종목명을 입력하세요. 예: /queue SOXL")
-            return
-            
-        ticker = args[0].upper()
-        if not getattr(self, 'queue_ledger', None):
-            from queue_ledger import QueueLedger
-            self.queue_ledger = await asyncio.to_thread(QueueLedger)
-            
-        q_data = await self._retry_api(self.queue_ledger.get_queue, ticker, default=[])
-        msg, reply_markup = self.view.get_queue_management_menu(ticker, q_data if isinstance(q_data, list) else [])
-        
-        await self._safe_reply(update.effective_message, msg, reply_markup=reply_markup, parse_mode='HTML')
+        await self._safe_reply(update.effective_message, UNSUPPORTED_OFFICIAL_SOXL_MESSAGE)
+        return
 
     async def cmd_add_q(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if not args or len(args) < 4:
-            await self._safe_reply(update.effective_message, "❌ 정확한 양식: <code>/add_q SOXL 2026-04-06 20 52.16</code>", parse_mode='HTML')
-            return
-            
-        ticker = args[0].upper()
-        date_str = args[1]
-        qty = int(self._safe_float(args[2]))
-        price = self._safe_float(args[3])
-        
-        if qty <= 0 or price <= 0.0:
-            await self._safe_reply(update.effective_message, "❌ 수량과 평단가는 0보다 큰 숫자여야 합니다. (혹은 형식 오류)", parse_mode='HTML')
-            return
-            
-        curr_p_val = await self._retry_api(self.broker.get_current_price, ticker)
-        curr_p = self._safe_float(curr_p_val)
-                
-        if curr_p > 0:
-            if price < curr_p * 0.4 or price > curr_p * 1.6:
-                await self._safe_reply(update.effective_message, f"🚨 <b>오입력 차단:</b> 입력하신 평단가(<b>${price:.2f}</b>)가 현재가 대비 ±60%를 벗어납니다. 오타를 확인하세요!", parse_mode='HTML')
-                return
-            
-        if not getattr(self, 'queue_ledger', None):
-            from queue_ledger import QueueLedger
-            self.queue_ledger = await asyncio.to_thread(QueueLedger)
-            
-        q_data = await self._retry_api(self.queue_ledger.get_queue, ticker, default=[])
-        if not isinstance(q_data, list): q_data = [] 
-       
-        q_data.append({"qty": qty, "price": price, "date": f"{date_str} 23:59:59", "type": "MANUAL_OVERRIDE"})
-        q_data.sort(key=lambda x: str(x.get('date', '')) if isinstance(x, dict) else '', reverse=True)
- 
-        await self._retry_api(self.queue_ledger.overwrite_queue, ticker, q_data)
-        
-        # 🚨 MODIFIED: [이중 타격 방어] 큐 수동 추가 시에도 로컬 슬라이싱 및 애프터장 지시서 원자적 영구 소각
-        def _nuke_snapshot_and_state():
-            for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-            for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-            # 🚨 NEW
-            for f in glob.glob(f"data/vrev_slice_state_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-            for f in glob.glob(f"data/vrev_aftermarket_state_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-        await asyncio.to_thread(_nuke_snapshot_and_state)
-        
-        chat_id = update.effective_chat.id
-        if ticker not in self.sync_engine.sync_locks: self.sync_engine.sync_locks[ticker] = asyncio.Lock()
-        if not self.sync_engine.sync_locks[ticker].locked(): await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
-        
-        date_str_safe = html.escape(str(date_str))
-        ticker_safe = html.escape(str(ticker))
-        await self._safe_reply(update.effective_message, f"✅ <b>[{ticker_safe}] 수동 지층 삽입 완료 및 오염 기억 자동 삭제!</b>\n▫️ {date_str_safe} | {qty}주 | ${price:.2f}", parse_mode='HTML')
+        await self._safe_reply(update.effective_message, UNSUPPORTED_OFFICIAL_SOXL_MESSAGE)
+        return
 
     async def cmd_clear_q(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if not args: 
-            await self._safe_reply(update.effective_message, "❌ 종목명을 입력하세요. 예: /clear_q SOXL")
-            return
-            
-        ticker = args[0].upper()
-        ticker_safe = html.escape(str(ticker))
-
-        if not getattr(self, 'queue_ledger', None):
-            from queue_ledger import QueueLedger
-            self.queue_ledger = await asyncio.to_thread(QueueLedger)
-            
-        await self._retry_api(self.queue_ledger.clear_queue, ticker)
-        
-        # 🚨 MODIFIED: [이중 타격 방어] 큐 전체 삭제 시 로컬 슬라이싱 및 애프터장 지시서 원자적 영구 소각
-        def _nuke_snapshot_and_state():
-            for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-            for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-            # 🚨 NEW
-            for f in glob.glob(f"data/vrev_slice_state_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-            for f in glob.glob(f"data/vrev_aftermarket_state_{ticker}.json"):
-                with GlobalThrottle.get_file_lock(f):
-                    try: os.remove(f)
-                    except OSError: pass
-        await asyncio.to_thread(_nuke_snapshot_and_state)
-        
-        chat_id = update.effective_chat.id
-        if ticker not in self.sync_engine.sync_locks: self.sync_engine.sync_locks[ticker] = asyncio.Lock()
-        if not self.sync_engine.sync_locks[ticker].locked(): await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=True)
-        await self._safe_reply(update.effective_message, f"🗑️ <b>[{ticker_safe}] 장부가 완전히 소각되고 당일 오염 기억이 파기되었습니다.</b>\n새로운 지층을 구축할 준비가 완료되었습니다.", parse_mode='HTML')
+        await self._safe_reply(update.effective_message, UNSUPPORTED_OFFICIAL_SOXL_MESSAGE)
+        return
 
     async def cmd_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        updater = SystemUpdater()
-        allowed, fail_msg = await updater.is_update_allowed()
-        if not allowed:
-            await self._safe_reply(update.effective_message, f"🛑 <b>[작전 중 업데이트 거부]</b>\n\n{fail_msg}", parse_mode='HTML')
-            return
-            
-        is_callback = update.callback_query is not None
-        status_msg = update.effective_message if is_callback else None
-        
-        if not is_callback:
-             status_msg = await self._safe_reply(update.effective_message, "⏳ <b>[시스템 업데이트]</b> 깃허브 원격 서버와 통신을 시작합니다...", parse_mode='HTML')
-        
-        success, msg = await updater.pull_latest_code()
-        safe_msg = html.escape(str(msg)) 
-        if success:
-            await self._safe_edit(status_msg, f"✅ <b>[동기화 완료]</b> {safe_msg}\n\n🔄 시스템 데몬(pipiosbot)을 OS 단에서 재가동합니다. 다운타임 후 봇이 다시 깨어납니다.", parse_mode='HTML')
-            await updater.restart_daemon()
-        else:
-            await self._safe_edit(status_msg, f"❌ <b>[동기화 실패]</b>\n▫️ 사유: {safe_msg}", parse_mode='HTML')
+        await self._safe_reply(update.effective_message, UNSUPPORTED_OFFICIAL_SOXL_MESSAGE)
+        return
 
     async def cmd_avwap(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        is_callback = update.callback_query is not None
-        status_msg = update.effective_message if is_callback else None
-        
-        if not is_callback:
-            status_msg = await self._safe_reply(update.effective_message, "⏳ <b>[듀얼 모멘텀 분석]</b>\n시장 데이터를 스캔 중...", parse_mode='HTML')
-        
-        plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
-        app_data = context.bot_data.get('app_data', {})
-        if not app_data or not isinstance(app_data, dict):
-            try:
-                jobs = context.job_queue.jobs() if context.job_queue else []
-                if jobs and len(jobs) > 0 and jobs[0].data is not None: app_data = jobs[0].data
-            except Exception: app_data = {}
-        if not isinstance(app_data, dict): app_data = {}
-
-        msg, markup = await self._retry_api(plugin.get_console_message, app_data, timeout=15.0)
-        
-        if msg:
-            await self._safe_edit(status_msg, msg, reply_markup=markup, parse_mode='HTML')
-        else:
-            await self._safe_edit(status_msg, "❌ <b>[네트워크 지연 발생]</b>\n야후 파이낸스 또는 증권사 서버 응답이 지연되어 스캔을 강제 종료했습니다.", parse_mode='HTML')
+        await self._safe_reply(update.effective_message, UNSUPPORTED_OFFICIAL_SOXL_MESSAGE)
+        return
 
     async def cmd_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_callback = update.callback_query is not None

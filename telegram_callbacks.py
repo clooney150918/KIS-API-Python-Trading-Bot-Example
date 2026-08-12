@@ -23,6 +23,7 @@ from callback_order_handler import CallbackOrderHandler
 from callback_queue_handler import CallbackQueueHandler
 from callback_avwap_handler import CallbackAvwapHandler
 from callback_config_handler import CallbackConfigHandler
+from telegram_auth import answer_unsupported_callback, deny_callback, is_admin_update, is_blocked_callback_action
 
 class TelegramCallbacks:
     def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
@@ -54,6 +55,14 @@ class TelegramCallbacks:
         # 🚨 MODIFIED: [Type-Safety 강제] 데이터를 무조건 문자열로 캐스팅하여 split 연산 붕괴 방어
         data = str(query.data).split(":")
         action, sub = data[0], data[1] if len(data) > 1 else ""
+
+        if not is_admin_update(update, self.cfg, require_callback_message_chat=True):
+            await deny_callback(update)
+            return
+
+        if is_blocked_callback_action(action, sub):
+            await answer_unsupported_callback(update)
+            return
 
         try:
             # 1️⃣ [수동/비상 주문 도메인 라우팅 (MANUAL_PORTION 팩트 배선 추가)]
