@@ -347,10 +347,9 @@ class V4Strategy:
                     elif not previous_closes and prev_close:
                         previous_closes = [prev_close] * 5
                 confirmed_close = kwargs.get("confirmed_close")
-                if confirmed_close is None and self._safe_float(prev_close) > 0:
-                    # Gap 1: 복귀 판정은 장중 현재가가 아니라 직전 확정 종가 기준.
-                    # market_data_provider.get_previous_close()(=prev_close)를
-                    # 직전 확정 종가로 공급해 커널 confirmed_close>avg*0.80 판정을 배선.
+                if confirmed_close is None and self._safe_float(prev_close) > 0 and day > 1:
+                    # Gap 1: 복귀 판정은 리버스 2일차부터 (첫날은 MOC 매도만 진행).
+                    # 장중 현재가가 아니라 직전 확정 종가 기준.
                     confirmed_close = prev_close
                 reverse_plan = laoer_v4_20.calculate_reverse_plan(
                     laoer_v4_20.ReverseState(
