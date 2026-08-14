@@ -94,7 +94,7 @@ async def scheduled_early_regular_trade(context):
                 context.bot.send_message(
                     chat_id=chat_id, 
                     text=f"🌃 <b>[17:05 KST] 정규장 스케줄러 기상!</b>\n"
-                         f"▫️ 서버 접속 부하 방지를 위해 <b>{jitter_seconds}초</b> 대기 후 V14 덫 전송 및 스냅샷을 박제합니다.", 
+                         f"▫️ 서버 접속 부하 방지를 위해 <b>{jitter_seconds}초</b> 대기 후 주문계획 전송 및 스냅샷을 박제합니다.", 
                     parse_mode='HTML'
                 ),
                 timeout=15.0
@@ -228,8 +228,10 @@ async def scheduled_early_regular_trade(context):
                         loop_fail_reason = f"[{t}] 플랜 오염"
                         continue
                     
-                    if version == "V14":
-                        msgs[t] += f"💎 <b>[{t}] V14 오리지널 정규장 실전 덫 장전 완료 (17:05 KST 타격망)</b>\n"
+                    is_v4_version = isinstance(version, str) and version.startswith("LAOER_V4")
+                    if version == "V14" or is_v4_version:
+                        version_label = "V4.0" if is_v4_version else "V14"
+                        msgs[t] += f"💎 <b>[{t}] {version_label} 정규장 주문계획 장전 완료 (17:05 KST 타격망)</b>\n"
                         
                         is_market_active_now = curr_est.hour >= 4
 
@@ -280,24 +282,16 @@ async def scheduled_early_regular_trade(context):
                                 await asyncio.wait_for(asyncio.to_thread(cfg.set_lock, t, "REG"), timeout=5.0)
                             except Exception as e:
                                 logging.error(f"🚨 락 설정 타임아웃: {e}")
-                            msgs[t] += "\n🔒 <b>V14 필수 덫(로컬 엔진 포함) 장전 완료 (잠금 설정됨)</b>"
+                            msgs[t] += f"\n🔒 <b>{version_label} 주문계획 장전 완료 (잠금 설정됨)</b>"
                     
                     else:
-                        logging.info(f"[{t}] unsupported strategy version skipped by V4 scheduler: {version}")
+                        logging.warning(f"[{t}] unsupported strategy version skipped (fail-closed): {version}")
+                        msgs[t] += f"🚨 <b>[{t}] 미지원 전략 버전({html.escape(str(version))}) — 주문 스킵 (fail-closed)</b>\n"
+                        all_success_map[t] = False
+                        loop_fully_successful = False
+                        loop_fail_reason = f"[{t}] unsupported strategy version: {version}"
                         continue
-                    
-                        target_bonus = plan.get('bonus_orders') or []
-                        if not isinstance(target_bonus, list): target_bonus = []
-                        for o in target_bonus:
-                            if not isinstance(o, dict): continue
-                            safe_desc = html.escape(str(o.get('desc', '주문')))
-                            safe_qty = int(_safe_float(o.get('qty')))
-                            safe_price = _safe_float(o.get('price'))
-                            msgs[t] += f"└ 모의 2차 보너스: {safe_desc} {safe_qty}주 (${safe_price})\n"
-                            
-                        if target_orders or target_bonus:
-                            msgs[t] += ""
-                    
+
                     if msgs[t].strip() and chat_id:
                         try:
                             await asyncio.wait_for(context.bot.send_message(chat_id=chat_id, text=msgs[t], parse_mode='HTML'), timeout=15.0)

@@ -561,6 +561,117 @@ async def process_realtime_graduation(ticker, cfg, broker, queue_ledger, chat_id
 # ==============================================================
 # 2. 🏛️ 16:05 EST 정규 정산 (Scenario 1, 3 & Bypass)
 # ==============================================================
+# ── [16:05 정산 체결 요약] 봇 구분 / 매수·매도 / 주문구분 라벨 (확정 포맷) ──
+_BOT_LABELS = {
+    "jinho_bot": "[진호봇]",
+    "eunkyung_bot": "[은경봇]",
+}
+
+_EVENT_TYPE_LABELS = {
+    "FULL": "별값매수",
+    "FULL_BUY": "별값매수",
+    "HALF": "분할매수",
+    "HALF_BUY": "분할매수",
+    "BONUS": "줍줍매수",
+    "BONUS_BUY": "줍줍매수",
+    "QUARTER": "쿼터매도",
+    "QUARTER_SELL": "쿼터매도",
+    "TARGET_FULL": "목표익절",
+    "TARGET_SELL_THEN_FULL_BUY": "목표익절",
+    "TARGET_HALF": "목표익절(반)",
+    "TARGET_SELL_THEN_HALF_BUY": "목표익절(반)",
+}
+
+
+def _resolve_bot_label() -> str:
+    """런타임(load_dotenv 이후)에 daemon_name을 읽어 봇 구분 라벨을 결정한다."""
+    name = (os.getenv("daemon_name") or "").strip().lower()
+    return _BOT_LABELS.get(name) or (f"[{name}]" if name else "[봇]")
+
+
+def _fill_side_icon(side) -> str:
+    side = str(side or "")
+    if side == "BUY":
+        return "🟢"
+    if side == "SELL":
+        return "🔴"
+    return "⚪"
+
+
+def _fill_side_label(side) -> str:
+    side = str(side or "")
+    if side == "BUY":
+        return "매수"
+    if side == "SELL":
+        return "매도"
+    return side
+
+
+def _fill_gubun_label(event_type) -> str:
+    return _EVENT_TYPE_LABELS.get(str(event_type).upper(), "")
+
+
+def _format_fill_price(price) -> str:
+    if price is None or price == "":
+        return "-"
+    try:
+        return f"{float(str(price).replace(',', '')):.2f}"
+    except Exception:
+        return str(price)
+
+
+def _format_fill_date(record) -> str:
+    td = str(record.get("trade_date") or "").replace("-", "").strip()
+    if len(td) == 8:
+        return f"{td[4:6]}-{td[6:8]}"
+    return td or "--"
+
+
+def _event_type_for_intent_id(reconciler, intent_id, ticker) -> str:
+    """체결이 매칭된 intent의 event_type(주문구분)을 읽기 전용으로 조회."""
+    if not intent_id or reconciler is None:
+        return ""
+    try:
+        for intent in reconciler.intent_store.list_intents(str(ticker).upper()):
+            if intent.get("intent_id") == intent_id:
+                return str(intent.get("event_type") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def build_daily_fill_summary(bot_label: str, records: list, reconciler=None) -> str:
+    """16:05 정산 스캔의 하루 체결 요약 알림 텍스트(확정 포맷).
+
+        🔔 [진호봇] 오늘 체결 요약 (N건)
+        🟢 매수 6주 @ $142.35 (별값매수)
+        🔴 매도 19주 @ $142.36 (쿼터매도)
+        · 08-14
+    """
+    if not records:
+        return ""
+    lines = [f"🔔 {bot_label} 오늘 체결 요약 ({len(records)}건)"]
+    date_text = ""
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        side = _fill_side_label(record.get("side"))
+        icon = _fill_side_icon(record.get("side"))
+        try:
+            qty_text = f"{int(record.get('qty'))}주"
+        except Exception:
+            qty_text = "-주"
+        price_text = _format_fill_price(record.get("price"))
+        gubun = _fill_gubun_label(_event_type_for_intent_id(reconciler, record.get("intent_id"), record.get("ticker")))
+        gubun_part = f" ({gubun})" if gubun else ""
+        lines.append(f"{icon} {side} {qty_text} @ ${price_text}{gubun_part}")
+        if not date_text:
+            date_text = _format_fill_date(record)
+    if date_text:
+        lines.append(f"· {date_text}")
+    return "\n".join(lines)
+
+
 async def scheduled_auto_sync(context):
     logging.info("✅ [확정 정산] 16:05 EST 팩트 기반 확정 정산 엔진 다이렉트 가동")
     job = getattr(context, 'job', None)
@@ -626,6 +737,16 @@ async def scheduled_auto_sync(context):
         active_tickers = []
     if not isinstance(active_tickers, list): active_tickers = []
     
+    # ── [체결 요약] reconcile 전 processed_fills 스냅샷 (전후 diff로 당일 신규 체결 추출) ──
+    fill_reconciler = app_data.get('fill_reconciliation_guard')
+    before_fill_keys = set()
+    if fill_reconciler is not None:
+        try:
+            before_fill_keys = {r.get("fill_key") for r in fill_reconciler.processed_fill_store.list_records() if r.get("fill_key")}
+        except Exception as e:
+            logging.warning(f"⚠️ [체결 요약] processed_fills 스냅샷 실패(요약 알림 생략): {e}")
+            before_fill_keys = None
+
     for t in active_tickers:
         try:
             await asyncio.sleep(0.06)
@@ -633,7 +754,28 @@ async def scheduled_auto_sync(context):
             if res == "SUCCESS": success_tickers.append(t)
         except Exception as e:
             logging.error(f"🚨 [{t}] 확정 정산 단일 종목 에러 (Cascade 방어): {e}")
-            
+
+    # ── [체결 요약] reconcile 후 신규 체결 취합 → 하루 매수·매도 요약 DM 발송 ──
+    if fill_reconciler is not None and before_fill_keys is not None:
+        try:
+            new_fill_records = [
+                r for r in fill_reconciler.processed_fill_store.list_records()
+                if r.get("fill_key") and r.get("fill_key") not in before_fill_keys
+            ]
+        except Exception as e:
+            logging.error(f"⛔ [체결 요약] processed_fills 조회 실패: {e}")
+            new_fill_records = []
+        if new_fill_records:
+            msg = build_daily_fill_summary(_resolve_bot_label(), new_fill_records, fill_reconciler)
+            if msg:
+                try:
+                    await asyncio.wait_for(
+                        context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML"),
+                        timeout=15.0,
+                    )
+                except Exception as exc:
+                    logging.error(f"⛔ [{_resolve_bot_label()}] 체결 요약 알림 발송 실패: {exc}")
+
     if success_tickers:
         res = None
         holdings = {}

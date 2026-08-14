@@ -165,6 +165,36 @@ class KisOrderEngine(MarketDataProvider):
                 ticker=str(ticker).strip().upper(),
             )
 
+    def _resolve_risk_reference_price(self, order_type, risk_reference_price, ticker):
+        """Fill a finite positive current price as risk_reference_price for market orders.
+
+        MOC/MARKET/MOO orders carry no limit price on the wire (price == 0), so the
+        runtime safety gate requires a *separate* finite positive risk reference price
+        for notional/risk math.  When a caller omits it (or passes <= 0), fall back to
+        the trusted KIS current quote price so the market order can be authorized
+        instead of being blocked with INVALID_RISK_REFERENCE_PRICE.
+        """
+        if order_type not in {"MARKET", "MOC", "MOO"}:
+            return risk_reference_price
+        if risk_reference_price is not None:
+            try:
+                value = Decimal(str(risk_reference_price))
+                if value.is_finite() and value > 0:
+                    return risk_reference_price
+            except (InvalidOperation, TypeError, ValueError):
+                pass
+        quote, quote_error = self._load_trusted_market_quote(ticker)
+        if quote_error is not None or quote is None:
+            return risk_reference_price
+        try:
+            price = quote.price
+            value = Decimal(str(price))
+            if value.is_finite() and value > 0:
+                return price
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+        return risk_reference_price
+
     @staticmethod
     def _unsupported_order_type_result(ticker, side, order_type):
         decision = RuntimeSafetyGate.denied(
@@ -594,6 +624,9 @@ class KisOrderEngine(MarketDataProvider):
         idempotency_key=None,
     ):
         side, order_type = canonical_order_values(side, order_type)
+        risk_reference_price = self._resolve_risk_reference_price(
+            order_type, risk_reference_price, ticker
+        )
         decision = self._authorize_order_submission(
             ticker,
             side,
@@ -689,6 +722,9 @@ class KisOrderEngine(MarketDataProvider):
         idempotency_key=None,
     ):
         side, order_type = canonical_order_values(side, order_type)
+        risk_reference_price = self._resolve_risk_reference_price(
+            order_type, risk_reference_price, ticker
+        )
         decision = self._authorize_order_submission(
             ticker,
             side,
@@ -771,6 +807,9 @@ class KisOrderEngine(MarketDataProvider):
         idempotency_key=None,
     ):
         side, order_type = canonical_order_values(side, order_type)
+        risk_reference_price = self._resolve_risk_reference_price(
+            order_type, risk_reference_price, ticker
+        )
         decision = self._authorize_order_submission(
             ticker,
             side,

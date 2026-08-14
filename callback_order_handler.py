@@ -337,7 +337,8 @@ class CallbackOrderHandler:
                                     self.broker.send_order, 
                                     t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
                                     start_time=dyn_start_t if str(o.get('type', '')) == 'VWAP' else None,
-                                    end_time=dyn_end_t if str(o.get('type', '')) == 'VWAP' else None
+                                    end_time=dyn_end_t if str(o.get('type', '')) == 'VWAP' else None,
+                                    risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
                             )
@@ -346,7 +347,8 @@ class CallbackOrderHandler:
                             res = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     self.broker.send_reservation_order, 
-                                    t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', ''))
+                                    t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
+                                    risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
                             )
@@ -376,7 +378,8 @@ class CallbackOrderHandler:
                                     self.broker.send_order, 
                                     t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
                                     start_time=dyn_start_t if str(o.get('type', '')) == 'VWAP' else None,
-                                    end_time=dyn_end_t if str(o.get('type', '')) == 'VWAP' else None
+                                    end_time=dyn_end_t if str(o.get('type', '')) == 'VWAP' else None,
+                                    risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
                             )
@@ -385,7 +388,8 @@ class CallbackOrderHandler:
                             res = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     self.broker.send_reservation_order, 
-                                    t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', ''))
+                                    t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
+                                    risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
                             )
