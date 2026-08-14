@@ -346,6 +346,12 @@ class V4Strategy:
                         previous_closes = [ma_5day] * 5
                     elif not previous_closes and prev_close:
                         previous_closes = [prev_close] * 5
+                confirmed_close = kwargs.get("confirmed_close")
+                if confirmed_close is None and self._safe_float(prev_close) > 0:
+                    # Gap 1: 복귀 판정은 장중 현재가가 아니라 직전 확정 종가 기준.
+                    # market_data_provider.get_previous_close()(=prev_close)를
+                    # 직전 확정 종가로 공급해 커널 confirmed_close>avg*0.80 판정을 배선.
+                    confirmed_close = prev_close
                 reverse_plan = laoer_v4_20.calculate_reverse_plan(
                     laoer_v4_20.ReverseState(
                         ticker=target,
@@ -357,7 +363,7 @@ class V4Strategy:
                         t=laoer_v4_20.Decimal(str(reverse_t)),
                         day=day,
                         previous_closes=previous_closes,
-                        confirmed_close=kwargs.get("confirmed_close"),
+                        confirmed_close=confirmed_close,
                     )
                 )
                 t_val = float(reverse_plan.t)
@@ -371,7 +377,7 @@ class V4Strategy:
                     if reverse_plan.buy_quantity > 0:
                         orders.append(self._official_order(
                             ticker=target, trade_date=trade_date, t_revision=t_revision,
-                            event_type="FULL", side="BUY", order_type="LOC",
+                            event_type="REVERSE_QUARTER_BUY", side="BUY", order_type="LOC",
                             price=reverse_plan.star_buy_price, qty=reverse_plan.buy_quantity,
                             desc="공식리버스매수",
                         ))

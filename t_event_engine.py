@@ -13,6 +13,29 @@ from typing import Mapping, Any
 
 from laoer_v4_20 import apply_fill_event as _kernel_apply_fill_event
 
+# Gap 2: 리버스 쿼터매수 T 증가 정산 배선.
+# 커널 laoer_v4_20.calculate_reverse_plan 은 리버스 쿼터매수 T 공식
+#   t_after_buy = t_after_sell + (20 - t_after_sell) * 0.25
+# 을 이미 정확히 계산하지만, 정산 레이어의 T 이벤트 테이블(apply_fill_event)에는
+# 리버스 쿼터매수 이벤트가 없어 일반매수(T+1)로 잘못 연결된다. 커널을 건드리지 않고
+# 정산 레이어에서 리버스 쿼터매수 이벤트를 별도 배선한다.
+REVERSE_QUARTER_BUY_EVENT = "REVERSE_QUARTER_BUY"
+_REVERSE_SPLIT = Decimal("20")
+_REVERSE_QUARTER_RATIO = Decimal("0.25")
+
+
+def apply_fill_event_extended(t_before, event_type):
+    """Apply a fill event to T, including the reverse quarter-buy rule.
+
+    Reverse quarter-buy (BUY in reverse mode) advances T by
+    ``T + (20 - T) * 0.25``, distinct from the normal-mode FULL buy (``T + 1``).
+    All other event types delegate to the kernel's normal-mode table.
+    """
+    if str(event_type).upper() == REVERSE_QUARTER_BUY_EVENT:
+        t = parse_decimal(t_before, "t_before")
+        return t + ((_REVERSE_SPLIT - t) * _REVERSE_QUARTER_RATIO)
+    return _kernel_apply_fill_event(t_before, event_type)
+
 
 @dataclass(frozen=True)
 class TState:
@@ -102,7 +125,7 @@ def apply_t_event(current_t: Decimal, current_revision: int, event: Mapping[str,
     if revision_after != revision_before + 1:
         raise ValueError("revision_after must equal revision_before + 1")
 
-    kernel_t_after = _kernel_apply_fill_event(t_before, validated["event_type"])
+    kernel_t_after = apply_fill_event_extended(t_before, validated["event_type"])
     if kernel_t_after != t_after:
         raise ValueError(f"t_after mismatch: kernel expected {kernel_t_after}, got {t_after}")
 

@@ -38,7 +38,7 @@ class OrderIntentLedgerCorruptError(RuntimeError):
 STRATEGY = "LAOER_V4_SOXL_20"
 ALLOWED_TICKERS = frozenset({"SOXL"})
 ALLOWED_EVENT_TYPES = frozenset(
-    set(FillEvent.__members__) | {str(member.value) for member in FillEvent}
+    set(FillEvent.__members__) | {str(member.value) for member in FillEvent} | {"REVERSE_QUARTER_BUY"}
 )
 ALLOWED_ORDER_TYPES = frozenset({"LIMIT", "LOC", "MOC", "MOO", "LOO"})
 REQUIRED_PLAN_FIELDS = (

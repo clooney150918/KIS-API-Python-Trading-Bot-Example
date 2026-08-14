@@ -167,7 +167,9 @@ async def scheduled_force_reset(context):
                     exit_target = rev_state.get("exit_target", 0.0)
                     
                     if curr_ret >= exit_target:
-                        cfg.set_reverse_state(t, False, 0, 0.0)
+                        carry_dynamic_t = cfg._safe_float(rev_state.get("dynamic_t", 0.0))
+                        carry_rem_cash = cfg._safe_float(rev_state.get("rem_cash", 0.0))
+                        cfg.set_reverse_state(t, False, 0, 0.0, dynamic_t=carry_dynamic_t, rem_cash=carry_rem_cash)
                         cfg.clear_escrow_cash(t)
                         
                         ledger_data = cfg.get_ledger()

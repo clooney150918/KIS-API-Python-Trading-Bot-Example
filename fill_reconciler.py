@@ -18,7 +18,7 @@ from typing import Any, Mapping
 
 from laoer_v4_20 import apply_fill_event
 from order_intent_store import OrderIntentLedgerCorruptError
-from t_event_engine import parse_decimal
+from t_event_engine import apply_fill_event_extended, parse_decimal
 
 
 class FillReconciliationError(RuntimeError):
@@ -402,7 +402,7 @@ class FillReconciler:
     def _build_t_event(self, intent: Mapping[str, Any], fill: Mapping[str, Any], qty: int, amount: Decimal) -> dict[str, Any]:
         event_type = str(intent["event_type"])
         t_state = self.trade_state_store.load_state(intent["ticker"])
-        t_after = apply_fill_event(t_state.t, event_type)
+        t_after = apply_fill_event_extended(t_state.t, event_type)
         fill_key = build_fill_key(fill)
         event_id = hashlib.sha256(
             f"{intent['intent_id']}|{fill_key}|{t_state.revision}".encode("utf-8")

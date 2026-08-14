@@ -364,13 +364,15 @@ async def scheduled_force_reset(context):
                         if attempt == 2: ma_5day = 0.0
                         else: await asyncio.sleep(1.0 * (2 ** attempt))
 
-                if bool(rev_state.get("active", False)):
-                    if curr_p > 0 and actual_avg > 0:
-                        curr_ret = (curr_p - actual_avg) / actual_avg * 100.0
+                if bool(rev_state.get("is_active", False)):
+                    if prev_c > 0 and actual_avg > 0:
+                        close_ret = (prev_c - actual_avg) / actual_avg * 100.0
                         exit_target = _safe_float(rev_state.get("exit_target", 0.0))
                         
-                        if curr_ret >= exit_target:
-                            await asyncio.wait_for(asyncio.to_thread(cfg.set_reverse_state, t, False, 0, 0.0), timeout=5.0)
+                        if close_ret >= exit_target:
+                            carry_dynamic_t = _safe_float(rev_state.get("dynamic_t", 0.0))
+                            carry_rem_cash = _safe_float(rev_state.get("rem_cash", 0.0))
+                            await asyncio.wait_for(asyncio.to_thread(cfg.set_reverse_state, t, False, 0, 0.0, dynamic_t=carry_dynamic_t, rem_cash=carry_rem_cash), timeout=5.0)
                             
                             ledger_data = []
                             try: ledger_data = await asyncio.wait_for(asyncio.to_thread(cfg.get_ledger), timeout=10.0)
@@ -385,7 +387,7 @@ async def scheduled_force_reset(context):
                                 if changed:
                                     await asyncio.wait_for(asyncio.to_thread(cfg._save_json, cfg.FILES["LEDGER"], ledger_data), timeout=10.0)
                             safe_t = html.escape(str(t))
-                            msg_addons += f"\n🌤️ <b>[{safe_t}] 리버스 목표 달성({curr_ret:.2f}%)!</b> 격리 병동 졸업 및 일반 모드 복귀 완료!"
+                            msg_addons += f"\n🌤️ <b>[{safe_t}] 리버스 목표 달성({close_ret:.2f}%)!</b> 격리 병동 졸업 및 일반 모드 복귀 완료!"
                         else:
                             await asyncio.wait_for(asyncio.to_thread(cfg.increment_reverse_day, t), timeout=5.0)
                 else:
