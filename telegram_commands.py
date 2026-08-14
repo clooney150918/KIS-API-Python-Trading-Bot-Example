@@ -57,6 +57,18 @@ class TelegramCommands:
 
     def _build_local_ledger_summary_for_sync(self, ticker):
         try:
+            if hasattr(self.cfg, "calculate_holdings_from_official_ledger"):
+                qty, avg, invested, sold = self.cfg.calculate_holdings_from_official_ledger(ticker)
+                return {
+                    "qty": max(0, int(self._safe_float(qty))),
+                    "avg": self._safe_float(avg),
+                    "invested": self._safe_float(invested),
+                    "sold": self._safe_float(sold),
+                }
+
+            # ── 레거시 manual_ledger.json 원가역산 dead path ─────────────────
+            # 신규 원장(baseline + execution_ledger) 미배선 시에만 도달한다.
+            # /sync 표시는 반드시 위의 신규 원장 경로를 경유한다.
             from pathlib import Path
 
             configured = getattr(self.cfg, "FILES", {}).get("LEDGER") if hasattr(self.cfg, "FILES") else None

@@ -437,10 +437,18 @@ class TelegramView:
                 et = str(o.get('event_type', '')).upper()
                 if et and et in supported_event_types:
                     total_by_type[et] = total_by_type.get(et, 0) + int(self._safe_float(o.get('qty') or 0))
+            # 체결 현황 분자(오늘 체결)는 반드시 당일 trade_date만 카운트한다.
+            # 분모(오늘 주문계획 plan_orders)와 기준일을 맞춰, 전일 체결이
+            # 오늘 계획의 분자로 잘못 합산되는 것을 차단한다.
+            est_tz = ZoneInfo('America/New_York')
+            today_str = datetime.datetime.now(est_tz).strftime('%Y-%m-%d')
             if isinstance(order_statuses, dict):
                 filled_records = (order_statuses.get('FILLED') or []) + (order_statuses.get('PARTIAL') or [])
                 for rec in filled_records:
                     if not isinstance(rec, dict):
+                        continue
+                    rec_date = str(rec.get('trade_date') or '')[:10]
+                    if rec_date and rec_date != today_str:
                         continue
                     et = str(rec.get('event_type', '')).upper()
                     if et and et in total_by_type:
