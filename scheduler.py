@@ -903,7 +903,7 @@ async def scheduled_regular_trade(context):
 
     await context.bot.send_message(
         chat_id=chat_id, 
-        text=f"🌃 <b>[{target_hour}:05] 앱솔루트 퀀트 시스템 {latest_version} 통합 주문 장전!</b>\n"
+        text=f"🌃 <b>[{target_hour}:05] 무한매수법 V4.0 엔진 {latest_version} 선제 주문계획 장전!</b>\n"
              f"🛡️ 서버 접속 부하(동시접속) 방지를 위해 <b>{jitter_seconds}초</b> 대기 후 안전하게 주문 전송을 시작합니다.", 
         parse_mode='HTML'
     )

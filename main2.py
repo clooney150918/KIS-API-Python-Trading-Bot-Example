@@ -24,8 +24,6 @@ from config import ConfigManager
 from broker import KoreaInvestmentBroker
 from strategy import InfiniteStrategy
 from telegram_bot import TelegramController
-from queue_ledger import QueueLedger
-from strategy_reversion import ReversionStrategy
 from volatility_engine import VolatilityEngine, determine_market_regime
 
 from scheduler_core import (
@@ -36,8 +34,6 @@ from scheduler_core import (
     perform_self_cleaning,
     is_market_open
 )
-from scheduler_sniper import scheduled_sniper_monitor
-from scheduler_vwap import scheduled_vwap_trade, scheduled_vwap_init_and_cancel
 from scheduler_regular import scheduled_regular_trade
 
 TICKER_BASE_MAP = {
@@ -202,21 +198,16 @@ def main():
     
     broker = KoreaInvestmentBroker(APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD)
     strategy = InfiniteStrategy(cfg)
-    queue_ledger = QueueLedger()
-    
-    # MODIFIED: [V44.48 런타임 붕괴 수술] ReversionStrategy 객체 생성 시 cfg 인자 주입 배선 복구
-    strategy_rev = ReversionStrategy(cfg)
-    
     bot = TelegramController(
         cfg, broker, strategy, tx_lock=None, 
-        queue_ledger=queue_ledger, strategy_rev=strategy_rev
+        queue_ledger=None, strategy_rev=None
     )
     
     # 🚨 MODIFIED: [V44.65 엣지 타임라인 동기화 및 오프닝 휩소 원천 락다운]
     # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
     app_data = {
         'cfg': cfg, 'broker': broker, 'strategy': strategy, 
-        'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,  
+        'queue_ledger': None, 'strategy_rev': None,  
         'bot': bot, 'tx_lock': None, 'base_map': TICKER_BASE_MAP,
         'tz_est': est_zone, 'regime_data': {"status": "pending", "msg": "10:00 EST 이전 오프닝 휩소 대기"} 
     }
@@ -243,8 +234,7 @@ def main():
         ("start", bot.cmd_start), ("record", bot.cmd_record), ("history", bot.cmd_history), 
         ("sync", bot.cmd_sync), ("settlement", bot.cmd_settlement), ("seed", bot.cmd_seed), 
         ("ticker", bot.cmd_ticker), ("mode", bot.cmd_mode), ("reset", bot.cmd_reset), 
-        ("version", bot.cmd_version), ("update", bot.cmd_update),
-        ("avwap", bot.cmd_avwap), ("queue", bot.cmd_queue), ("add_q", bot.cmd_add_q), ("clear_q", bot.cmd_clear_q)
+        ("version", bot.cmd_version), ("update", bot.cmd_update)
     ]:
         app.add_handler(CommandHandler(cmd, handler))
         
@@ -282,17 +272,6 @@ def main():
     # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
     # MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온
     jq.run_daily(scheduled_regular_trade, time=datetime.time(4, 5, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
-    
-    # 🚨 MODIFIED: [V44.65 엣지 타임라인 동기화 및 오프닝 휩소 원천 락다운]
-    # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
-    # 🚨 [EST 100% 락온] VWAP 1분 타격 개시 전 Fail-Safe: 15:27 EST
-    # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구
-    # MODIFIED: [PTB 요일 패러독스 영구 소각] KST-EST 시차로 인한 스케줄 증발 차단을 위해 365일 전면 개방(Fail-Open) 락온
-    jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 27, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
-
-    # 매 1분 스나이퍼 및 VWAP 타격
-    jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
-    jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 [EST 100% 락온] 자정 청소 작업: 17:00 EST
     # 🚨 NEW: [타임 패러독스 완벽 수술] PTB 버그 회피 명목의 Naive Time 주입 환각 소각 및 EST 절대 락온 복구

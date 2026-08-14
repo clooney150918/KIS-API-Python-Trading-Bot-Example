@@ -67,53 +67,33 @@ def read_avwap_state_sync(ticker, date_str):
     return _read_json_safe_sync(state_file, date_str)
 
 def save_aftermarket_state_sync(ticker, date_str, slice_info):
-    """ 
-    🚨 [Case 39, 40 방어] 애프터장 지연 타격을 위한 원자적 상태 이관 헬퍼
-    - 멱등성을 보장하여 중복 이관 방어
-    """
     if not isinstance(slice_info, dict):
         return
 
-    state_file = f"data/vrev_aftermarket_state_{ticker}.json"
+    state_file = f"data/vwap_aftermarket_state_{ticker}.json"
     data = _read_json_safe_sync(state_file, date_str)
-    
     if not data:
         data = {"date": date_str, "orders": []}
-        
     if not isinstance(data.get('orders'), list):
         data['orders'] = []
-    
-    # 🚨 멱등성 보장 (Idempotency): 이미 장전/이관된 주문은 중복 추가하지 않음
     for item in data['orders']:
         if isinstance(item, dict) and item.get('desc') == slice_info.get('desc') and item.get('side') == slice_info.get('side'):
-            # 🚨 [I/O 오버헤드 압축] 이미 존재 시 무의미한 디스크 쓰기 바이패스
             return
-    
     data['orders'].append(slice_info)
     _atomic_write_json_sync(state_file, data)
 
 def save_slice_state_sync(ticker, date_str, slice_info):
-    """ 
-    🚨 [V-REV 로컬 엔진 인계] 자체 1분 슬라이싱 엔진 인계를 위한 원자적 상태 기록 헬퍼
-    - KIS 알고리즘 소각 및 로컬 Slicing 락온
-    """
     if not isinstance(slice_info, dict):
         return
 
-    state_file = f"data/vrev_slice_state_{ticker}.json"
+    state_file = f"data/vwap_slice_state_{ticker}.json"
     data = _read_json_safe_sync(state_file, date_str)
-    
     if not data:
-        data = {"date": date_str, "hijacked": False, "orders": []}
-        
+        data = {"date": date_str, "orders": []}
     if not isinstance(data.get('orders'), list):
         data['orders'] = []
-    
-    # 🚨 멱등성 보장 (Idempotency): 이미 장전된 슬라이스는 덮어쓰지 않음
     for item in data['orders']:
         if isinstance(item, dict) and item.get('desc') == slice_info.get('desc') and item.get('side') == slice_info.get('side'):
-            # 🚨 [I/O 오버헤드 압축] 이미 존재 시 무의미한 디스크 쓰기 바이패스
             return
-    
     data['orders'].append(slice_info)
     _atomic_write_json_sync(state_file, data)
