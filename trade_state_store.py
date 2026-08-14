@@ -50,14 +50,14 @@ BASELINE_KEY_SET = set(BASELINE_KEYS)
 APPROVED_BASELINE = {
     "schema_version": 1,
     "ticker": "SOXL",
-    "as_of": "2026-08-13",
+    "as_of": "2026-08-11",
     "qty": 98,
-    "avg_price": "153.4885",
-    "available_cash": "123.82",
-    "t": "19.39",
+    "avg_price": "158.0735",
+    "available_cash": "1482.88",
+    "t": "18.32",
     "reverse_active": False,
     "source": "CEO_APPROVED_KIS_BASELINE",
-    "legacy_execution_count": 80,
+    "legacy_execution_count": 72,
     "immutable": True,
 }
 

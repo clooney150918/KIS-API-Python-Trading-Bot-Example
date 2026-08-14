@@ -61,7 +61,7 @@ class ConfigManager:
             "VERSION_CFG": "data/version_config.json",
             "REVERSE_CFG": "data/reverse_config.json",
             "T_STATE": "data/t_state.json",
-            "STRATEGY_BASELINE": "data/strategy_baseline_SOXL_2026-08-13.json",
+            "STRATEGY_BASELINE": "data/strategy_baseline_SOXL_2026-08-11.json",
             "T_EVENTS": "data/t_events_SOXL.jsonl",
             "LEGACY_HISTORY": "data/legacy_history_SOXL_20260622_20260810.json",
             "EXECUTION_LEDGER": "data/execution_ledger_SOXL.jsonl",
@@ -500,6 +500,76 @@ class ConfigManager:
         if total_qty > 0:
             avg_price = (running_cost / running_qty) if running_qty > 0 else 0.0
         
+        return total_qty, avg_price, invested_up, sold_up
+
+    def calculate_holdings_from_official_ledger(self, ticker):
+        """/sync 로컬 장부: 불변 KIS baseline + append-only execution ledger 기준.
+
+        qty = baseline.qty + Σ(execution_ledger KIS_CONFIRMED_FILL 체결 qty 부호)
+        avg = 이동평균법 (SELL은 당시 평단으로 원가 차감 → KIS 매입평균과 일치)
+
+        legacy manual_ledger.json 기반 calculate_holdings 원가역산 경로와 달리
+        이 메서드는 2026-08-11 승인 baseline과 그 이후 KIS_CONFIRMED_FILL
+        체결만 사용한다. 8/13 BUY 5 같은 체결이 manual_ledger에 누락되어도
+        신규 원장에는 정상 반영되어 있으므로 KIS/local 불일치 HALT가 해소된다.
+        """
+        target = str(ticker).upper()
+        baseline = self._load_json(self.FILES.get("STRATEGY_BASELINE", ""), {})
+        if not isinstance(baseline, dict):
+            raise ValueError(f"official baseline missing for {target}")
+        if str(baseline.get("ticker", "")).upper() != target:
+            raise ValueError(f"official baseline ticker mismatch for {target}")
+
+        base_qty = int(self._safe_float(baseline.get("qty", 0)))
+        base_avg = self._safe_float(baseline.get("avg_price", 0.0))
+
+        running_qty = base_qty
+        running_cost = base_qty * base_avg
+        total_qty = base_qty
+        total_invested = base_qty * base_avg
+        total_sold = 0.0
+
+        exec_path = self.FILES.get("EXECUTION_LEDGER", "")
+        fills = []
+        if exec_path and os.path.exists(exec_path):
+            with open(exec_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        logging.warning(f"⚠️ [Config] execution ledger JSONL 파싱 실패: {line[:80]}")
+                        continue
+                    if isinstance(rec, dict) and rec.get("source") == "KIS_CONFIRMED_FILL" and str(rec.get("ticker", "")).upper() == target:
+                        fills.append(rec)
+
+        fills.sort(key=lambda r: (str(r.get("trade_date") or ""), str(r.get("execution_time") or "")))
+
+        for fill in fills:
+            side = str(fill.get("side", "")).upper()
+            qty = int(self._safe_float(fill.get("qty", 0)))
+            price = self._safe_float(fill.get("price", 0.0))
+            if qty <= 0:
+                continue
+            if side == "BUY":
+                total_qty += qty
+                total_invested += price * qty
+                running_qty += qty
+                running_cost += price * qty
+            elif side == "SELL":
+                total_qty -= qty
+                total_sold += price * qty
+                if running_qty > 0:
+                    cost_per_share = running_cost / running_qty
+                    running_cost -= cost_per_share * min(qty, running_qty)
+                    running_qty = max(0, running_qty - qty)
+
+        total_qty = max(0, int(total_qty))
+        avg_price = round((running_cost / running_qty), 4) if running_qty > 0 else 0.0
+        invested_up = math.ceil(total_invested * 100) / 100.0
+        sold_up = math.ceil(total_sold * 100) / 100.0
         return total_qty, avg_price, invested_up, sold_up
 
     def get_reverse_state(self, ticker):
