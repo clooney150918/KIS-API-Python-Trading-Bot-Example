@@ -267,6 +267,47 @@ class TelegramView:
 
         return msg, InlineKeyboardMarkup(keyboard)
 
+    def _format_current_phase(self, plan_dict, reverse_state=None):
+        """현재 단계 한 줄 요약 (🌓전반전 / 🌕후반전 / ♻️리버스 N일차 / ♻️복귀대기 / ⛔HALT)."""
+        plan_dict = plan_dict or {}
+        reverse_state = reverse_state or {}
+        proc_status = str(plan_dict.get('process_status') or '')
+        is_reverse = bool(plan_dict.get('is_reverse')) or bool(reverse_state.get('is_active'))
+
+        # 1) HALT 계열: ⛔ 접두 또는 'HALT' 포함 시 사유 그대로 표출
+        safety = plan_dict.get('safety') or {}
+        if proc_status.startswith('⛔') or 'HALT' in proc_status:
+            reason = str(safety.get('reason') or proc_status)
+            if reason.startswith('⛔'):
+                return html.escape(reason)
+            return f"⛔ {html.escape(reason)}"
+
+        # 2) 리버스 복귀 대기
+        if '복귀대기' in proc_status:
+            return "♻️ 리버스 복귀 대기"
+
+        # 3) 리버스 진입 대기 (정상 플랜에서 reverse_entry 감지)
+        if '리버스진입대기' in proc_status:
+            return "♻️ 리버스 진입 대기"
+
+        # 4) 리버스 진행 중 — reverse_config day_count 기준 N일차
+        if '리버스' in proc_status or is_reverse:
+            day_count = reverse_state.get('day_count')
+            try:
+                day_n = int(self._safe_float(day_count))
+            except Exception:
+                day_n = 0
+            return f"♻️ 리버스 {day_n}일차"
+
+        # 5) 전반전 / 후반전
+        if '전반' in proc_status:
+            return "🌓 전반전 (T<10)"
+        if '후반' in proc_status:
+            return "🌕 후반전 (10≤T≤19)"
+
+        # 6) 그 외는 원문 그대로
+        return html.escape(proc_status) if proc_status else "미확인"
+
     def create_sync_report(self, status_text, dst_text, cash, rp_amount, ticker_data, is_trade_active, p_trade_data=None, exchange_rate=None):
         ticker_data = ticker_data or []
 
@@ -275,6 +316,25 @@ class TelegramView:
         header_msg = f"📜 <b>[ 통합 지시서 ({safe_status}) ]</b>\n📅 <b>{safe_dst}</b>\n"
 
         header_msg += f"💵 잔금: ${cash:,.2f}\n"
+
+        # 🎯 현재 단계 한 줄 요약 (전반전/후반전/리버스 N일차/복귀대기/HALT)
+        phase_summary = []
+        for t_info in ticker_data:
+            if not isinstance(t_info, dict):
+                continue
+            t_name = html.escape(str(t_info.get('ticker') or 'UNK'))
+            phase = self._format_current_phase(
+                t_info.get('plan') or {}, t_info.get('reverse_state') or {}
+            )
+            phase_summary.append((t_name, phase))
+        if phase_summary:
+            if len(phase_summary) == 1:
+                header_msg += f"🎯 <b>[ 현재 단계 ]</b>: {phase_summary[0][1]}\n"
+            else:
+                header_msg += "🎯 <b>[ 현재 단계 ]</b>: " + "  |  ".join(
+                    f"{n} {p}" for n, p in phase_summary
+                ) + "\n"
+
         header_msg += "----------------------------\n\n"
 
         keyboard = []

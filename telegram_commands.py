@@ -491,6 +491,10 @@ class TelegramCommands:
                 official_t_state = await self._retry_api(self.cfg.get_official_t_state, t, actual_qty, actual_avg, default={}) or {}
                 if not isinstance(official_t_state, dict):
                     official_t_state = {}
+            # 🎯 현재 단계(리버스 N일차) 표시용 reverse_config 상태 조회
+            reverse_state = await self._retry_api(self.cfg.get_reverse_state, t, default={}) or {}
+            if not isinstance(reverse_state, dict):
+                reverse_state = {}
             discrepancy = self._build_kis_local_discrepancy_for_sync(official_balance, local_ledger)
             order_statuses = self._load_order_statuses_for_sync(t)
             order_status_warning = {}
@@ -527,7 +531,8 @@ class TelegramCommands:
                 'v_rev_q_qty': v_rev_q_qty,
                 'is_manual_vwap': is_manual_vwap,
                 'is_zero_start': is_zero_start_fact,
-                'has_snapshot': bool(cached_snap)
+                'has_snapshot': bool(cached_snap),
+                'reverse_state': reverse_state
             })
             
             plan_orders_raw = plan.get('orders', []) if isinstance(plan.get('orders'), list) else []
