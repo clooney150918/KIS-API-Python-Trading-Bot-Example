@@ -151,6 +151,9 @@ class _AppendOnlySyncCfg:
     def calculate_holdings(self, ticker, rows):
         return (2, 0.0, 0.0, 0.0)
 
+    def calculate_holdings_from_official_ledger(self, ticker):
+        return (2, 0.0, 0.0, 0.0)
+
     def get_version(self, ticker):
         return "LAOER_V4_SOXL_20"
 

@@ -298,40 +298,34 @@ class TelegramSyncEngine:
                         except Exception as e:
                             logging.error(f"⛔ [{ticker}] 체결→T이벤트 대사 실패: {e}")
 
-                full_ledger = await self._retry_api(self.cfg.get_ledger, default=[])
-                recs = [r for r in (full_ledger or []) if isinstance(r, dict) and r.get('ticker') == ticker]
-                
-                hold_res2 = await self._retry_api(self.cfg.calculate_holdings, ticker, recs, default=(0, 0.0, 0.0, 0.0))
-                ledger_qty = hold_res2[0] if isinstance(hold_res2, tuple) and len(hold_res2) > 0 else 0
-                avg_price = hold_res2[1] if isinstance(hold_res2, tuple) and len(hold_res2) > 1 else 0.0
-                
+                # 🚨 MODIFIED: [신규 원장 기준 정산] legacy manual_ledger.json 기반 계산을 제거하고,
+                # immutable baseline + append-only execution_ledger에서 qty/avg를 산출한다.
+                new_hold = await self._retry_api(
+                    self.cfg.calculate_holdings_from_official_ledger, ticker,
+                    default=(0, 0.0, 0.0, 0.0),
+                )
+                ledger_qty = new_hold[0] if isinstance(new_hold, tuple) and len(new_hold) > 0 else 0
+                avg_price = new_hold[1] if isinstance(new_hold, tuple) and len(new_hold) > 1 else 0.0
+
                 diff = actual_qty - ledger_qty
                 price_diff = abs(actual_avg - avg_price)
 
-                today_recs = [r for r in recs if r.get('date') == target_ledger_str and 'INIT' not in str(r.get('exec_id', '')) and 'CALIB' not in str(r.get('exec_id', ''))]
-                
-                needs_reconstruction = (diff != 0)
+                # 🚨 MODIFIED: [신규 원장 append-only] 신규 원장은 append-only라 재구성/보정/졸업이 원천 불필요.
+                # legacy 재구성·보정·졸업 차단(blocked) 분기를 전면 소각하고, diff/price_diff는 관찰(로그)만 남겨
+                # 정상 경로(신규 원장 append)로 그대로 흐르게 한다. (KIS 확정 체결은 위에서 이미 append 완료)
+                if diff != 0:
+                    logging.warning(f"⚠️ [{ticker}] KIS/신규원장 수량 차이 {diff}주 (KIS {actual_qty} vs 원장 {ledger_qty}) — append-only 원장이므로 재구성 없이 관찰만 합니다.")
+                if price_diff >= 0.01:
+                    logging.warning(f"⚠️ [{ticker}] KIS/신규원장 평단 차이 {price_diff:.4f} (KIS {actual_avg} vs 원장 {avg_price}) — append-only 원장이므로 보정 없이 관찰만 합니다.")
 
-                if not needs_reconstruction and price_diff >= 0.01:
-                    logging.error(f"⛔ [{ticker}] legacy avg-price calibration blocked; official KIS fills are append-only.")
-                    await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] 로컬/수동 장부 평단 보정을 차단했습니다.</b>\n▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n▫️ legacy/manual ledger는 덮어쓰지 않습니다.", parse_mode='HTML')
-                    return "legacy manual ledger avg-price calibration blocked - official KIS facts append-only"
-                elif needs_reconstruction:
-                    logging.error(f"⛔ [{ticker}] legacy incremental ledger overwrite blocked; official KIS fills are append-only.")
-                    await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] 로컬/수동 장부 재구성을 차단했습니다.</b>\n▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n▫️ legacy/manual ledger는 덮어쓰지 않습니다.", parse_mode='HTML')
-                    return "legacy manual ledger reconstruction blocked - official KIS facts append-only"
+                sold_today_v14 = sum(int(self._safe_float(ex.get('ft_ccld_qty'))) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01") if target_execs else 0
 
-                if True:
-                    sold_today_v14 = sum(int(self._safe_float(ex.get('ft_ccld_qty'))) for ex in target_execs if ex.get('sll_buy_dvsn_cd') == "01") if target_execs else 0
-                    
-                    if actual_qty == 0 and (ledger_qty > 0 or sold_today_v14 > 0):
-                        if sold_today_v14 == 0 and ledger_qty > 0:
-                            await self._safe_send(context, chat_id, f"🚨 <b>[{html.escape(str(ticker))} 유령 잔고 방어 가동]</b>\nKIS 실잔고가 0주로 조회되었으나, 당일 매도 체결 내역이 0건입니다. 통신 오류(Ghost Balance)일 가능성이 매우 높아 장부 강제 소각(자동 졸업)을 차단합니다.\n▫️ HTS 등을 통해 수동으로 100% 전량 매도한 상태라면 <code>/reset</code> 명령어를 사용하여 봇을 초기화하십시오.", parse_mode='HTML')
-                            return "유령 잔고(Ghost Balance) 강제 차단 - 매도 체결 없이 KIS 잔고 0주 리턴됨"
-
-                        logging.error(f"⛔ [{ticker}] legacy graduation/manual ledger clearing blocked; official KIS fills are append-only.")
-                        await self._safe_send(context, chat_id, f"⛔ <b>[{html.escape(str(ticker))}] 로컬/수동 장부 졸업·초기화를 차단했습니다.</b>\n▫️ 실제 동기화 경로는 KIS 확정 체결만 공식 체결 원장에 append합니다.\n▫️ legacy/manual ledger는 삭제하거나 덮어쓰지 않습니다.", parse_mode='HTML')
-                        return "legacy manual ledger graduation/clearing blocked - official KIS facts append-only"
+                # 🚨 유령 잔고 방어 (fail-closed) 유지: KIS 0주 + 당일 매도체결 0건 + 신규원장 0주 초과 시 강제 차단
+                if actual_qty == 0 and sold_today_v14 == 0 and ledger_qty > 0:
+                    await self._safe_send(context, chat_id, f"🚨 <b>[{html.escape(str(ticker))} 유령 잔고 방어 가동]</b>\nKIS 실잔고가 0주로 조회되었으나, 당일 매도 체결 내역이 0건입니다. 통신 오류(Ghost Balance)일 가능성이 매우 높아 장부 강제 소각(자동 졸업)을 차단합니다.\n▫️ HTS 등을 통해 수동으로 100% 전량 매도한 상태라면 <code>/reset</code> 명령어를 사용하여 봇을 초기화하십시오.", parse_mode='HTML')
+                    return "유령 잔고(Ghost Balance) 강제 차단 - 매도 체결 없이 KIS 잔고 0주 리턴됨"
+                if actual_qty == 0 and sold_today_v14 > 0:
+                    logging.info(f"ℹ️ [{ticker}] KIS 0주 + 당일 매도 체결 {sold_today_v14}건 확인 — append-only 원장이 이미 반영하므로 정상 흐름.")
 
                 is_after_market = now_est.time() >= datetime.time(16, 0)
                 
