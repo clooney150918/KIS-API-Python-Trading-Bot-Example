@@ -4,7 +4,7 @@
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 48대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [제1헌법 철저 준수] 달력 API(mcal) 스캔 전 파편화된 호출망을 소각하고, GlobalThrottle.wait_api_sync()를 강제 주입하여 썬더링 허드 완벽 차단.
 # 🚨 MODIFIED: [원인 추적 시스템 락온] /record 명령어 실행 시 KIS 서버 통신 장애의 정확한 원인(Endpoint 및 Timeout 등)을 텔레그램 UI로 직접 표출하도록 에러 파싱 로직 전면 팩트 교정 완료.
-# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 조작 시 낡은 스냅샷과 vwap_state 캐시를 소각하여 잔존 지시서에 의한 중복 매매를 차단.
+# 🚨 MODIFIED: [2차 오인 패러독스(False Alarm) 붕괴 차단] `/add_q` 및 `/clear_q` 수동 조작 시, 진행 중인 슬라이싱 지시서(`vrev_slice_state`, `vrev_aftermarket_state`)를 os.remove()로 물리적 삭제하던 맹독성 로직을 영구 소각. 대신 `hijacked=True`인 빈 지시서를 원자적으로 박제하여 VWAP 스케줄러의 오인 에러 타전을 100% 원천 봉쇄 완료.
 # ==========================================================
 import logging
 import datetime
@@ -16,6 +16,7 @@ import time
 import html
 import functools
 import glob
+import tempfile # 🚨 NEW: 원자적 쓰기용 모듈 결속
 import yfinance as yf
 import pandas_market_calendars as mcal
 from zoneinfo import ZoneInfo
@@ -24,9 +25,9 @@ from telegram.ext import ContextTypes
 import telegram.error
 
 from scheduler_core import get_budget_allocation
+from telegram_avwap_console import AvwapConsolePlugin
+from plugin_updater import SystemUpdater
 from global_throttle import GlobalThrottle # 🚨 NEW: 중앙 통제소 결속
-from telegram_auth import UNSUPPORTED_OFFICIAL_SOXL_MESSAGE
-from daily_report import build_daily_report
 
 class TelegramCommands:
     def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
@@ -46,162 +47,6 @@ class TelegramCommands:
             return f_val
         except Exception:
             return 0.0
-
-    def _build_official_balance_for_sync(self, cash, holding):
-        holding = holding if isinstance(holding, dict) else {}
-        return {
-            "qty": int(self._safe_float(holding.get("qty", 0))),
-            "avg": self._safe_float(holding.get("avg", holding.get("avg_price", 0.0))),
-            "orderable_cash": self._safe_float(cash),
-        }
-
-    def _build_local_ledger_summary_for_sync(self, ticker):
-        try:
-            from pathlib import Path
-
-            configured = getattr(self.cfg, "FILES", {}).get("LEDGER") if hasattr(self.cfg, "FILES") else None
-            if configured and not Path(str(configured)).exists():
-                raise FileNotFoundError(f"local/manual ledger unavailable: {configured}")
-            ledger_rows = self.cfg.get_ledger() if hasattr(self.cfg, "get_ledger") else []
-            if not isinstance(ledger_rows, list):
-                raise ValueError("local/manual ledger corrupt: expected JSON array")
-            if hasattr(self.cfg, "calculate_holdings"):
-                qty, avg, invested, sold = self.cfg.calculate_holdings(ticker, ledger_rows)
-            else:
-                ticker_rows = [r for r in ledger_rows if isinstance(r, dict) and r.get("ticker") == ticker]
-                qty = sum(
-                    int(self._safe_float(r.get("qty", 0))) * (1 if r.get("side") == "BUY" else -1)
-                    for r in ticker_rows
-                )
-                buy_amount = sum(
-                    self._safe_float(r.get("price", 0.0)) * int(self._safe_float(r.get("qty", 0)))
-                    for r in ticker_rows if r.get("side") == "BUY"
-                )
-                buy_qty = sum(
-                    int(self._safe_float(r.get("qty", 0)))
-                    for r in ticker_rows if r.get("side") == "BUY"
-                )
-                avg = (buy_amount / buy_qty) if buy_qty > 0 else 0.0
-                invested, sold = buy_amount, 0.0
-            return {
-                "qty": max(0, int(self._safe_float(qty))),
-                "avg": self._safe_float(avg),
-                "invested": self._safe_float(invested),
-                "sold": self._safe_float(sold),
-            }
-        except Exception as e:
-            reason = f"local/manual ledger unavailable or corrupt: {e}"
-            logging.warning(f"⚠️ [{ticker}] 로컬 장부 비교값 로드 실패: {e}")
-            return {"unavailable": True, "error": reason}
-
-    def _build_kis_local_discrepancy_for_sync(self, official_balance, local_ledger):
-        official_balance = official_balance if isinstance(official_balance, dict) else {}
-        local_ledger = local_ledger if isinstance(local_ledger, dict) else {}
-        if local_ledger.get("unavailable"):
-            return {"halted": True, "reason": local_ledger.get("error") or "local/manual ledger unavailable"}
-        if not official_balance:
-            return {"halted": False, "reason": ""}
-        if not local_ledger:
-            return {"halted": True, "reason": "local/manual ledger unavailable or corrupt"}
-        kis_qty = int(self._safe_float(official_balance.get("qty", 0)))
-        kis_avg = self._safe_float(official_balance.get("avg", official_balance.get("avg_price", 0.0)))
-        kis_cash = self._safe_float(
-            official_balance.get("orderable_cash")
-            if official_balance.get("orderable_cash") is not None
-            else official_balance.get("available_cash", 0.0)
-        )
-        local_qty = int(self._safe_float(local_ledger.get("qty", 0)))
-        local_avg = self._safe_float(local_ledger.get("avg", local_ledger.get("avg_price", 0.0)))
-        diffs = []
-        if kis_qty != local_qty:
-            diffs.append(f"qty {kis_qty} vs {local_qty}")
-        if abs(kis_avg - local_avg) >= 0.005:
-            diffs.append(f"avg {kis_avg:.4f} vs {local_avg:.4f}")
-        if local_ledger.get("orderable_cash") is not None or local_ledger.get("available_cash") is not None:
-            local_cash = self._safe_float(
-                local_ledger.get("orderable_cash")
-                if local_ledger.get("orderable_cash") is not None
-                else local_ledger.get("available_cash", 0.0)
-            )
-            if abs(kis_cash - local_cash) >= 0.005:
-                diffs.append(f"cash {kis_cash:.2f} vs {local_cash:.2f}")
-        return {
-            "halted": bool(diffs),
-            "reason": "KIS/local mismatch: " + ", ".join(diffs) if diffs else "",
-        }
-
-    def _load_order_statuses_for_sync(self, ticker):
-        statuses = {key: [] for key in ["SUBMITTED", "PARTIAL", "FILLED", "CANCELLED", "REJECTED"]}
-        try:
-            from pathlib import Path
-            from order_intent_store import OrderIntentStore
-
-            configured = getattr(self.cfg, "FILES", {}).get("ORDER_INTENTS") if hasattr(self.cfg, "FILES") else None
-            if configured:
-                path_text = str(configured)
-                path = Path(path_text.format(ticker=ticker, TICKER=ticker)) if "{" in path_text else Path(path_text)
-            else:
-                path = Path("data") / f"order_intents_{ticker}.jsonl"
-
-            if path.exists():
-                def _current_revision(symbol):
-                    if hasattr(self.cfg, "get_official_t_state"):
-                        state = self.cfg.get_official_t_state(symbol)
-                        if isinstance(state, dict) and state.get("revision") is not None:
-                            return int(self._safe_float(state.get("revision")))
-                    return 1
-
-                store = OrderIntentStore(path, current_t_revision_provider=_current_revision)
-                latest_by_intent = {}
-                for record in store.list_intents(ticker):
-                    latest_by_intent[record.get("intent_id")] = record
-                for record in latest_by_intent.values():
-                    status = str(record.get("status", "")).upper()
-                    if status in statuses:
-                        statuses[status].append(record)
-        except Exception as e:
-            reason = f"order intent ledger corrupt or unavailable: {e}"
-            logging.warning(f"⚠️ [{ticker}] 주문 상태 원장 표시 로드 실패 — HALT로 표시: {e}")
-            statuses["_warning"] = {"halted": True, "reason": reason}
-
-        # KIS is the source of truth for live submitted/unfilled orders.
-        # Manual EXEC can place orders directly at KIS even when the local
-        # order-intent ledger is empty; /sync must show those real orders.
-        try:
-            unfilled = self.broker.get_unfilled_orders_detail(ticker)
-            if isinstance(unfilled, list):
-                existing_order_ids = {
-                    str(record.get("kis_order_no") or record.get("odno") or "")
-                    for records in statuses.values()
-                    if isinstance(records, list)
-                    for record in records
-                    if isinstance(record, dict)
-                }
-                for order in unfilled:
-                    if not isinstance(order, dict):
-                        continue
-                    symbol = str(order.get("pdno") or order.get("ticker") or "").upper()
-                    if symbol and symbol != str(ticker).upper():
-                        continue
-                    odno = str(order.get("odno") or "")
-                    if odno and odno in existing_order_ids:
-                        continue
-                    submitted = {
-                        "source": "KIS_UNFILLED",
-                        "kis_order_no": odno,
-                        "odno": odno,
-                        "side": "BUY" if str(order.get("sll_buy_dvsn_cd")) == "02" else "SELL",
-                        "qty": self._safe_float(order.get("ft_ord_qty") or order.get("nccs_qty")),
-                        "remaining_qty": self._safe_float(order.get("nccs_qty")),
-                        "price": self._safe_float(order.get("ft_ord_unpr3")),
-                        "order_type": str(order.get("sll_buy_dvsn_cd_name") or ""),
-                    }
-                    statuses["SUBMITTED"].append(submitted)
-        except Exception as e:
-            logging.warning(f"⚠️ [{ticker}] KIS 미체결 주문 상태 표시 로드 실패: {e}")
-            statuses.setdefault("_warning", {"halted": False, "reason": ""})
-            statuses["_warning"]["kis_unfilled_warning"] = str(e)
-        return statuses
 
     async def _retry_api(self, func, *args, timeout=15.0, default=None, **kwargs):
         for attempt in range(3):
@@ -258,7 +103,6 @@ class TelegramCommands:
         now = datetime.datetime.now(est)
         
         def _fetch_schedule(target_now):
-            # 🚨 MODIFIED: [제1헌법] 달력 API 호출 전 중앙 통제소 락온 강제
             GlobalThrottle.wait_api_sync()
             nyse = mcal.get_calendar('NYSE')
             return nyse.schedule(start_date=target_now.date(), end_date=target_now.date())
@@ -281,7 +125,7 @@ class TelegramCommands:
 
     async def cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_hour, season_icon = self._get_dst_info()
-        latest_version = await self._retry_api(self.cfg.get_latest_version) or "V4.0.x"
+        latest_version = await self._retry_api(self.cfg.get_latest_version) or "V14.x"
         msg = self.view.get_start_message(target_hour, season_icon, latest_version) 
         await self._safe_reply(update.effective_message, msg, parse_mode='HTML')
 
@@ -297,7 +141,6 @@ class TelegramCommands:
         async with self.tx_lock:
             cash, holdings = 0.0, {}
             res = await self._retry_api(self.broker.get_account_balance, timeout=15.0)
-            # 🚨 MODIFIED: [원인 추적 시스템 락온] API 실패 시 None이 반환되는 구조를 정밀 타격하여 실패 원인 직접 표출
             if res and (isinstance(res, (list, tuple)) and len(res) > 1 and res[1] is not None):
                 cash = self._safe_float(res[0]) if len(res) > 0 else 0.0
                 holdings = res[1] if len(res) > 1 and isinstance(res[1], dict) else {}
@@ -417,12 +260,16 @@ class TelegramCommands:
             is_locked_sniper = await self._retry_api(self.cfg.check_lock, t, "SNIPER", default=False)
             is_already_ordered = is_locked_reg or is_locked_sniper
              
-            ver = await self._retry_api(self.cfg.get_version, t) or "V4.0"
-            is_manual_vwap = False
+            ver = await self._retry_api(self.cfg.get_version, t) or "V14"
+            is_manual_vwap = await self._retry_api(getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False), t, default=False)
             
             cached_snap = None
-            if hasattr(self.strategy, 'v14_plugin') and hasattr(self.strategy.v14_plugin, 'load_daily_snapshot'):
-                cached_snap = await self._retry_api(self.strategy.v14_plugin.load_daily_snapshot, t)
+            if ver == "V_REV":
+                cached_snap = await self._retry_api(self.strategy.v_rev_plugin.load_daily_snapshot, t)
+            elif ver == "V14":
+                if is_manual_vwap: cached_snap = await self._retry_api(self.strategy.v14_vwap_plugin.load_daily_snapshot, t)
+                elif hasattr(self.strategy, 'v14_plugin') and hasattr(self.strategy.v14_plugin, 'load_daily_snapshot'):
+                    cached_snap = await self._retry_api(self.strategy.v14_plugin.load_daily_snapshot, t)
             
             if not isinstance(cached_snap, dict): cached_snap = None
             
@@ -432,6 +279,20 @@ class TelegramCommands:
             logic_qty = actual_qty
             is_zero_start_fact = (actual_qty == 0)
             
+            if ver == "V_REV" and getattr(self, 'queue_ledger', None):
+                q_data_check = await self._retry_api(self.queue_ledger.get_queue, t, default=[])
+                if isinstance(q_data_check, list):
+                    vrev_ledger_qty_check = sum(int(self._safe_float(item.get("qty"))) for item in q_data_check if isinstance(item, dict))
+                    
+                    vrev_ledger_inv = sum(int(self._safe_float(item.get("qty"))) * self._safe_float(item.get("price")) for item in q_data_check if isinstance(item, dict))
+                    
+                    actual_qty = vrev_ledger_qty_check
+                    logic_qty = vrev_ledger_qty_check
+                    actual_avg = round(vrev_ledger_inv / vrev_ledger_qty_check, 4) if vrev_ledger_qty_check > 0 else 0.0
+                    
+                    if vrev_ledger_qty_check > 0: is_zero_start_fact = False
+                    else: is_zero_start_fact = True
+
             if cached_snap:
                 if not is_zero_start_fact: pass 
                 else: is_zero_start_fact = bool(cached_snap.get("is_zero_start", True))
@@ -453,6 +314,14 @@ class TelegramCommands:
             is_rev = plan.get('is_reverse', False)
             
             v_rev_q_qty, v_rev_q_lots = 0, 0
+
+            if ver == "V_REV":
+                q_list = await self._retry_api(self.queue_ledger.get_queue, t, default=[]) if getattr(self, 'queue_ledger', None) else []
+                q_list = q_list if isinstance(q_list, list) else []
+                v_rev_q_lots = len(q_list)
+                v_rev_q_qty = sum(int(self._safe_float(item.get('qty', 0))) for item in q_list if isinstance(item, dict))
+                one_portion_cash = safe_seed * 0.15
+                plan['one_portion'] = one_portion_cash
 
             is_avwap_hybrid_on = await self._retry_api(getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False), t, default=False)
 
@@ -483,29 +352,9 @@ class TelegramCommands:
 
             upward_sniper_mode_on = await self._retry_api(self.cfg.get_upward_sniper_mode, t, default=False)
             target_val = await self._retry_api(self.cfg.get_target_profit, t, default=10.0)
-
-            official_balance = self._build_official_balance_for_sync(cash, h)
-            local_ledger = self._build_local_ledger_summary_for_sync(t)
-            official_t_state = {}
-            if hasattr(self.cfg, 'get_official_t_state'):
-                official_t_state = await self._retry_api(self.cfg.get_official_t_state, t, actual_qty, actual_avg, default={}) or {}
-                if not isinstance(official_t_state, dict):
-                    official_t_state = {}
-            discrepancy = self._build_kis_local_discrepancy_for_sync(official_balance, local_ledger)
-            order_statuses = self._load_order_statuses_for_sync(t)
-            order_status_warning = {}
-            if isinstance(order_statuses, dict) and "_warning" in order_statuses:
-                order_status_warning = order_statuses.pop("_warning") or {}
             
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
-                'official_balance': official_balance,
-                'kis_balance': official_balance,
-                'local_ledger': local_ledger,
-                'official_t_state': official_t_state,
-                'discrepancy': discrepancy,
-                'order_statuses': order_statuses,
-                'order_status_warning': order_status_warning,
                 'profit_amt': (curr - actual_avg) * actual_qty if actual_qty > 0 else 0, 
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
                 'upward_sniper': "ON" if upward_sniper_mode_on else "OFF",
@@ -576,7 +425,6 @@ class TelegramCommands:
                 if status_msg:
                     await self._safe_edit(status_msg, f"🛡️ <b>[{t}] 장부 무결성 검증 진행 중... (최대 1~2분 소요될 수 있습니다)</b>", parse_mode='HTML')
                 
-                # 🚨 MODIFIED: [원인 추적 시스템 락온] 에러 마스킹을 파기하고 하위 로직에서 반환된 '구체적인 통신 실패 원인' 텍스트를 그대로 캡처
                 res = await self.sync_engine.process_auto_sync(t, chat_id, context, silent_ledger=True)
                 if res == "SUCCESS": success_tickers.append(t)
                 elif res == "LOCKED": locked_tickers.append(t)
@@ -604,7 +452,6 @@ class TelegramCommands:
                 await self._safe_send(context, chat_id, f"⚠️ <b>[동기화 지연]</b> {', '.join(locked_tickers)} 종목은 현재 백그라운드 스케줄러가 장부를 점유 중입니다. 잠시 후 다시 시도해주세요.", parse_mode='HTML')
             
             if error_tickers:
-                # 🚨 MODIFIED: [원인 추적 시스템 락온] 정확한 통신 에러 사유를 UI 하단에 명시적으로 렌더링
                 err_details = '\n'.join([f"▫️ {err}" for err in error_tickers])
                 await self._safe_send(context, chat_id, f"❌ <b>[동기화 에러 상세 진단]</b>\n{err_details}\n\n💡 KIS 서버 일시 장애이거나 토큰 문제일 수 있습니다. 상세 통신 로그는 <code>/log</code> 명령어로 확인하세요.", parse_mode='HTML')
                 
@@ -688,6 +535,55 @@ class TelegramCommands:
         else:
             await self._safe_reply(update.effective_message, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
 
+    async def cmd_ticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        active_tickers = await self._retry_api(self.cfg.get_active_tickers, default=[])
+        if not isinstance(active_tickers, list): active_tickers = []
+        msg, markup = self.view.get_ticker_menu(active_tickers)
+        
+        is_callback = update.callback_query is not None
+        if is_callback:
+            await self._safe_edit(update.effective_message, msg, reply_markup=markup, parse_mode='HTML')
+        else:
+            await self._safe_reply(update.effective_message, msg, reply_markup=markup, parse_mode='HTML')
+
+    async def cmd_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        active_tickers = await self._retry_api(self.cfg.get_active_tickers, default=[])
+        if not isinstance(active_tickers, list): active_tickers = []
+        
+        report = "📊 <b>[ 자율주행 변동성 마스터 지표 상세 분석 ]</b>\n\n"
+        report += "<b>[ 🧭 지수 범위 범례 (ON/OFF 권장) ]</b>\n"
+        report += "🧊 <code>~ 15.00</code> : 극저변동성 (OFF)\n"
+        report += "🟩 <code>15.00 ~ 20.00</code> : 정상 궤도 (OFF)\n"
+        report += "🟨 <code>20.00 ~ 25.00</code> : 변동성 확대 (ON)\n"
+        report += "🟥 <code>25.00 이상 </code> : 패닉 셀링 (ON)\n\n"
+        
+        for t in active_tickers:
+            idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
+            dynamic_pct_obj = await self._retry_api(self.broker.get_dynamic_sniper_target, idx_ticker)
+            
+            real_val = self._safe_float(getattr(dynamic_pct_obj, 'metric_val', 0.0))
+            real_name = html.escape(str(getattr(dynamic_pct_obj, 'metric_name', '지표')))
+            
+            if real_val <= 15.0: diag_text = "극저변동성 (우측 꼬리 절단 방지를 위해 스나이퍼 OFF)"; status_icon = "🧊"
+            elif real_val <= 20.0: diag_text = "정상 궤도 안착 (스나이퍼 OFF)"; status_icon = "🟩"
+            elif real_val <= 25.0: diag_text = "변동성 확대 장세 (계좌 방어를 위해 스나이퍼 ON)"; status_icon = "🟨"
+            else: diag_text = "패닉 셀링 및 시스템 충격 (스나이퍼 필수 가동)"; status_icon = "🟥"
+            report += f"💠 <b>[ {html.escape(str(t))} 국면 분석 ]</b>\n▫️ 당일 절대 지수({real_name}): {real_val:.2f}\n▫️ 진단 : {status_icon} {diag_text}\n\n"
+                 
+        report += "🎯 <b>[ 수동 상방 스나이퍼 독립 제어 ]</b>\n"
+        keyboard = []
+        for t in active_tickers:
+            is_sniper = await self._retry_api(self.cfg.get_upward_sniper_mode, t, default=False)
+            status_txt = 'ON (가동중)' if is_sniper else 'OFF (대기중)'
+            report += f"▫️ {html.escape(str(t))} 현재 상태 : {status_txt}\n"
+            keyboard.append([InlineKeyboardButton(f"{html.escape(str(t))} ⚪ OFF", callback_data=f"MODE:OFF:{html.escape(str(t))}"), InlineKeyboardButton(f"{html.escape(str(t))} 🎯 ON", callback_data=f"MODE:ON:{html.escape(str(t))}")])
+        
+        is_callback = update.callback_query is not None
+        if is_callback:
+            await self._safe_edit(update.effective_message, report, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+        else:
+            await self._safe_reply(update.effective_message, report, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
+
     async def cmd_version(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         history_data = await self._retry_api(self.cfg.get_full_version_history, default=[])
         msg, markup = self.view.get_version_message(history_data, page_index=None)
@@ -698,16 +594,192 @@ class TelegramCommands:
         else:
             await self._safe_reply(update.effective_message, msg, parse_mode='HTML', reply_markup=markup)
 
-    async def cmd_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await self._safe_reply(update.effective_message, UNSUPPORTED_OFFICIAL_SOXL_MESSAGE)
-        return
+    async def cmd_queue(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if not args: 
+            await self._safe_reply(update.effective_message, "❌ 종목명을 입력하세요. 예: /queue SOXL")
+            return
+            
+        ticker = args[0].upper()
+        if not getattr(self, 'queue_ledger', None):
+            from queue_ledger import QueueLedger
+            self.queue_ledger = await asyncio.to_thread(QueueLedger)
+            
+        q_data = await self._retry_api(self.queue_ledger.get_queue, ticker, default=[])
+        msg, reply_markup = self.view.get_queue_management_menu(ticker, q_data if isinstance(q_data, list) else [])
+        
+        await self._safe_reply(update.effective_message, msg, reply_markup=reply_markup, parse_mode='HTML')
 
-    async def cmd_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        report = await self._retry_api(
-            build_daily_report, self.cfg, self.broker, self.strategy, self.view,
-            timeout=20.0, default="❌ 일일 리포트 생성 중 오류가 발생했습니다."
-        )
-        await self._safe_reply(update.effective_message, report)
+    async def cmd_add_q(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if not args or len(args) < 4:
+            await self._safe_reply(update.effective_message, "❌ 정확한 양식: <code>/add_q SOXL 2026-04-06 20 52.16</code>", parse_mode='HTML')
+            return
+            
+        ticker = args[0].upper()
+        date_str = args[1]
+        qty = int(self._safe_float(args[2]))
+        price = self._safe_float(args[3])
+        
+        if qty <= 0 or price <= 0.0:
+            await self._safe_reply(update.effective_message, "❌ 수량과 평단가는 0보다 큰 숫자여야 합니다. (혹은 형식 오류)", parse_mode='HTML')
+            return
+            
+        curr_p_val = await self._retry_api(self.broker.get_current_price, ticker)
+        curr_p = self._safe_float(curr_p_val)
+                
+        if curr_p > 0:
+            if price < curr_p * 0.4 or price > curr_p * 1.6:
+                await self._safe_reply(update.effective_message, f"🚨 <b>오입력 차단:</b> 입력하신 평단가(<b>${price:.2f}</b>)가 현재가 대비 ±60%를 벗어납니다. 오타를 확인하세요!", parse_mode='HTML')
+                return
+            
+        if not getattr(self, 'queue_ledger', None):
+            from queue_ledger import QueueLedger
+            self.queue_ledger = await asyncio.to_thread(QueueLedger)
+            
+        q_data = await self._retry_api(self.queue_ledger.get_queue, ticker, default=[])
+        if not isinstance(q_data, list): q_data = [] 
+       
+        q_data.append({"qty": qty, "price": price, "date": f"{date_str} 23:59:59", "type": "MANUAL_OVERRIDE"})
+        q_data.sort(key=lambda x: str(x.get('date', '')) if isinstance(x, dict) else '', reverse=True)
+ 
+        await self._retry_api(self.queue_ledger.overwrite_queue, ticker, q_data)
+        
+        # 🚨 MODIFIED: [이중 타격 방어] 큐 수동 추가 시에도 로컬 슬라이싱 및 애프터장 지시서 원자적 영구 소각
+        def _nuke_snapshot_and_state():
+            for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
+                with GlobalThrottle.get_file_lock(f):
+                    try: os.remove(f)
+                    except OSError: pass
+            for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
+                with GlobalThrottle.get_file_lock(f):
+                    try: os.remove(f)
+                    except OSError: pass
+            
+            # 🚨 MODIFIED: 2차 오인 패러독스 차단 (물리적 삭제 대신 빈 지시서 박제)
+            est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
+            today_str = est_now.strftime('%Y-%m-%d')
+            empty_state = {"date": today_str, "hijacked": True, "orders": []}
+            
+            for f_path in [f"data/vrev_slice_state_{ticker}.json", f"data/vrev_aftermarket_state_{ticker}.json"]:
+                with GlobalThrottle.get_file_lock(f_path):
+                    dir_name = os.path.dirname(f_path) or '.'
+                    try: os.makedirs(dir_name, exist_ok=True)
+                    except OSError: pass
+                    try:
+                        fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
+                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                            json.dump(empty_state, f_out, ensure_ascii=False, indent=4)
+                            f_out.flush()
+                            os.fsync(f_out.fileno())
+                        os.replace(tmp_path, f_path)
+                    except Exception: pass
+                    
+        await asyncio.to_thread(_nuke_snapshot_and_state)
+        
+        chat_id = update.effective_chat.id
+        if ticker not in self.sync_engine.sync_locks: self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+        if not self.sync_engine.sync_locks[ticker].locked(): await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=False)
+        
+        date_str_safe = html.escape(str(date_str))
+        ticker_safe = html.escape(str(ticker))
+        await self._safe_reply(update.effective_message, f"✅ <b>[{ticker_safe}] 수동 지층 삽입 완료 및 오염 기억 자동 삭제!</b>\n▫️ {date_str_safe} | {qty}주 | ${price:.2f}", parse_mode='HTML')
+
+    async def cmd_clear_q(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if not args: 
+            await self._safe_reply(update.effective_message, "❌ 종목명을 입력하세요. 예: /clear_q SOXL")
+            return
+            
+        ticker = args[0].upper()
+        ticker_safe = html.escape(str(ticker))
+
+        if not getattr(self, 'queue_ledger', None):
+            from queue_ledger import QueueLedger
+            self.queue_ledger = await asyncio.to_thread(QueueLedger)
+            
+        await self._retry_api(self.queue_ledger.clear_queue, ticker)
+        
+        # 🚨 MODIFIED: [이중 타격 방어] 큐 전체 삭제 시 로컬 슬라이싱 및 애프터장 지시서 원자적 영구 소각
+        def _nuke_snapshot_and_state():
+            for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
+                with GlobalThrottle.get_file_lock(f):
+                    try: os.remove(f)
+                    except OSError: pass
+            for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
+                with GlobalThrottle.get_file_lock(f):
+                    try: os.remove(f)
+                    except OSError: pass
+                    
+            # 🚨 MODIFIED: 2차 오인 패러독스 차단 (물리적 삭제 대신 빈 지시서 박제)
+            est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
+            today_str = est_now.strftime('%Y-%m-%d')
+            empty_state = {"date": today_str, "hijacked": True, "orders": []}
+            
+            for f_path in [f"data/vrev_slice_state_{ticker}.json", f"data/vrev_aftermarket_state_{ticker}.json"]:
+                with GlobalThrottle.get_file_lock(f_path):
+                    dir_name = os.path.dirname(f_path) or '.'
+                    try: os.makedirs(dir_name, exist_ok=True)
+                    except OSError: pass
+                    try:
+                        fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
+                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
+                            json.dump(empty_state, f_out, ensure_ascii=False, indent=4)
+                            f_out.flush()
+                            os.fsync(f_out.fileno())
+                        os.replace(tmp_path, f_path)
+                    except Exception: pass
+                    
+        await asyncio.to_thread(_nuke_snapshot_and_state)
+        
+        chat_id = update.effective_chat.id
+        if ticker not in self.sync_engine.sync_locks: self.sync_engine.sync_locks[ticker] = asyncio.Lock()
+        if not self.sync_engine.sync_locks[ticker].locked(): await self.sync_engine.process_auto_sync(ticker, chat_id, context, silent_ledger=True)
+        await self._safe_reply(update.effective_message, f"🗑️ <b>[{ticker_safe}] 장부가 완전히 소각되고 당일 오염 기억이 파기되었습니다.</b>\n새로운 지층을 구축할 준비가 완료되었습니다.", parse_mode='HTML')
+
+    async def cmd_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        updater = SystemUpdater()
+        allowed, fail_msg = await updater.is_update_allowed()
+        if not allowed:
+            await self._safe_reply(update.effective_message, f"🛑 <b>[작전 중 업데이트 거부]</b>\n\n{fail_msg}", parse_mode='HTML')
+            return
+            
+        is_callback = update.callback_query is not None
+        status_msg = update.effective_message if is_callback else None
+        
+        if not is_callback:
+             status_msg = await self._safe_reply(update.effective_message, "⏳ <b>[시스템 업데이트]</b> 깃허브 원격 서버와 통신을 시작합니다...", parse_mode='HTML')
+        
+        success, msg = await updater.pull_latest_code()
+        safe_msg = html.escape(str(msg)) 
+        if success:
+            await self._safe_edit(status_msg, f"✅ <b>[동기화 완료]</b> {safe_msg}\n\n🔄 시스템 데몬(pipiosbot)을 OS 단에서 재가동합니다. 다운타임 후 봇이 다시 깨어납니다.", parse_mode='HTML')
+            await updater.restart_daemon()
+        else:
+            await self._safe_edit(status_msg, f"❌ <b>[동기화 실패]</b>\n▫️ 사유: {safe_msg}", parse_mode='HTML')
+
+    async def cmd_avwap(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        is_callback = update.callback_query is not None
+        status_msg = update.effective_message if is_callback else None
+        
+        if not is_callback:
+            status_msg = await self._safe_reply(update.effective_message, "⏳ <b>[AVWAP 듀얼 모멘텀 관제탑]</b>\n레이더망을 가동하여 시장 데이터를 스캔 중...", parse_mode='HTML')
+        
+        plugin = AvwapConsolePlugin(self.cfg, self.broker, self.strategy, self.tx_lock)
+        app_data = context.bot_data.get('app_data', {})
+        if not app_data or not isinstance(app_data, dict):
+            try:
+                jobs = context.job_queue.jobs() if context.job_queue else []
+                if jobs and len(jobs) > 0 and jobs[0].data is not None: app_data = jobs[0].data
+            except Exception: app_data = {}
+        if not isinstance(app_data, dict): app_data = {}
+
+        msg, markup = await self._retry_api(plugin.get_console_message, app_data, timeout=15.0)
+        
+        if msg:
+            await self._safe_edit(status_msg, msg, reply_markup=markup, parse_mode='HTML')
+        else:
+            await self._safe_edit(status_msg, "❌ <b>[네트워크 지연 발생]</b>\n야후 파이낸스 또는 증권사 서버 응답이 지연되어 스캔을 강제 종료했습니다.", parse_mode='HTML')
 
     async def cmd_log(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_callback = update.callback_query is not None
