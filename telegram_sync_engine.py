@@ -424,13 +424,12 @@ class TelegramSyncEngine:
                 return "SUCCESS"
 
     async def _display_ledger(self, ticker, chat_id, context, query=None, message_obj=None, pre_fetched_holdings=None):
-        full_ledger = await self._retry_api(self.cfg.get_ledger, default=[])
-        recs = [r for r in full_ledger if isinstance(r, dict) and r.get('ticker') == ticker]
+        recs = await self._retry_api(self.cfg.get_official_fills, ticker, default=[])
         
         report = ""
         
         if not recs:
-            report += f"📭 <b>[{html.escape(str(ticker))}]</b> 현재 진행 중인 본진 사이클이 없습니다 (보유량 0주).\n\n"
+            report += f"📭 <b>[{html.escape(str(ticker))}]</b> 신규 원장(실제 체결가) 기준 체결 내역이 없습니다.\n\n"
         else:
             from collections import OrderedDict
             agg_dict = OrderedDict()

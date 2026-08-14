@@ -65,6 +65,7 @@ class ConfigManager:
             "T_EVENTS": "data/t_events_SOXL.jsonl",
             "LEGACY_HISTORY": "data/legacy_history_SOXL_20260622_20260810.json",
             "EXECUTION_LEDGER": "data/execution_ledger_SOXL.jsonl",
+            "PROCESSED_FILLS": "data/processed_fills_SOXL.jsonl",
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
@@ -571,6 +572,80 @@ class ConfigManager:
         invested_up = math.ceil(total_invested * 100) / 100.0
         sold_up = math.ceil(total_sold * 100) / 100.0
         return total_qty, avg_price, invested_up, sold_up
+
+    def get_official_fills(self, ticker):
+        """/record 거래내역 리스트 전용: 신규 원장(실제 체결가) 기준 각 체결 건.
+
+        legacy manual_ledger.json(price=평단가 오기록) 대신, KIS 확정 체결의 실제
+        체결가를 execution_ledger_SOXL.jsonl + processed_fills_SOXL.jsonl에서 읽어
+        (date, side, qty, price, order_no) 형태로 중복 제거 후 반환한다.
+        """
+        target = str(ticker).upper()
+        by_order: dict = {}
+
+        def _norm_trade_date(raw):
+            text = str(raw or "").replace("-", "").strip()
+            if len(text) >= 8:
+                return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+            return str(raw or "")
+
+        def _absorb(rec, order_no):
+            side = str(rec.get("side", "")).upper()
+            qty = int(self._safe_float(rec.get("qty", 0)))
+            price = self._safe_float(rec.get("price", 0.0))
+            if side not in ("BUY", "SELL") or qty <= 0 or price <= 0:
+                return
+            raw_date = rec.get("trade_date") or rec.get("date")
+            trade_date = str(raw_date or "").replace("-", "")
+            key = order_no or f"{trade_date}|{side}|{qty}|{price:.2f}"
+            if key in by_order:
+                return
+            by_order[key] = {
+                "date": _norm_trade_date(raw_date),
+                "trade_date": trade_date,
+                "side": side,
+                "qty": qty,
+                "price": price,
+                "order_no": order_no,
+            }
+
+        # 1) official execution ledger (append-only, source=KIS_CONFIRMED_FILL)
+        exec_path = self.FILES.get("EXECUTION_LEDGER", "")
+        if exec_path and os.path.exists(exec_path):
+            try:
+                with open(exec_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(rec, dict) and str(rec.get("source")) == "KIS_CONFIRMED_FILL" and str(rec.get("ticker", "")).upper() == target:
+                            _absorb(rec, str(rec.get("kis_order_no") or rec.get("order_no") or ""))
+            except Exception as e:
+                logging.warning(f"⚠️ [Config] execution ledger 읽기 실패: {e}")
+
+        # 2) processed_fills (체결 확정 시각/amount 보유) — 실행 원장 누락분 보강
+        processed_path = self.FILES.get("PROCESSED_FILLS", "") or os.path.join("data", f"processed_fills_{target}.jsonl")
+        if processed_path and os.path.exists(processed_path):
+            try:
+                with open(processed_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(rec, dict) and str(rec.get("ticker", "")).upper() == target:
+                            _absorb(rec, str(rec.get("order_no") or rec.get("kis_order_no") or ""))
+            except Exception as e:
+                logging.warning(f"⚠️ [Config] processed fills 읽기 실패: {e}")
+
+        return sorted(by_order.values(), key=lambda r: (str(r.get("trade_date") or ""), str(r.get("order_no") or "")))
 
     def get_reverse_state(self, ticker):
         with GlobalThrottle.get_file_lock(self.FILES["REVERSE_CFG"]):
