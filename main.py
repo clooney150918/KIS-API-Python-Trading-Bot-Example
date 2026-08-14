@@ -32,6 +32,7 @@ from telegram_bot import TelegramController
 from queue_ledger import QueueLedger
 from strategy_reversion import ReversionStrategy
 from volatility_engine import VolatilityEngine, determine_market_regime
+from runtime_safety import RuntimeSafetyGate
 
 from scheduler_core import (
     scheduled_token_check,
@@ -41,10 +42,8 @@ from scheduler_core import (
     perform_self_cleaning,
     is_market_open
 )
-from scheduler_sniper import scheduled_sniper_monitor
 # 🚨 NEW: [Case 39 & 40] 애프터장 지연 타격 엔진(scheduled_aftermarket_vrev_trade) 임포트 결속
-from scheduler_vwap import scheduled_vwap_trade, scheduled_vwap_init_and_cancel, scheduled_aftermarket_vrev_trade
-from scheduler_regular import scheduled_early_regular_trade, scheduled_regular_trade_delayed
+from scheduler_regular import scheduled_early_regular_trade
 
 TICKER_BASE_MAP = {
     "SOXL": "SOXX",
@@ -222,13 +221,43 @@ def main():
     latest_version = cfg.get_latest_version() 
     
     logging.info("=" * 60)
-    logging.info(f"🚀 옴니 매트릭스 퀀트 엔진 {latest_version} (V86.00 순수 리버전 팩트 락온 에디션)")
+    logging.info(f"🚀 무한매수법 V4.0 엔진 {latest_version}")
     logging.info("=" * 60)
     
     perform_self_cleaning()
     cfg.set_chat_id(ADMIN_CHAT_ID)
     
     broker = KoreaInvestmentBroker(APP_KEY, APP_SECRET, CANO, ACNT_PRDT_CD)
+    runtime_safety_gate = RuntimeSafetyGate()
+    from pathlib import Path
+    from order_intent_store import OrderIntentStore
+    from trade_state_store import TradeStateStore
+    from fill_reconciler import FillReconciler, ProcessedFillStore
+    from runtime_safety import account_fingerprint as _acct_fp, resolve_account_fingerprint_key
+
+    def _current_t_revision(symbol):
+        try:
+            st = cfg.get_official_t_state(symbol)
+            return int(st.get("revision", 1)) if isinstance(st, dict) else 1
+        except Exception:
+            return 1
+
+    order_intent_store = OrderIntentStore(
+        Path("data") / "order_intents_SOXL.jsonl",
+        current_t_revision_provider=_current_t_revision,
+    )
+    trade_state_store = TradeStateStore(
+        cfg.FILES["STRATEGY_BASELINE"],
+        cfg.FILES["T_EVENTS"],
+    )
+    processed_fill_store = ProcessedFillStore(Path("data") / "processed_fills_SOXL.jsonl")
+
+    _fp_key = resolve_account_fingerprint_key(getattr(broker, "account_fingerprint_key", None))
+    _fp = _acct_fp(getattr(broker, "cano", None), getattr(broker, "acnt_prdt_cd", None), key=_fp_key) if _fp_key else None
+    fill_reconciler = FillReconciler(
+        order_intent_store, trade_state_store, processed_fill_store,
+        account_fingerprint=(_fp or ""),
+    )
     strategy = InfiniteStrategy(cfg)
     queue_ledger = QueueLedger()
     strategy_rev = ReversionStrategy(cfg)
@@ -240,7 +269,12 @@ def main():
     
     app_data = {
         'cfg': cfg, 'broker': broker, 'strategy': strategy, 
-        'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,  
+        'queue_ledger': queue_ledger, 'strategy_rev': strategy_rev,
+        'runtime_safety_gate': runtime_safety_gate,
+        'scheduler_safety_gate': runtime_safety_gate,
+        'order_intent_store': order_intent_store,
+        'fill_reconciliation_guard': fill_reconciler,
+        'current_t_revision_provider': _current_t_revision,
         'bot': bot, 'tx_lock': None, 'base_map': TICKER_BASE_MAP,
         'tz_est': est_zone, 'regime_data': {"status": "pending", "msg": "10:00 EST 이전 오프닝 휩소 대기"} 
     }
@@ -283,7 +317,6 @@ def main():
         jq.run_once(scheduled_auto_sync, 5.0, chat_id=ADMIN_CHAT_ID, data=app_data)
     
     jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
-    jq.run_daily(scheduled_volatility_scan, time=datetime.time(10, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 MODIFIED: [맹점 4 수술] KST 래핑 타임 패러독스(Time Paradox) 완벽 교정 및 PTB 네이티브 타임존 100% 위임
     early_trade_time = datetime.time(17, 5, tzinfo=kst_zone)
@@ -292,19 +325,13 @@ def main():
     
     # 🚨 [15:26 EST] V-REV 본진 덫 지연 장전 락온
     delayed_trade_time = datetime.time(15, 26, tzinfo=est_zone)
-    jq.run_daily(scheduled_regular_trade_delayed, time=delayed_trade_time, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
 
-    jq.run_daily(scheduled_vwap_init_and_cancel, time=datetime.time(15, 26, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
 
-    jq.run_repeating(scheduled_sniper_monitor, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 MODIFIED: [15:59 EST] 암살자 제로-오버나이트 강제 덤핑 전용 스케줄 락온 (단일화 확정)
-    jq.run_daily(scheduled_sniper_monitor, time=datetime.time(15, 59, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
     # 🚨 NEW: [16:01 EST] 자본 잠김(Capital Lock-up)으로 지연 이관된 V-REV 본진 플랜을 애프터장에 일괄 타격하는 스케줄 파이프라인 (Case 39, 40 방어)
-    jq.run_daily(scheduled_aftermarket_vrev_trade, time=datetime.time(16, 1, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     
-    jq.run_repeating(scheduled_vwap_trade, interval=60, first=30, chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_daily(scheduled_self_cleaning, time=datetime.time(17, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
         
     app.run_polling()

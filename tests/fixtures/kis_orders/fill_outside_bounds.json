@@ -1,0 +1,10 @@
+{
+  "scenario": "fill outside qty price or side bounds",
+  "account_fingerprint": "acct-A",
+  "ticker": "SOXL",
+  "executions": [
+    {"odno":"ODNO-5","ord_dt":"20260812","ord_tmd":"223015","pdno":"SOXL","ovrs_excg_cd":"AMEX","sll_buy_dvsn_cd":"02","ft_ccld_qty":"5","ft_ccld_unpr3":"100.00"},
+    {"odno":"ODNO-5","ord_dt":"20260812","ord_tmd":"223016","pdno":"SOXL","ovrs_excg_cd":"AMEX","sll_buy_dvsn_cd":"02","ft_ccld_qty":"4","ft_ccld_unpr3":"110.00"},
+    {"odno":"ODNO-5","ord_dt":"20260812","ord_tmd":"223017","pdno":"SOXL","ovrs_excg_cd":"AMEX","sll_buy_dvsn_cd":"01","ft_ccld_qty":"4","ft_ccld_unpr3":"100.00"}
+  ]
+}

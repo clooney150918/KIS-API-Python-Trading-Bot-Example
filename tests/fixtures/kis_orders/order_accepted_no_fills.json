@@ -1,0 +1,6 @@
+{
+  "scenario": "order accepted by KIS but no execution fills yet",
+  "account_fingerprint": "acct-A",
+  "ticker": "SOXL",
+  "executions": []
+}

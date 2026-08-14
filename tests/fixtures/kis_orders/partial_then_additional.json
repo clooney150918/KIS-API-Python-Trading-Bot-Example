@@ -1,0 +1,9 @@
+{
+  "scenario": "partial then additional fill",
+  "account_fingerprint": "acct-A",
+  "ticker": "SOXL",
+  "executions": [
+    {"odno":"ODNO-2","ord_dt":"20260812","ord_tmd":"223000","pdno":"SOXL","ovrs_excg_cd":"AMEX","sll_buy_dvsn_cd":"02","ft_ccld_qty":"2","ft_ccld_unpr3":"100.00"},
+    {"odno":"ODNO-2","ord_dt":"20260812","ord_tmd":"223500","pdno":"SOXL","ovrs_excg_cd":"AMEX","sll_buy_dvsn_cd":"02","ft_ccld_qty":"2","ft_ccld_unpr3":"100.00"}
+  ]
+}

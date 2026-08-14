@@ -46,6 +46,46 @@ class TelegramSyncEngine:
             return f_val
         except Exception: return 0.0
 
+    def _official_trade_date(self, value):
+        text = str(value or "").strip()
+        if len(text) == 8 and text.isdigit():
+            return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+        if len(text) >= 10:
+            return text[:10]
+        return text
+
+    def sync_official_execution_facts(self, ticker, kis_execution_rows, *, account_fingerprint):
+        """Append confirmed KIS facts to the official execution ledger only.
+
+        This deliberately does not mutate/overwrite manual_ledger or legacy history.
+        """
+        from fill_reconciler import build_fill_key, normalize_kis_execution
+        from ledger_migration import OFFICIAL_FILL_SOURCE
+
+        target = str(ticker or "").strip().upper()
+        appended = []
+        for row in kis_execution_rows or []:
+            normalized = normalize_kis_execution(row, account_fingerprint=account_fingerprint)
+            if normalized.get("ticker") != target:
+                continue
+            price = normalized["price"]
+            official_record = {
+                "source": OFFICIAL_FILL_SOURCE,
+                "trade_date": self._official_trade_date(normalized.get("trade_date")),
+                "ticker": target,
+                "exchange": str(normalized.get("exchange") or "").upper(),
+                "side": normalized["side"],
+                "qty": int(normalized["qty"]),
+                "price": format(price, "f"),
+                "kis_order_no": normalized["order_no"],
+                "execution_time": str(normalized.get("execution_time") or ""),
+                "account_fingerprint": str(account_fingerprint or ""),
+                "fill_key": build_fill_key(normalized),
+                "confirmed": True,
+            }
+            appended.append(self.cfg.append_kis_confirmed_execution_fact(official_record))
+        return {"appended_count": len(appended), "fills": appended}
+
     async def _retry_api(self, func, *args, timeout=15.0, default=None, **kwargs):
         """ 🚨 [Case 31, 32] 3단 지수 백오프 및 GlobalThrottle 중앙 집중형 TPS 방어망 결속 """
         for attempt in range(3):
@@ -233,6 +273,34 @@ class TelegramSyncEngine:
                     if raw_execs is None:
                         return "체결 원장 조회(get_execution_history) 실패 - API 서버 무응답 또는 거절"
                     target_execs = filter_to_est(raw_execs)
+
+                official_append_result = {"appended_count": 0, "fills": []}
+                if target_execs:
+                    account_fingerprint = ""
+                    if hasattr(self.cfg, "get_account_fingerprint"):
+                        account_fingerprint = await self._retry_api(self.cfg.get_account_fingerprint, default="") or ""
+                    official_append_result = await self._retry_api(
+                        self.sync_official_execution_facts,
+                        ticker,
+                        target_execs,
+                        account_fingerprint=account_fingerprint,
+                        timeout=10.0,
+                        default={"appended_count": 0, "fills": []},
+                    )
+                    appended_count = int(self._safe_float((official_append_result or {}).get("appended_count", 0)))
+                    if appended_count > 0:
+                        logging.info(f"🏛️ [{ticker}] KIS 확정 체결 {appended_count}건을 공식 체결 원장에 append했습니다. legacy/manual ledger는 변경하지 않습니다.")
+                    app_data = context.bot_data.get('app_data', {}) if hasattr(context, "bot_data") else {}
+                    if not isinstance(app_data, dict):
+                        app_data = {}
+                    fill_reconciler = app_data.get('fill_reconciliation_guard')
+                    if fill_reconciler is not None:
+                        try:
+                            reconcile_result = fill_reconciler.reconcile(ticker, target_execs)
+                            if reconcile_result.get("operator_halt"):
+                                logging.warning(f"🚨 [{ticker}] 체결 대사에서 HALT 조건 발생: {reconcile_result.get('codes')}")
+                        except Exception as e:
+                            logging.error(f"⛔ [{ticker}] 체결→T이벤트 대사 실패: {e}")
 
                 calibrated_count = 0
                 if target_execs:
@@ -749,31 +817,8 @@ class TelegramSyncEngine:
             report += f"▪️ 총 매수액 : ${total_buy:,.2f}\n"
             report += f"▪️ 총 매도액 : ${total_sell:,.2f}\n"
 
-        try:
-            from assassin_ledger import AssassinLedger
-            a_ledger = await asyncio.wait_for(asyncio.to_thread(AssassinLedger), timeout=5.0)
-            a_data = await self._retry_api(a_ledger.get_ledger, ticker, default=[])
-            
-            report += f"\n🔫 <b>[ 암살자 (aVWAP) 독립 장부 상태 ]</b>\n"
-            
-            if a_data and isinstance(a_data, list) and len(a_data) > 0:
-                a_qty = sum(int(self._safe_float(r.get('qty'))) for r in a_data)
-                if a_qty > 0:
-                    a_inv = sum(int(self._safe_float(r.get('qty'))) * self._safe_float(r.get('price')) for r in a_data)
-                    a_avg = a_inv / a_qty if a_qty > 0 else 0.0
-                    report += f"▪️ 진행 상태 : <b>ON (교전/오버나이트 중)</b>\n"
-                    report += f"▪️ 락온 수량 : <b>{a_qty} 주</b>\n"
-                    report += f"▪️ 진입 평단가: <b>${a_avg:,.2f}</b>\n"
-                else:
-                    report += f"▪️ 진행 상태 : <b>STANDBY (타점 감시 중 / 0주)</b>\n"
-            else:
-                report += f"▪️ 진행 상태 : <b>STANDBY (타점 감시 중 / 0주)</b>\n"
-                
-        except Exception as e:
-            logging.error(f"🚨 암살자 장부 UI 렌더링 실패: {e}")
-
         report += f"\n🏛️ <b>[ KIS 실서버 종합 원장 계좌 정보 ]</b>\n"
-        report += f"▪️ KIS 총 수량 : <b>{kis_raw_qty} 주</b> (본진 {actual_qty}주 + 암살자 {kis_raw_qty - actual_qty if kis_raw_qty > actual_qty else 0}주)\n"
+        report += f"▪️ KIS 총 수량 : <b>{kis_raw_qty} 주</b>\n"
         report += f"▪️ KIS 실평단가 : <b>${kis_raw_avg:,.2f}</b> (증권사 앱 표출 팩트 단가)\n"
 
         msg = report

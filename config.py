@@ -60,6 +60,10 @@ class ConfigManager:
             "COMPOUND_CFG": "data/compound_config.json",
             "VERSION_CFG": "data/version_config.json",
             "REVERSE_CFG": "data/reverse_config.json",
+            "T_STATE": "data/t_state.json",
+            "STRATEGY_BASELINE": "data/strategy_baseline_SOXL_2026-08-13.json",
+            "T_EVENTS": "data/t_events_SOXL.jsonl",
+            "EXECUTION_LEDGER": "data/execution_ledger_SOXL.jsonl",
             "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
@@ -84,6 +88,49 @@ class ConfigManager:
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
         self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
+        self._last_t_event_status = {}
+
+    def _set_t_event_status(self, ticker, ok, error=None):
+        target = str(ticker).upper()
+        self._last_t_event_status[target] = {
+            "ok": bool(ok),
+            "error": "" if error is None else str(error),
+        }
+
+    def get_t_event_state_status(self, ticker):
+        target = str(ticker).upper()
+        return self._last_t_event_status.get(target, {"ok": True, "error": ""}).copy()
+
+    def get_official_t_state(self, ticker, actual_qty=None, actual_avg_price=None):
+        """Return current official T state.
+
+        이벤트식 T: actual_qty/actual_avg_price는 호출부 호환을 위해
+        받지만 T 계산에는 사용하지 않는다.
+        """
+        target = str(ticker).upper()
+        try:
+            from trade_state_store import TradeStateStore
+
+            state = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"]).load_state(target)
+            t = float(state.t)
+            self._set_t_event_status(target, True)
+            return {
+                "ticker": state.ticker,
+                "t": round(t, 2),
+                "revision": int(state.revision),
+                "available_cash": float(state.available_cash),
+                "reverse_active": bool(state.reverse_active),
+            }
+        except Exception as e:
+            self._set_t_event_status(target, False, e)
+            raise
+
+    def append_kis_confirmed_execution_fact(self, fill):
+        """Append one post-cutoff confirmed KIS fill to the official execution ledger."""
+        from ledger_migration import ExecutionLedger
+
+        ledger = ExecutionLedger(self.FILES["EXECUTION_LEDGER"])
+        return ledger.append_confirmed_fill(fill)
 
     def _safe_float(self, value):
         try:
@@ -288,19 +335,23 @@ class ConfigManager:
             return bool(locks.get(f"{today}_{ticker}_{market_type}", False))
 
     def get_absolute_t_val(self, ticker, actual_qty, actual_avg_price):
-        rev_state = self.get_reverse_state(ticker)
-        split = self.get_split_count(ticker)
-        
-        if rev_state.get("is_active", False):
-            dynamic_t = self._safe_float(rev_state.get("dynamic_t", 0.0))
-            rem_cash = self._safe_float(rev_state.get("rem_cash", 0.0))
-            one_portion = rem_cash / 4.0 if rem_cash > 0 else 0.0
-            return round(dynamic_t, 4), round(one_portion, 2)
-            
-        seed = self.get_seed(ticker)
-        one_portion = seed / split if split > 0 else 1.0
-        t_val = (self._safe_float(actual_qty) * self._safe_float(actual_avg_price)) / one_portion if one_portion > 0 else 0.0
-        return round(t_val, 4), round(one_portion, 2)
+        # 이벤트식 T: 원가역산 금지. baseline + T 이벤트 원장에서 T를 가져온다.
+        target = str(ticker).upper()
+        try:
+            from trade_state_store import TradeStateStore
+
+            store = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"])
+            state = store.load_state(target)
+            t_val = float(state.t)
+            split = self.get_split_count(target)
+            remaining_splits = max(1.0, split - t_val)
+            one_portion = float(state.available_cash) / remaining_splits
+            self._set_t_event_status(target, True)
+            return round(t_val, 2), one_portion
+        except Exception as e:
+            self._set_t_event_status(target, False, e)
+            logging.error(f"⛔ [{ticker}] T값 이벤트식 로드 실패: {e}")
+            return 0.0, 0.0
 
     def apply_stock_split(self, ticker, ratio):
         safe_ratio = self._safe_float(ratio)
