@@ -496,31 +496,8 @@ class TelegramSyncEngine:
             report += f"▪️ 총 매수액 : ${total_buy:,.2f}\n"
             report += f"▪️ 총 매도액 : ${total_sell:,.2f}\n"
 
-        try:
-            from assassin_ledger import AssassinLedger
-            a_ledger = await asyncio.wait_for(asyncio.to_thread(AssassinLedger), timeout=5.0)
-            a_data = await self._retry_api(a_ledger.get_ledger, ticker, default=[])
-            
-            report += f"\n🔫 <b>[ 암살자 (aVWAP) 독립 장부 상태 ]</b>\n"
-            
-            if a_data and isinstance(a_data, list) and len(a_data) > 0:
-                a_qty = sum(int(self._safe_float(r.get('qty'))) for r in a_data)
-                if a_qty > 0:
-                    a_inv = sum(int(self._safe_float(r.get('qty'))) * self._safe_float(r.get('price')) for r in a_data)
-                    a_avg = a_inv / a_qty if a_qty > 0 else 0.0
-                    report += f"▪️ 진행 상태 : <b>ON (교전/오버나이트 중)</b>\n"
-                    report += f"▪️ 락온 수량 : <b>{a_qty} 주</b>\n"
-                    report += f"▪️ 진입 평단가: <b>${a_avg:,.2f}</b>\n"
-                else:
-                    report += f"▪️ 진행 상태 : <b>STANDBY (타점 감시 중 / 0주)</b>\n"
-            else:
-                report += f"▪️ 진행 상태 : <b>STANDBY (타점 감시 중 / 0주)</b>\n"
-                
-        except Exception as e:
-            logging.error(f"🚨 암살자 장부 UI 렌더링 실패: {e}")
-
         report += f"\n🏛️ <b>[ KIS 실서버 종합 원장 계좌 정보 ]</b>\n"
-        report += f"▪️ KIS 총 수량 : <b>{kis_raw_qty} 주</b> (본진 {actual_qty}주 + 암살자 {kis_raw_qty - actual_qty if kis_raw_qty > actual_qty else 0}주)\n"
+        report += f"▪️ KIS 총 수량 : <b>{kis_raw_qty} 주</b>\n"
         report += f"▪️ KIS 실평단가 : <b>${kis_raw_avg:,.2f}</b> (증권사 앱 표출 팩트 단가)\n"
 
         msg = report

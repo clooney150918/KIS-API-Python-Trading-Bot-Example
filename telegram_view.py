@@ -695,3 +695,15 @@ class TelegramView:
         if len(body) > (4000 - len(header) - len(footer)):
              body = "… (글자 수 제한으로 이전 로그 생략) …\n" + body[-(3800 - len(header) - len(footer)):]
         return header + body + footer
+
+    def get_queue_management_menu(self, *a, **kw):
+        return "🗄️ V-REV 큐 관리는 V4.0 순정에서 제거되었습니다.", None
+
+    def get_queue_action_confirm_menu(self, *a, **kw):
+        return "🗄️ V-REV 큐 기능은 V4.0 순정에서 제거되었습니다.", None
+
+    def get_avwap_reset_confirm_menu(self, *a, **kw):
+        return "🔫 암살자(AVWAP) 기능은 V4.0 순정에서 제거되었습니다.", None
+
+    def get_vrev_mode_selection_menu(self, *a, **kw):
+        return "⚖️ V-REV 모드는 V4.0 순정에서 제거되었습니다.", None
