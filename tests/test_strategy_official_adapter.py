@@ -593,7 +593,7 @@ def test_reverse_plan_path_uses_official_kernel_event_and_order_types(tmp_path):
         current_price=100.0,
         avg_price=158.0735,
         qty=89,
-        prev_close=138.0,
+        prev_close=120.0,
         ma_5day=134.0,
         available_cash=1482.88,
         market_type="REG",
@@ -606,7 +606,7 @@ def test_reverse_plan_path_uses_official_kernel_event_and_order_types(tmp_path):
     assert len(plan["orders"]) == 2
     assert_official_order_identity(
         plan["orders"][0],
-        event_type="FULL",
+        event_type="REVERSE_QUARTER_BUY",
         side="BUY",
         order_type="LOC",
         price="133.99",
