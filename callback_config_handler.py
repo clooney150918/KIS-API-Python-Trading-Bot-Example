@@ -3,28 +3,25 @@
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 46대 엣지 케이스 완벽 결속 교차 검증 완료
 # 🚨 MODIFIED: [암살자 부활 패러독스 궁극 방어] 수동 삼위일체 소각(/reset) 시 암살자의 상태 파일(avwap_trade_state)을 물리적 삭제하는 맹독성 로직을 영구 소각. 대신 시간대별 동적 `shutdown` 주입을 통해 프리장에만 락을 걸고 정규장/애프터장은 스케줄러가 자율 판별하도록 100% 원천 봉쇄 및 팩트 교정 완료.
-# 🚨 MODIFIED: [Phase 5 암살자 지정 예산 락온] INPUT 라우팅에 `AVWAP_BUDGET` 액션을 추가하여 사용자 예산 설정을 위한 상태(State) 전이를 완벽 매핑.
-# 🚨 MODIFIED: [Phase 5 오버나이트 락온] CONFIG_AVWAP 라우팅에 `TOGGLE_OVERNIGHT` 스위칭 로직을 결속하여 당일청산(MOC)과 오버나이트 모드를 동적으로 제어.
+# 🚨 MODIFIED: [LOC 전용 UI 정리] 삭제된 보조 엔진 설정/초기화 콜백 표면 제거 완료.
 # 🚨 MODIFIED: [Case 38 UI 렌더링 높이 붕괴 패러독스 차단] 버튼 클릭 시 1줄짜리 텍스트("업데이트 중...")로 중간 갱신하여 기존 화면을 증발시키는 행위를 전면 금지. 로딩은 query.answer() 팝업으로 대체하고 최종 결과로 단 1회 제자리 갱신(In-place Edit) 락온.
 # 🚨 MODIFIED: [Case 08, 16 헌법 사수] os.path.exists 소각, EAFP 디렉토리 생성 및 원자적 쓰기(Atomic Write) 강제 주입 완료.
 # 🚨 MODIFIED: [제1헌법 철저 준수] 파일 I/O 연산 및 텔레그램 통신 전역에 `asyncio.wait_for` 타임아웃 족쇄 100% 강제 래핑 완료 (Deadlock 원천 차단).
 # 🚨 MODIFIED: [Event Loop 교착 수술] AssassinLedger 및 SystemUpdater 인스턴스화 시 발생하는 __init__ 내부의 동기 I/O(파일 체크/생성) 블로킹을 막기 위해 100% 백그라운드 스레드(to_thread) 샌드박스로 래핑 락온.
-# 🚨 MODIFIED: [스냅샷 유령화 붕괴 궁극 수술] RESET:LOCK 내부 `_hijack_vwap_lock()` 실행 시 V-REV 뿐만 아니라 V14, V14VWAP 스냅샷 파일까지 순회하며 100% 영구 소각하도록 팩트 교정 완료.
-# 🚨 NEW: [암살자 독립 소각망 라우팅 팩트 결속] RESET 하위에 AVWAP 및 AVWAP_CONFIRM 서브 액션을 주입하여 암살자 장부 및 찌꺼기 캐시만을 안전하게 도려내는(Nuke) 팩트 배선 완료.
+# 🚨 MODIFIED: [스냅샷 유령화 붕괴 궁극 수술] RESET:LOCK 내부 `_hijack_vwap_lock()` 실행 시 V4.0 뿐만 아니라 V14, V14VWAP 스냅샷 파일까지 순회하며 100% 영구 소각하도록 팩트 교정 완료.
 # ==========================================================
 import logging
 import datetime
 import math
 from zoneinfo import ZoneInfo
 import os
-import json
 import asyncio
-import tempfile
 import html
 import telegram.error
 from telegram import Update
 from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle
+from telegram_auth import UNSUPPORTED_OFFICIAL_SOXL_MESSAGE
 
 class CallbackConfigHandler:
     def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
@@ -55,7 +52,7 @@ class CallbackConfigHandler:
 
         needs_custom_toast = False
         if action == "UPDATE" and sub == "CONFIRM": needs_custom_toast = True
-        elif action == "RESET" and sub in ["LOCK", "CONFIRM", "AVWAP_CONFIRM"]: needs_custom_toast = True
+        elif action == "RESET" and sub in ["LOCK", "CONFIRM"]: needs_custom_toast = True
         elif action == "REC" and sub == "SYNC": needs_custom_toast = True
         elif action == "HIST" and sub in ["DEL_EXEC", "IMG"]: needs_custom_toast = True
 
@@ -65,51 +62,29 @@ class CallbackConfigHandler:
             except Exception as e:
                 logging.warning(f"⚠️ [Callback] 콜백 쿼리 응답 타임아웃/실패 (진행 계속됨): {e}")
 
-        if action == "UPDATE":
-            if sub == "CONFIRM":
-                try: 
-                    await asyncio.wait_for(query.answer("⏳ 깃허브 코드 동기화 중...", show_alert=False), timeout=5.0)
-                except Exception: pass
-                
-                from plugin_updater import SystemUpdater
+        if action == "RESET" and sub in ["REV", "CONFIRM"]:
+            if sub == "REV":
+                safe_ticker = html.escape(str(ticker or "SOXL"))
+                msg = f"🛡️ <b>[{safe_ticker} 안전상태·당일 주문계획 초기화 확인]</b>\n\n"
+                msg += "실제 장부와 거래·매수 내역은 삭제하지 않습니다.\n"
+                msg += "당일 주문계획/잠금 상태만 초기화하는 안전 확인 단계입니다."
                 try:
-                    updater = await asyncio.wait_for(asyncio.to_thread(SystemUpdater), timeout=5.0)
-                except Exception as e:
-                    logging.error(f"🚨 업데이터 코어 로드 실패: {e}")
-                    try: await asyncio.wait_for(query.edit_message_text(f"❌ <b>[로드 실패]</b> 시스템 모듈을 초기화할 수 없습니다.", parse_mode='HTML'), timeout=10.0)
-                    except Exception: pass
-                    return
-                
+                    await asyncio.wait_for(query.edit_message_text(msg, parse_mode='HTML'), timeout=10.0)
+                except Exception:
+                    pass
+            else:
                 try:
-                    success, msg = await updater.pull_latest_code()
-                    safe_msg = html.escape(str(msg)) 
-                    if success:
-                        try: 
-                            await asyncio.wait_for(query.edit_message_text(f"✅ <b>[업데이트 완료]</b> {safe_msg}\n\n🔄 시스템 데몬(pipiosbot)을 OS 단에서 재가동합니다. 다운타임 후 봇이 다시 깨어납니다.", parse_mode='HTML'), timeout=10.0)
-                        except telegram.error.BadRequest as e:
-                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                        except Exception: pass
-                        await updater.restart_daemon()
-                    else:
-                        try: 
-                            await asyncio.wait_for(query.edit_message_text(f"❌ <b>[동기화 실패]</b>\n▫️ 사유: {safe_msg}", parse_mode='HTML'), timeout=10.0)
-                        except telegram.error.BadRequest as e:
-                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                        except Exception: pass
-                except Exception as e:
-                    safe_err = html.escape(str(e))
-                    try: 
-                        await asyncio.wait_for(query.edit_message_text(f"🚨 <b>[치명적 오류]</b> 프로세스 예외 발생: {safe_err}", parse_mode='HTML'), timeout=10.0)
-                    except telegram.error.BadRequest as e:
-                        if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                    except Exception: pass
+                    await asyncio.wait_for(query.answer(UNSUPPORTED_OFFICIAL_SOXL_MESSAGE, show_alert=True), timeout=5.0)
+                except Exception:
+                    pass
+            return
 
-            elif sub == "CANCEL":
-                try: 
-                    await asyncio.wait_for(query.edit_message_text("❌ 자가 업데이트를 취소했습니다.", parse_mode='HTML'), timeout=10.0)
-                except telegram.error.BadRequest as e:
-                    if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                except Exception: pass
+        if action == "UPDATE":
+            try:
+                await asyncio.wait_for(query.answer(UNSUPPORTED_OFFICIAL_SOXL_MESSAGE, show_alert=True), timeout=5.0)
+            except Exception:
+                pass
+            return
 
         elif action == "VERSION":
             history_data = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_full_version_history), timeout=10.0) or []
@@ -144,43 +119,10 @@ class CallbackConfigHandler:
                     except Exception: pass
                     
                     def _hijack_vwap_lock():
-                        slice_file = f"data/vrev_slice_state_{ticker}.json"
-                        with GlobalThrottle.get_file_lock(slice_file):
-                            try:
-                                with open(slice_file, 'r', encoding='utf-8') as f:
-                                    s_state = json.load(f)
-                                s_state['hijacked'] = True
-                                s_state['orders'] = []
-                                
-                                dir_name = os.path.dirname(slice_file) or '.'
-                                try: os.makedirs(dir_name, exist_ok=True)
-                                except OSError: pass
-                                
-                                fd = None
-                                tmp_path = None
-                                try:
-                                    fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-                                    with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                                        fd = None
-                                        json.dump(s_state, f_out, ensure_ascii=False, indent=4)
-                                        f_out.flush()
-                                        os.fsync(f_out.fileno())
-                                    os.replace(tmp_path, slice_file)
-                                    tmp_path = None
-                                except Exception:
-                                    if fd is not None:
-                                        try: os.close(fd)
-                                        except OSError: pass
-                                    if tmp_path:
-                                        try: os.remove(tmp_path)
-                                        except OSError: pass
-                            except (OSError, json.JSONDecodeError): 
-                                pass
-                            
                         try:
                             est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
                             today_str = est_now.strftime("%Y-%m-%d")
-                            for snap_prefix in ["REV", "V14", "V14VWAP"]:
+                            for snap_prefix in ["V14", "V14VWAP"]:
                                 snap_file = f"data/daily_snapshot_{snap_prefix}_{today_str}_{ticker}.json"
                                 with GlobalThrottle.get_file_lock(snap_file):
                                     try: os.remove(snap_file)
@@ -195,89 +137,6 @@ class CallbackConfigHandler:
                     except telegram.error.BadRequest as e:
                         if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
                     except Exception: pass
-            
-            # 🚨 NEW: 암살자 단독 소각 팩트 결속
-            elif sub == "AVWAP":
-                if ticker:
-                    msg, markup = self.view.get_avwap_reset_confirm_menu(ticker)
-                    try: 
-                        await asyncio.wait_for(query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML'), timeout=10.0)
-                    except telegram.error.BadRequest as e:
-                        if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                    except Exception: pass
-            
-            # 🚨 NEW: 암살자 정보(장부/캐시/주문기록) 단독 초기화 로직 100% 분리 사수
-            elif sub == "AVWAP_CONFIRM":
-                if not ticker: return
-                try: await asyncio.wait_for(query.answer("🔫 암살자 소각 진행 중...", show_alert=False), timeout=5.0)
-                except Exception: pass
-
-                def _nuke_only_assassin():
-                    try:
-                        from assassin_ledger import AssassinLedger
-                        a_ledger = AssassinLedger()
-                        a_ledger.clear_ledger(ticker)
-                    except Exception as e:
-                        logging.error(f"🚨 [{ticker}] 암살자 장부 강제 소각 중 에러: {e}")
-                    
-                    state_file = f"data/avwap_trade_state_{ticker}.json"
-                    with GlobalThrottle.get_file_lock(state_file):
-                        try:
-                            est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
-                            today_str = est_now.strftime('%Y-%m-%d')
-                            state_data = {}
-                            try:
-                                with open(state_file, 'r', encoding='utf-8') as f:
-                                    state_data = json.load(f)
-                            except Exception:
-                                pass
-
-                            curr_time = est_now.time()
-                            is_pre_market = datetime.time(4, 0) <= curr_time < datetime.time(9, 30)
-
-                            state_data['date'] = today_str
-                            state_data['qty'] = 0
-                            state_data['buy_odno'] = ""
-                            state_data['sell_odno'] = ""
-                            state_data['shutdown'] = is_pre_market
-                            state_data['dumped'] = is_pre_market
-                            # 🚨 Ghosting Amnesia 방어: 주문 기록까지 빈 배열로 완벽한 백지 상태 리셋
-                            state_data['history_odnos'] = []
-
-                            dir_name = os.path.dirname(state_file) or '.'
-                            try: os.makedirs(dir_name, exist_ok=True)
-                            except OSError: pass
-
-                            fd = None
-                            tmp_path = None
-                            try:
-                                fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-                                with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                                    fd = None
-                                    json.dump(state_data, f_out, ensure_ascii=False, indent=4)
-                                    f_out.flush()
-                                    os.fsync(f_out.fileno())
-                                os.replace(tmp_path, state_file)
-                                tmp_path = None
-                            except Exception as inner_e:
-                                if fd is not None:
-                                    try: os.close(fd)
-                                    except OSError: pass
-                                if tmp_path:
-                                    try: os.remove(tmp_path)
-                                    except OSError: pass
-                                raise inner_e
-                        except Exception as e:
-                            logging.error(f"🚨 [{ticker}] 암살자 단독 상태 리셋 에러: {e}")
-
-                await asyncio.wait_for(asyncio.to_thread(_nuke_only_assassin), timeout=10.0)
-                
-                try:
-                    await asyncio.wait_for(query.edit_message_text(f"✅ <b>[{html.escape(str(ticker))}] 암살자 찌꺼기 팩트 소각 완료!</b>\n▫️ 암살자 독립 장부 및 상태 캐시가 100% 영구 삭제되었습니다.\n▫️ 본진 장부는 안전하게 보존됩니다.\n▫️ <code>/record</code> 명령어로 갱신된 내역을 확인하십시오.", parse_mode='HTML'), timeout=10.0)
-                except telegram.error.BadRequest as e:
-                    if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                except Exception: pass
-
             elif sub == "REV":
                 if ticker:
                     msg, markup = self.view.get_reset_confirm_menu(ticker)
@@ -292,10 +151,7 @@ class CallbackConfigHandler:
                 try: await asyncio.wait_for(query.answer("🔥 삼위일체 소각 진행 중...", show_alert=False), timeout=5.0)
                 except Exception: pass
                 
-                current_ver = str(await asyncio.wait_for(asyncio.to_thread(self.cfg.get_version, ticker), timeout=10.0) or "")
-                is_rev_active = (current_ver == "V_REV")
-                
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, is_rev_active, 0, 0.0), timeout=10.0)
+                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
                 
                 ledger = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_ledger), timeout=10.0) or []
                 ledger_data = [r for r in ledger if isinstance(r, dict) and str(r.get('ticker')) != str(ticker)]
@@ -651,15 +507,6 @@ class CallbackConfigHandler:
             except Exception as e:
                 logging.error(f"🚨 모드 전환 전 V14 장부 검증 에러: {e}")
                 
-            try:
-                if getattr(self, 'queue_ledger', None):
-                    q_data = await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.get_queue, ticker), timeout=10.0) or []
-                    if q_data:
-                        vrev_qty = sum(int(self._safe_float(item.get('qty'))) for item in q_data if isinstance(item, dict))
-                        if vrev_qty > max_qty: max_qty = vrev_qty
-            except Exception as e:
-                logging.error(f"🚨 모드 전환 전 V-REV 큐 장부 검증 에러: {e}")
-            
             if max_qty > 0:
                 try:
                     await asyncio.wait_for(query.edit_message_text(f"🛑 <b>[{html.escape(str(ticker))} 모드 전환 차단]</b>\n\n현재 계좌 또는 장부에 단 1주라도 잔고({max_qty}주)가 존재하면 코어 스위칭이 불가능합니다.\n전량 익절(0주) 후 0주 새출발 상태에서 다시 시도해 주십시오.", parse_mode='HTML'), timeout=10.0)
@@ -668,9 +515,7 @@ class CallbackConfigHandler:
                 except Exception: pass
                 return
                 
-            if sub == "V_REV":
-                msg, markup = self.view.get_vrev_mode_selection_menu(ticker)
-            elif sub == "V14":
+            if sub in ("V14", "V4.0"):
                 msg, markup = self.view.get_v14_mode_selection_menu(ticker)
             else:
                 return
@@ -684,21 +529,11 @@ class CallbackConfigHandler:
         elif action == "SET_VER_CONFIRM":
              if not ticker: return
              
-             if sub == "V_REV":
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_version, ticker, "V_REV"), timeout=10.0)
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, True, 0, 0.0), timeout=10.0)
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, False), timeout=10.0) 
-                msg = f"✅ <b>[{html.escape(str(ticker))}] V-REV 역추세 모드(VWAP 자동) 락온 완료!</b>\n▫️ 다음 타격부터 역추세 엔진이 전면 가동됩니다."
-             elif sub == "V14_LOC":
+             if sub in ("V14_LOC", "V4.0_LOC"):
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.set_version, ticker, "V14"), timeout=10.0)
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, False), timeout=10.0)
                 msg = f"✅ <b>[{html.escape(str(ticker))}] V14 오리지널 (LOC 단일 타격) 락온 완료!</b>\n▫️ 다음 타격부터 오리지널 무매법이 가동됩니다."
-             elif sub == "V14_VWAP":
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_version, ticker, "V14"), timeout=10.0)
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, True), timeout=10.0)
-                msg = f"✅ <b>[{html.escape(str(ticker))}] V14 오리지널 (VWAP 자동) 락온 완료!</b>\n▫️ 다음 타격부터 VWAP 알고리즘에 위임합니다."
              else:
                 return
              
@@ -737,41 +572,6 @@ class CallbackConfigHandler:
             controller.user_states[chat_id] = f"SEED_{sub}_{ticker}"
             await asyncio.wait_for(context.bot.send_message(chat_id, f"💵 [{html.escape(str(ticker))}] 시드머니 금액 입력:", parse_mode='HTML'), timeout=10.0)
 
-        elif action == "CONFIG_AVWAP":
-            if not ticker: return
-            
-            if sub == "TOGGLE":
-                try:
-                    current_state = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_avwap_hybrid_mode, ticker), timeout=10.0)
-                    new_state = not current_state
-                    await asyncio.wait_for(asyncio.to_thread(self.cfg.set_avwap_hybrid_mode, ticker, new_state), timeout=10.0)
-                    
-                    if hasattr(controller, 'cmd_settlement'):
-                        try:
-                            await controller.cmd_settlement(update, context)
-                        except telegram.error.BadRequest as e:
-                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                        except Exception as e:
-                            logging.error(f"🚨 관제탑 UI 갱신 실패: {e}")
-                except Exception as e:
-                    logging.error(f"🚨 [{ticker}] 암살자 모드 토글 실패: {e}")
-
-            elif sub == "TOGGLE_OVERNIGHT":
-                try:
-                    current_state = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_avwap_overnight_mode, ticker), timeout=10.0)
-                    new_state = not current_state
-                    await asyncio.wait_for(asyncio.to_thread(self.cfg.set_avwap_overnight_mode, ticker, new_state), timeout=10.0)
-                    
-                    if hasattr(controller, 'cmd_settlement'):
-                        try:
-                            await controller.cmd_settlement(update, context)
-                        except telegram.error.BadRequest as e:
-                            if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
-                        except Exception as e:
-                            logging.error(f"🚨 관제탑 UI 갱신 실패: {e}")
-                except Exception as e:
-                    logging.error(f"🚨 [{ticker}] 암살자 오버나이트 토글 실패: {e}")
-             
         elif action == "INPUT":
             if not ticker: return
             controller.user_states[chat_id] = f"CONF_{sub}_{ticker}"
@@ -781,13 +581,9 @@ class CallbackConfigHandler:
             elif sub == "COMPOUND": ko_name = "자동 복리율(%)"
             elif sub == "STOCK_SPLIT": ko_name = "액면 분할/병합 비율"
             elif sub == "FEE": ko_name = "증권사 수수료율(%)"
-            elif sub == "AVWAP_BUDGET": ko_name = "암살자 1회 타격 예산(USD)" 
             else: ko_name = "값"
              
             desc = "숫자만 입력하세요."
             if sub == "STOCK_SPLIT":
                 desc = "액면분할 시 1주가 10주가 되었다면 10 입력, 10주가 1주로 병합되었다면 0.1 입력"
-            elif sub == "AVWAP_BUDGET":
-                desc = "암살자 격발 시 투입할 <b>최대 고정 예산(USD)</b>을 입력하세요. (예: 10000)\n\n▫️ 실제 격발 시, 이 금액과 KIS 실시간 가용 현금의 95% 중 더 작은 금액으로 <b>안전하게 캡핑(Capping)</b>되어 API 거절(Reject)을 100% 원천 차단합니다."
-                
             await asyncio.wait_for(context.bot.send_message(chat_id, f"✏️ <b>[{html.escape(str(ticker))}] {html.escape(str(ko_name))}</b>를 설정합니다.\n{desc}", parse_mode='HTML'), timeout=10.0)

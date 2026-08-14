@@ -1,0 +1,7 @@
+{
+  "scenario": "accepted order response missing ODNO",
+  "account_fingerprint": "acct-A",
+  "ticker": "SOXL",
+  "acceptance_response": {"rt_cd":"0","msg1":"accepted","odno":""},
+  "executions": []
+}

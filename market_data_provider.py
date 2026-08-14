@@ -16,6 +16,8 @@ import math
 import tempfile
 import json
 import logging
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 import yfinance as yf
 import pandas as pd   
 import numpy as np
@@ -23,6 +25,39 @@ import volatility_engine as ve
 from zoneinfo import ZoneInfo
 from kis_api_client import KisApiClient
 from global_throttle import GlobalThrottle # 🚨 NEW: 전역 통제소 결속
+from runtime_safety import TrustedMarketQuote
+
+
+class KisCurrentQuoteProvider:
+    """Create trusted quotes only from the KIS current-price endpoint."""
+
+    def __init__(self, kis_client):
+        self._kis_client = kis_client
+
+    def get_quote(self, ticker):
+        ticker_text = str(ticker or "").strip().upper()
+        exchange = self._kis_client._get_exchange_code(ticker_text, target_api="PRICE")
+        response = self._kis_client._call_api(
+            "HHDFS76200200",
+            "/uapi/overseas-price/v1/quotations/price",
+            "GET",
+            params={"AUTH": "", "EXCD": exchange, "SYMB": ticker_text},
+        )
+        if not isinstance(response, dict) or response.get("rt_cd") != "0":
+            raise RuntimeError("KIS current-price request failed")
+        output = response.get("output")
+        if not isinstance(output, dict):
+            raise RuntimeError("KIS current-price response is malformed")
+        try:
+            price = Decimal(str(output.get("last")))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise RuntimeError("KIS current-price response has no Decimal price") from exc
+        return TrustedMarketQuote(
+            price=price,
+            as_of=datetime.now(timezone.utc),
+            source="KIS",
+            ticker=ticker_text,
+        )
 
 def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
     """ 🚨 [수술 완료] 야후 파이낸스 API 업데이트로 인한 MultiIndex 순서 붕괴 방어 """

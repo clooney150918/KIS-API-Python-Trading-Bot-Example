@@ -23,6 +23,7 @@ from telegram_sync_engine import TelegramSyncEngine
 from telegram_states import TelegramStates
 from telegram_callbacks import TelegramCallbacks
 from telegram_commands import TelegramCommands  # 🚨 NEW: [도메인 주도 설계] 명령어 전담 핸들러 결속
+from telegram_auth import deny_update, is_admin_update, require_admin
 
 class TelegramController:
     def __init__(self, config, broker, strategy, tx_lock=None, queue_ledger=None, strategy_rev=None):
@@ -44,23 +45,18 @@ class TelegramController:
         self.callbacks_handler = TelegramCallbacks(self.cfg, self.broker, self.strategy, self.queue_ledger, self.sync_engine, self.view, self.tx_lock)
         self.commands_handler = TelegramCommands(self.cfg, self.broker, self.strategy, self.queue_ledger, self.sync_engine, self.view, self.tx_lock)
 
-        # 🚨 NEW: [하위 호환성 보장 락온] States 및 Callbacks 모듈에서 controller.cmd_* 호출 시 붕괴되지 않도록 16대 에일리어스(Alias) 배선 완벽 매핑
-        self.cmd_start = self.commands_handler.cmd_start
-        self.cmd_sync = self.commands_handler.cmd_sync
-        self.cmd_record = self.commands_handler.cmd_record
-        self.cmd_history = self.commands_handler.cmd_history
-        self.cmd_settlement = self.commands_handler.cmd_settlement
-        self.cmd_seed = self.commands_handler.cmd_seed
-        self.cmd_ticker = self.commands_handler.cmd_ticker
-        self.cmd_mode = self.commands_handler.cmd_mode
-        self.cmd_version = self.commands_handler.cmd_version
-        self.cmd_queue = self.commands_handler.cmd_queue
-        self.cmd_add_q = self.commands_handler.cmd_add_q
-        self.cmd_clear_q = self.commands_handler.cmd_clear_q
-        self.cmd_reset = self.commands_handler.cmd_reset
-        self.cmd_update = self.commands_handler.cmd_update
-        self.cmd_avwap = self.commands_handler.cmd_avwap
-        self.cmd_log = self.commands_handler.cmd_log
+        # 🚨 NEW: [하위 호환성 보장 락온] controller.cmd_* 별칭을 중앙 관리자 인증 래퍼로 결속
+        self.cmd_start = require_admin(self.cfg, self.commands_handler.cmd_start)
+        self.cmd_sync = require_admin(self.cfg, self.commands_handler.cmd_sync)
+        self.cmd_record = require_admin(self.cfg, self.commands_handler.cmd_record)
+        self.cmd_history = require_admin(self.cfg, self.commands_handler.cmd_history)
+        self.cmd_settlement = require_admin(self.cfg, self.commands_handler.cmd_settlement)
+        self.cmd_seed = require_admin(self.cfg, self.commands_handler.cmd_seed)
+        self.cmd_version = require_admin(self.cfg, self.commands_handler.cmd_version)
+        self.cmd_reset = require_admin(self.cfg, self.commands_handler.cmd_reset)
+        self.cmd_update = require_admin(self.cfg, self.commands_handler.cmd_update)
+        self.cmd_report = require_admin(self.cfg, self.commands_handler.cmd_report)
+        self.cmd_log = require_admin(self.cfg, self.commands_handler.cmd_log)
 
     def _safe_float(self, val):
         try:
@@ -93,26 +89,20 @@ class TelegramController:
 
     def setup_handlers(self, application):
         # 🚨 MODIFIED: [100% 위임 라우팅] 모든 CommandHandler가 commands_handler를 다이렉트로 바라보도록 배선 교체
-        application.add_handler(CommandHandler("start", self.commands_handler.cmd_start))
-        application.add_handler(CommandHandler("sync", self.commands_handler.cmd_sync))
-        application.add_handler(CommandHandler("record", self.commands_handler.cmd_record))
-        application.add_handler(CommandHandler("history", self.commands_handler.cmd_history))
-        application.add_handler(CommandHandler("settlement", self.commands_handler.cmd_settlement))
-        application.add_handler(CommandHandler("seed", self.commands_handler.cmd_seed))
-        application.add_handler(CommandHandler("ticker", self.commands_handler.cmd_ticker))
-        application.add_handler(CommandHandler("mode", self.commands_handler.cmd_mode))
-        application.add_handler(CommandHandler("version", self.commands_handler.cmd_version))
+        application.add_handler(CommandHandler("start", self.cmd_start))
+        application.add_handler(CommandHandler("sync", self.cmd_sync))
+        application.add_handler(CommandHandler("record", self.cmd_record))
+        application.add_handler(CommandHandler("history", self.cmd_history))
+        application.add_handler(CommandHandler("settlement", self.cmd_settlement))
+        application.add_handler(CommandHandler("seed", self.cmd_seed))
+        application.add_handler(CommandHandler("version", self.cmd_version))
         
-        application.add_handler(CommandHandler("queue", self.commands_handler.cmd_queue))
-        application.add_handler(CommandHandler("add_q", self.commands_handler.cmd_add_q))
-        application.add_handler(CommandHandler("clear_q", self.commands_handler.cmd_clear_q))
-        
-        application.add_handler(CommandHandler("reset", self.commands_handler.cmd_reset))
-        application.add_handler(CommandHandler("update", self.commands_handler.cmd_update))
+        application.add_handler(CommandHandler("reset", self.cmd_reset))
+        application.add_handler(CommandHandler("update", self.cmd_update))
+        application.add_handler(CommandHandler("report", self.cmd_report))
     
-        application.add_handler(CommandHandler("avwap", self.commands_handler.cmd_avwap))
-        application.add_handler(CommandHandler("log", self.commands_handler.cmd_log))
-        application.add_handler(CommandHandler("error", self.commands_handler.cmd_log))
+        application.add_handler(CommandHandler("log", self.cmd_log))
+        application.add_handler(CommandHandler("error", self.cmd_log))
         
         application.add_handler(CallbackQueryHandler(self.handle_callback))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
@@ -121,7 +111,8 @@ class TelegramController:
         await self.callbacks_handler.handle_callback(update, context, self)
 
     async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not await self._is_admin(update):
+        if not is_admin_update(update, self.cfg):
+            await deny_update(update)
             return
             
         msg_obj = update.effective_message
@@ -139,16 +130,10 @@ class TelegramController:
             return await self.commands_handler.cmd_record(update, context)
         elif "시드 변경" in text:
             return await self.commands_handler.cmd_seed(update, context)
-        elif "모드 전환" in text:
-             return await self.commands_handler.cmd_ticker(update, context)
         elif "분할 변경" in text or "환경 설정" in text or "세팅" in text:
             return await self.commands_handler.cmd_settlement(update, context)
-        elif "스나이퍼" in text:
-            return await self.commands_handler.cmd_mode(update, context)
         elif "명예의 전당" in text or "졸업" in text:
              return await self.commands_handler.cmd_history(update, context)
-        elif "암살자" in text or "조기" in text or "avwap" in text.lower():
-             return await self.commands_handler.cmd_avwap(update, context)
         elif "로그" in text or "에러" in text:
             return await self.commands_handler.cmd_log(update, context)
             

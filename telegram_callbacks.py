@@ -20,9 +20,8 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from callback_order_handler import CallbackOrderHandler
-from callback_queue_handler import CallbackQueueHandler
-from callback_avwap_handler import CallbackAvwapHandler
 from callback_config_handler import CallbackConfigHandler
+from telegram_auth import answer_unsupported_callback, deny_callback, is_admin_update, is_blocked_callback_action
 
 class TelegramCallbacks:
     def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
@@ -36,8 +35,6 @@ class TelegramCallbacks:
 
         # 🚨 [도메인 핸들러 초기화 (의존성 주입)]
         self.order_handler = CallbackOrderHandler(config, broker, strategy, queue_ledger, sync_engine, view, tx_lock)
-        self.queue_handler = CallbackQueueHandler(config, queue_ledger, sync_engine, view)
-        self.avwap_handler = CallbackAvwapHandler(config, broker, strategy, view, tx_lock)
         self.config_handler = CallbackConfigHandler(config, broker, strategy, queue_ledger, sync_engine, view, tx_lock)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, controller):
@@ -55,22 +52,38 @@ class TelegramCallbacks:
         data = str(query.data).split(":")
         action, sub = data[0], data[1] if len(data) > 1 else ""
 
+        if not is_admin_update(update, self.cfg, require_callback_message_chat=True):
+            await deny_callback(update)
+            return
+
+        if is_blocked_callback_action(action, sub):
+            await answer_unsupported_callback(update)
+            return
+
         try:
+            # 0️⃣ [V4.0 수동 전송 확인 흐름]
+            if action == "EXEC_CONFIRM":
+                ticker = sub
+                msg, markup = self.view.create_exec_confirm(ticker)
+                await query.edit_message_text(msg, reply_markup=markup, parse_mode="HTML")
+                await query.answer()
+                return
+            elif action == "EXEC_CONFIRMED":
+                # User confirmed - route to actual EXEC handler
+                ticker = sub
+                await self.order_handler.handle(update, context, controller, "EXEC", ticker, [ticker])
+                return
+            elif action == "EXEC:CANCEL":
+                await query.edit_message_text("❌ 수동 전송이 취소되었습니다.", parse_mode="HTML")
+                await query.answer()
+                return
+
             # 1️⃣ [수동/비상 주문 도메인 라우팅 (MANUAL_PORTION 팩트 배선 추가)]
             if action in ["EMERGENCY_REQ", "EMERGENCY_EXEC", "EXEC", "CANCEL_EXEC", "MANUAL_PORTION"]:
                 await self.order_handler.handle(update, context, controller, action, sub, data)
             
-            # 2️⃣ [V-REV 큐 장부 조작 도메인 라우팅]
-            elif action in ["QUEUE", "DEL_REQ", "DEL_Q", "EDIT_Q"]:
-                await self.queue_handler.handle(update, context, controller, action, sub, data)
-            
-            # 3️⃣ [AVWAP 순수 관제탑 도메인 라우팅]
-            elif action in ["AVWAP", "MODE", "AVWAP_SET"]:
-                await self.avwap_handler.handle(update, context, controller, action, sub, data)
-             
             # 4️⃣ [환경설정, 뷰어, 히스토리, 범용 도메인 라우팅]
-            # 🚨 MODIFIED: [중앙 라우터 무결성 사수] 암살자 설정값(INPUT, CONFIG_AVWAP)을 config_handler로 100% 바이패스
-            elif action in ["UPDATE", "VERSION", "RESET", "REC", "HIST", "TICKER", "SEED", "INPUT", "SET_VER", "SET_VER_CONFIRM", "CONFIG_AVWAP"]:
+            elif action in ["UPDATE", "VERSION", "RESET", "REC", "HIST", "TICKER", "SEED", "INPUT", "SET_VER", "SET_VER_CONFIRM"]:
                 await self.config_handler.handle(update, context, controller, action, sub, data)
             
             # 5️⃣ [알 수 없는 엣지 라우팅 튕겨내기]

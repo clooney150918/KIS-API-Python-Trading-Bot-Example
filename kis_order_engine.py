@@ -8,19 +8,349 @@
 # 🚨 MODIFIED: [TypeError 붕괴 궁극 수술] KIS 서버에서 msg1이 None으로 반환될 때 발생하는 문자열 매칭(in) 즉사 버그 완벽 차단
 # 🚨 MODIFIED: [페이징 팩트 수술] get_execution_history 내 연속 조회(Pagination) 토큰 미갱신으로 인한 체결 내역 증발 버그 완벽 수술
 # 🚨 MODIFIED: [이벤트 루프 교착 방어] cancel_all_orders_safe 내부의 과도한 time.sleep(5)를 1.0초로 단축하여 Caller 타임아웃(10초) 폭발 원천 차단
-# 🚨 VERIFIED: [Case 36 절대 방어망 결속] MOC(시장가 매도) 주문 리젝 시 현재가 -5% 최유리 지정가(LIMIT) 덤핑 자동 폴백 100% 팩트 가동
+# 🚨 MODIFIED: 주문 제출 결과에 대한 자동 재전송·MOC 폴백을 금지하고 수동 대사 경계로 이관.
 # 🚨 MODIFIED: [주문가능금액 역산 팩트 복구] KIS API가 특정 시간대에 예수금을 0.0으로 반환하는 고질적 결함을 우회하기 위해, 오리지널 수리적 역산(Reverse Calc) 공식(외화예수금+매도정산-매수정산)을 100% 롤백 완료.
-# 🚨 MODIFIED: [Case 36 절대 방어망 팩트 교정] 단순 -5% 하향 로직 소각 및 매수 1호가 팩트 스윕 요격망 결속 완료.
+# 🚨 MODIFIED: 주문 리젝 후 별도 주문으로의 자동 전환 경로 제거.
 # ==========================================================
 
 import time
 import datetime
 import math
 import logging
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
-from market_data_provider import MarketDataProvider
+from market_data_provider import KisCurrentQuoteProvider, MarketDataProvider
+from runtime_safety import (
+    OVERSEAS_ORDER_TYPE_CODES,
+    RuntimeSafetyGate,
+    account_fingerprint,
+    canonical_order_values,
+    canonical_request_digest,
+    resolve_account_fingerprint_key,
+    safety_block_result,
+    shadow_record_failure_decision,
+)
+from shadow_intent import ShadowIntentRecorder
 
 class KisOrderEngine(MarketDataProvider):
+
+    _REGULAR_ORDER_TYPES = {
+        "BUY": frozenset({"LIMIT", "LOO", "LOC"}),
+        "SELL": frozenset(OVERSEAS_ORDER_TYPE_CODES),
+    }
+    _DAYTIME_ORDER_TYPES = frozenset({"LIMIT"})
+    _RESERVATION_ORDER_TYPES = {
+        "BUY": frozenset({"LIMIT", "LOO", "LOC"}),
+        "SELL": frozenset(OVERSEAS_ORDER_TYPE_CODES),
+    }
+
+    def __init__(
+        self,
+        app_key,
+        app_secret,
+        cano,
+        acnt_prdt_cd="01",
+        runtime_safety_gate=None,
+        shadow_intent_recorder=None,
+        trusted_quote_provider=None,
+        account_fingerprint_key=None,
+    ):
+        super().__init__(app_key, app_secret, cano, acnt_prdt_cd)
+        self.runtime_safety_gate = runtime_safety_gate or RuntimeSafetyGate()
+        self.shadow_intent_recorder = shadow_intent_recorder or ShadowIntentRecorder()
+        self.trusted_quote_provider = (
+            trusted_quote_provider
+            if trusted_quote_provider is not None
+            else KisCurrentQuoteProvider(self)
+        )
+        self.account_fingerprint_key = resolve_account_fingerprint_key(
+            account_fingerprint_key
+        )
+
+    def _blocked_order_result(
+        self,
+        decision,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type,
+        *,
+        risk_reference_price=None,
+        idempotency_key=None,
+    ):
+        """Durably record every KIS-bound SHADOW decision before returning."""
+        if decision.code == "SHADOW_ONLY":
+            recorder = getattr(self, "shadow_intent_recorder", None)
+            if recorder is None:
+                recorder = ShadowIntentRecorder()
+                self.shadow_intent_recorder = recorder
+            try:
+                recorder.record(
+                    ticker=ticker,
+                    side=side,
+                    quantity=qty,
+                    price=price,
+                    order_type=order_type,
+                    safety_revision=decision.revision,
+                    risk_reference_price=risk_reference_price,
+                    idempotency_key=idempotency_key,
+                )
+            except Exception as error:
+                decision = shadow_record_failure_decision(decision, error)
+        return safety_block_result(decision)
+
+    def _authorize_order_submission(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        *,
+        order_type="LIMIT",
+        risk_reference_price=None,
+        trusted_market_quote=None,
+        market_quote_preflight=False,
+    ):
+        gate = getattr(self, 'runtime_safety_gate', None)
+        if gate is None:
+            return RuntimeSafetyGate.denied(
+                "SAFETY_NOT_CONFIGURED",
+                "runtime safety gate was not injected",
+                ticker=str(ticker),
+                side=str(side),
+            )
+        key = resolve_account_fingerprint_key(
+            getattr(self, "account_fingerprint_key", None)
+        )
+        fingerprint = None
+        if key is not None:
+            fingerprint = account_fingerprint(
+                getattr(self, "cano", None),
+                getattr(self, "acnt_prdt_cd", None),
+                key=key,
+            )
+        return gate.authorize(
+            ticker,
+            side,
+            qty,
+            price,
+            account_fingerprint=fingerprint,
+            account_fingerprint_key_available=key is not None,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            trusted_market_quote=trusted_market_quote,
+            market_quote_preflight=market_quote_preflight,
+        )
+
+    def _load_trusted_market_quote(self, ticker):
+        provider = getattr(self, "trusted_quote_provider", None)
+        if provider is None:
+            return None, RuntimeSafetyGate.denied(
+                "TRUSTED_MARKET_QUOTE_UNAVAILABLE",
+                "trusted KIS quote provider is not configured",
+                ticker=str(ticker).strip().upper(),
+            )
+        try:
+            get_quote = getattr(provider, "get_quote", None)
+            if get_quote is None and callable(provider):
+                get_quote = provider
+            if get_quote is None:
+                raise TypeError("provider has no quote interface")
+            return get_quote(ticker), None
+        except Exception:
+            return None, RuntimeSafetyGate.denied(
+                "TRUSTED_MARKET_QUOTE_PROVIDER_FAILED",
+                "trusted KIS quote provider failed",
+                ticker=str(ticker).strip().upper(),
+            )
+
+    @staticmethod
+    def _unsupported_order_type_result(ticker, side, order_type):
+        decision = RuntimeSafetyGate.denied(
+            "UNSUPPORTED_ORDER_TYPE",
+            "order type is not supported by this KIS endpoint and side",
+            shadow_only=False,
+            ticker=str(ticker),
+            side=str(side),
+        )
+        return safety_block_result(decision)
+
+    @staticmethod
+    def _plain_order_error(reason, *, rt_cd="999", code="ORDER_REJECTED"):
+        decision = RuntimeSafetyGate.denied(
+            code,
+            str(reason or "order rejected"),
+            shadow_only=False,
+        )
+        result = safety_block_result(decision)
+        result["rt_cd"] = str(rt_cd or "999")
+        result["msg1"] = str(reason or "오류")
+        return result
+
+    def _call_order_api(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        tr_id,
+        path,
+        body,
+        *,
+        order_type="LIMIT",
+        risk_reference_price=None,
+        idempotency_key=None,
+    ):
+        """Bind final policy values to the exact one-shot KIS wire request."""
+        ticker = str(ticker or "").strip().upper()
+        side, order_type = canonical_order_values(side, order_type)
+        mismatch = self._wire_request_mismatch(
+            ticker, side, qty, price, tr_id, path, body, order_type
+        )
+        if mismatch is not None:
+            return safety_block_result(mismatch)
+
+        gate = getattr(self, "runtime_safety_gate", None)
+        if gate is None or not hasattr(gate, "authorize_request"):
+            decision = RuntimeSafetyGate.denied(
+                "SAFETY_NOT_CONFIGURED",
+                "runtime safety gate cannot issue request-bound authorization",
+                shadow_only=False,
+                ticker=ticker,
+                side=side,
+            )
+            return self._blocked_order_result(
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
+            )
+
+        trusted_quote = None
+        if order_type in {"MARKET", "MOC", "MOO"}:
+            trusted_quote, quote_error = self._load_trusted_market_quote(ticker)
+            if quote_error is not None:
+                return self._blocked_order_result(
+                    quote_error,
+                    ticker,
+                    side,
+                    qty,
+                    price,
+                    order_type,
+                    risk_reference_price=risk_reference_price,
+                    idempotency_key=idempotency_key,
+                )
+
+        key = resolve_account_fingerprint_key(
+            getattr(self, "account_fingerprint_key", None)
+        )
+        fingerprint = None
+        if key is not None:
+            fingerprint = account_fingerprint(
+                getattr(self, "cano", None),
+                getattr(self, "acnt_prdt_cd", None),
+                key=key,
+            )
+        request_digest = canonical_request_digest("POST", tr_id, path, body)
+        decision, authorization = gate.authorize_request(
+            ticker,
+            side,
+            qty,
+            price,
+            method="POST",
+            tr_id=tr_id,
+            path=path,
+            body=body,
+            account_fingerprint=fingerprint,
+            account_fingerprint_key=key,
+            account_fingerprint_key_available=key is not None,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            trusted_market_quote=trusted_quote,
+        )
+        if not decision.can_submit or authorization is None:
+            return self._blocked_order_result(
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
+            )
+        if authorization.request_digest != request_digest:
+            return safety_block_result(RuntimeSafetyGate.denied(
+                "WIRE_REQUEST_MISMATCH",
+                "gate authorization digest differs from the final KIS wire request",
+                shadow_only=False,
+                ticker=ticker,
+                side=side,
+            ))
+        return self._call_api(
+            tr_id,
+            path,
+            "POST",
+            body=body,
+            _order_authorization=authorization,
+            _order_gate=gate,
+        )
+
+    def _wire_request_mismatch(
+        self, ticker, side, qty, price, tr_id, path, body, order_type
+    ):
+        """Return a structured denial if policy metadata differs from wire fields."""
+        expected_tr_ids = {
+            "/uapi/overseas-stock/v1/trading/order": {
+                "BUY": "TTTT1002U", "SELL": "TTTT1006U"
+            },
+            "/uapi/overseas-stock/v1/trading/daytime-order": {
+                "BUY": "TTTS6036U", "SELL": "TTTS6037U"
+            },
+            "/uapi/overseas-stock/v1/trading/order-resv": {
+                "BUY": "TTTT3014U", "SELL": "TTTT3016U"
+            },
+        }
+        quantity_field = "FT_ORD_QTY" if path.endswith("/order-resv") else "ORD_QTY"
+        price_field = "FT_ORD_UNPR3" if path.endswith("/order-resv") else "OVRS_ORD_UNPR"
+        matches = isinstance(body, dict)
+        if matches:
+            try:
+                body_quantity = Decimal(str(body.get(quantity_field)))
+                metadata_quantity = Decimal(str(qty))
+                body_price = Decimal(str(body.get(price_field)))
+                metadata_price = Decimal(str(price))
+                if not all(value.is_finite() for value in (
+                    body_quantity, metadata_quantity, body_price, metadata_price
+                )):
+                    raise ValueError("non-finite wire value")
+                matches = (
+                    expected_tr_ids.get(path, {}).get(side) == str(tr_id)
+                    and str(body.get("CANO") or "") == str(self.cano)
+                    and str(body.get("ACNT_PRDT_CD") or "") == str(self.acnt_prdt_cd)
+                    and str(body.get("PDNO") or "").strip().upper() == ticker
+                    and str(body.get("PDNO") or "").strip() == ticker
+                    and body_quantity == metadata_quantity
+                    and body_price == metadata_price
+                    and str(body.get("ORD_DVSN") or "")
+                    == OVERSEAS_ORDER_TYPE_CODES.get(order_type)
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                matches = False
+        if matches:
+            return None
+        return RuntimeSafetyGate.denied(
+            "WIRE_REQUEST_MISMATCH",
+            "order policy metadata does not match the final KIS wire request",
+            shadow_only=False,
+            ticker=ticker,
+            side=side,
+        )
     
     def get_account_balance(self):
         """ 🚨 [Case 03 준수] API 잔고 응답 중복 합산 절대 방어 락온 """
@@ -43,8 +373,7 @@ class KisOrderEngine(MarketDataProvider):
             # 🚨 MODIFIED: [주문가능금액 역산 팩트 복구] KIS API 오류를 우회하는 100% 수식 계산망 롤백
             dncl_amt = self._safe_float(o2.get('frcr_dncl_amt_2', 0))     
             sll_amt = self._safe_float(o2.get('frcr_sll_amt_smtl', 0))      
-            buy_amt = self._safe_float(o2.get('frcr_buy_amt_smtl', 0))      
-            raw_bp = dncl_amt + sll_amt - buy_amt
+            raw_bp = dncl_amt + sll_amt
             cash = max(0.0, math.floor((raw_bp * 0.9945) * 100) / 100.0)
 
         target_excgs = ["NASD", "AMEX", "NYSE"] 
@@ -251,72 +580,95 @@ class KisOrderEngine(MarketDataProvider):
             time.sleep(0.3)
         return len(target_orders)
 
-    def send_order(self, ticker, side, qty, price, order_type="LIMIT", start_time=None, end_time=None):
+    def send_order(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type="LIMIT",
+        start_time=None,
+        end_time=None,
+        *,
+        risk_reference_price=None,
+        idempotency_key=None,
+    ):
+        side, order_type = canonical_order_values(side, order_type)
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
+        )
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
+            return self._blocked_order_result(
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
+            )
+        if order_type not in self._REGULAR_ORDER_TYPES.get(side, frozenset()):
+            return self._unsupported_order_type_result(ticker, side, order_type)
+
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
-        except (TypeError, ValueError): return {'rt_cd': '999', 'msg1': f'유효하지 않은 주문 수량: {qty!r}'}
-        if order_qty <= 0: return {'rt_cd': '999', 'msg1': f'수량 오류: {qty}'}
+        except (TypeError, ValueError):
+            return self._plain_order_error(
+                f'유효하지 않은 주문 수량: {qty!r}', code="ORDER_VALIDATION_ERROR"
+            )
+        if order_qty <= 0:
+            return self._plain_order_error(
+                f'수량 오류: {qty}', code="ORDER_VALIDATION_ERROR"
+            )
 
-        for attempt in range(3):
-            # 🚨 MODIFIED: 파편화된 sleep 소각
-            tr_id = "TTTT1002U" if side == "BUY" else "TTTT1006U"
-            excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
-        
-            ord_dvsn = {"LOC": "34", "MOC": "33", "LOO": "32", "MOO": "31", "VWAP": "36"}.get(order_type, "00")
-            final_price = 0 if order_type in ["MOC", "MOO"] else self._ceil_2(price)
-         
-            if order_type not in ["MOC", "MOO"] and final_price <= 0.0: return {'rt_cd': '999', 'msg1': f'가격 오류: {price}'}
-            
-            sll_type = "00" if side == "SELL" else ""
-            
-            body = {
-                "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, 
-                "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(final_price), 
-                "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn, "SLL_TYPE": sll_type
-            }
-            
-            if order_type == "VWAP":
-                if start_time and end_time:
-                    body["ALGO_ORD_TMD_DVSN_CD"] = "00"
-                    body["START_TIME"] = start_time
-                    body["END_TIME"] = end_time
-                else:
-                    body["ALGO_ORD_TMD_DVSN_CD"] = "02"
-
-            res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/order", "POST", body=body)
-            # 🚨 MODIFIED: [TypeError 붕괴 방어] msg1이 None일 경우 any() 루프에서 발생하는 예외 원천 봉쇄
-            safe_msg = str(res.get('msg1') or '')
-            
-            if res.get('rt_cd') != '0':
-                if attempt < 2 and any(x in safe_msg for x in ["거래소", "시장", "exchange", "코드"]):
-                    if ticker in self._excg_cd_cache: del self._excg_cd_cache[ticker]
-                    time.sleep(1.0 * (2 ** attempt))
-                    continue
-                
-                # 🚨 MODIFIED: [Case 36 절대 방어망 팩트 교정] MOC 덤핑 시 단순 -5% 하향 로직을 소각하고, 매수 1호가(Bid Price) 팩트 타격으로 교정
-                if order_type == "MOC":
-                    logging.warning(f"🚨 [Case 36 방어망] KIS MOC 주문 리젝 감지 ({safe_msg}). 매수 1호가 덤핑 폴백 가동!")
-                    bid_p = self.get_bid_price(ticker)
-                    if bid_p > 0:
-                        dump_price = bid_p
-                        logging.info(f"🔄 [{ticker}] MOC ➔ LIMIT(${dump_price:.2f}, 매수 1호가) 전환 요격 전송")
-                        # 🚨 [무한 루프 차단] LIMIT으로 재귀 호출하므로 2차 리젝 시 폴백이 중복 격발되지 않음
-                        return self.send_order(ticker, side, qty, dump_price, order_type="LIMIT")
-                    else:
-                        curr_p = self.get_current_price(ticker)
-                        if curr_p > 0:
-                            dump_price = self._ceil_2(curr_p * 0.95)
-                            logging.info(f"🔄 [{ticker}] MOC ➔ LIMIT(${dump_price:.2f}, 통신지연 -5% 폴백) 전환 요격 전송")
-                            return self.send_order(ticker, side, qty, dump_price, order_type="LIMIT")
-                
-                return {'rt_cd': str(res.get('rt_cd') or '999'), 'msg1': safe_msg or '오류', 'odno': ''}
-                
-            # 🚨 MODIFIED: [AttributeError 붕괴 방어] output 객체 추출 시 안전 단락 평가
-            out = res.get('output') or {}
-            if not isinstance(out, dict): out = {}
-            return {'rt_cd': str(res.get('rt_cd') or '999'), 'msg1': safe_msg or '오류', 'odno': str(out.get('ODNO') or '')}
- 
-        return {'rt_cd': '999', 'msg1': '거래소 캐시 재시도 초과'}
+        tr_id = "TTTT1002U" if side == "BUY" else "TTTT1006U"
+        excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
+        ord_dvsn = OVERSEAS_ORDER_TYPE_CODES[order_type]
+        final_price = 0 if order_type in ["MOC", "MOO"] else self._ceil_2(price)
+        if order_type not in ["MOC", "MOO"] and final_price <= 0.0:
+            return self._plain_order_error(f'가격 오류: {price}')
+        sll_type = "00" if side == "SELL" else ""
+        body = {
+            "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd,
+            "OVRS_EXCG_CD": excg_cd, "PDNO": ticker,
+            "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(final_price),
+            "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": ord_dvsn,
+            "SLL_TYPE": sll_type,
+        }
+        res = self._call_order_api(
+            ticker,
+            side,
+            order_qty,
+            final_price,
+            tr_id,
+            "/uapi/overseas-stock/v1/trading/order",
+            body,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            idempotency_key=idempotency_key,
+        )
+        if 'safety_decision' in res:
+            return res
+        safe_msg = str(res.get('msg1') or '')
+        if res.get('rt_cd') != '0':
+            return self._plain_order_error(
+                safe_msg or '오류', rt_cd=str(res.get('rt_cd') or '999')
+            )
+        out = res.get('output') or {}
+        if not isinstance(out, dict):
+            out = {}
+        return {
+            'rt_cd': str(res.get('rt_cd') or '999'),
+            'msg1': safe_msg or '오류',
+            'odno': str(out.get('ODNO') or ''),
+        }
 
     def cancel_order(self, ticker, order_id):
         # 🚨 MODIFIED: 파편화된 sleep 소각
@@ -325,18 +677,71 @@ class KisOrderEngine(MarketDataProvider):
         # 🚨 MODIFIED: [Case 30 팩트 교정] 취소 주문 API 응답 객체 반환 배선 강제 이식
         return self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
 
-    def send_daytime_order(self, ticker, side, qty, price):
+    def send_daytime_order(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type="LIMIT",
+        *,
+        risk_reference_price=None,
+        idempotency_key=None,
+    ):
+        side, order_type = canonical_order_values(side, order_type)
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
+        )
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
+            return self._blocked_order_result(
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
+            )
+        if order_type not in self._DAYTIME_ORDER_TYPES:
+            return self._unsupported_order_type_result(ticker, side, order_type)
+
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [최종 무결성 수술] 수동 주문 시 Float 수량이 주입되어 KIS 서버에서 리젝되는 현상을 막기 위해 int 강제 형변환 쉴드 주입
         try: order_qty = int(self._safe_float(qty))
-        except: return {'rt_cd': '999', 'msg1': '수량 오류'}
-        if order_qty <= 0: return {'rt_cd': '999', 'msg1': '수량 오류'}
+        except (TypeError, ValueError):
+            return self._plain_order_error('수량 오류', code="ORDER_VALIDATION_ERROR")
+        if order_qty <= 0:
+            return self._plain_order_error('수량 오류', code="ORDER_VALIDATION_ERROR")
         tr_id = "TTTS6036U" if side == "BUY" else "TTTS6037U"
        
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
     
-        body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(self._ceil_2(price)), "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
-        res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/daytime-order", "POST", body=body)
+        final_price = self._ceil_2(price)
+        body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORD_QTY": str(order_qty), "OVRS_ORD_UNPR": str(final_price), "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0", "ORD_DVSN": "00"}
+        res = self._call_order_api(
+            ticker,
+            side,
+            order_qty,
+            final_price,
+            tr_id,
+            "/uapi/overseas-stock/v1/trading/daytime-order",
+            body,
+            idempotency_key=idempotency_key,
+        )
+        if 'safety_decision' in res:
+            return res
+        if res.get('rt_cd') != '0':
+            return self._plain_order_error(
+                str(res.get('msg1') or '오류'),
+                rt_cd=str(res.get('rt_cd') or '999'),
+            )
         
         # 🚨 MODIFIED: [AttributeError 붕괴 방어] output 객체 추출 시 안전 단락 평가
         out = res.get('output') or {}
@@ -354,31 +759,81 @@ class KisOrderEngine(MarketDataProvider):
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": safe_qty, "OVRS_ORD_UNPR": safe_price, "CTAC_TLNO": "", "MGCO_APTM_ODNO": "", "ORD_SVR_DVSN_CD": "0"}
         return self._call_api("TTTS6038U", "/uapi/overseas-stock/v1/trading/daytime-order-rvsecncl", "POST", body=body)
 
-    def send_reservation_order(self, ticker, side, qty, price, order_type="LIMIT"):
+    def send_reservation_order(
+        self,
+        ticker,
+        side,
+        qty,
+        price,
+        order_type="LIMIT",
+        *,
+        risk_reference_price=None,
+        idempotency_key=None,
+    ):
+        side, order_type = canonical_order_values(side, order_type)
+        decision = self._authorize_order_submission(
+            ticker,
+            side,
+            qty,
+            price,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            market_quote_preflight=True,
+        )
+        if not decision.can_submit and decision.code != "MARKET_QUOTE_REQUIRED":
+            return self._blocked_order_result(
+                decision,
+                ticker,
+                side,
+                qty,
+                price,
+                order_type,
+                risk_reference_price=risk_reference_price,
+                idempotency_key=idempotency_key,
+            )
+        if order_type not in self._RESERVATION_ORDER_TYPES.get(side, frozenset()):
+            return self._unsupported_order_type_result(ticker, side, order_type)
+
         # 🚨 MODIFIED: 파편화된 sleep 소각
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
-        except: return {'rt_cd': '999', 'msg1': '수량 오류'}
+        except (TypeError, ValueError):
+            return self._plain_order_error('수량 오류', code="ORDER_VALIDATION_ERROR")
+        if order_qty <= 0:
+            return self._plain_order_error('수량 오류', code="ORDER_VALIDATION_ERROR")
         
         tr_id = "TTTT3014U" if side == "BUY" else "TTTT3016U"
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
-        final_price = str(self._ceil_2(price))
+        final_price = (
+            "0" if order_type in {"MOC", "MOO"} else str(self._ceil_2(price))
+        )
         
         body = {
             "CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker,
             "OVRS_EXCG_CD": excg_cd, "FT_ORD_QTY": str(order_qty)
         }
       
-        if order_type == "LOC":
-            body["ORD_DVSN"] = "34" 
-            body["FT_ORD_UNPR3"] = final_price
-        else:
-            body["ORD_DVSN"] = "00" 
-            body["FT_ORD_UNPR3"] = final_price
+        body["ORD_DVSN"] = OVERSEAS_ORDER_TYPE_CODES[order_type]
+        body["FT_ORD_UNPR3"] = final_price
            
-        res = self._call_api(tr_id, "/uapi/overseas-stock/v1/trading/order-resv", "POST", body=body)
+        res = self._call_order_api(
+            ticker,
+            side,
+            order_qty,
+            final_price,
+            tr_id,
+            "/uapi/overseas-stock/v1/trading/order-resv",
+            body,
+            order_type=order_type,
+            risk_reference_price=risk_reference_price,
+            idempotency_key=idempotency_key,
+        )
+        if 'safety_decision' in res:
+            return res
         rt_cd = str(res.get('rt_cd') or '999')
         msg1 = str(res.get('msg1') or '오류')
+        if rt_cd != '0':
+            return self._plain_order_error(msg1, rt_cd=rt_cd)
       
         # 🚨 MODIFIED: [AttributeError 붕괴 방어] output 객체 추출 시 안전 단락 평가
         out = res.get('output') or {}
@@ -390,6 +845,37 @@ class KisOrderEngine(MarketDataProvider):
         # 🚨 MODIFIED: 파편화된 sleep 소각
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "RSVN_ORD_RCIT_DT": order_date, "OVRS_RSVN_ODNO": order_id}
         return self._call_api("TTTT3017U", "/uapi/overseas-stock/v1/trading/order-resv-ccnl", "POST", body=body)
+
+    def get_execution_fills(self, ticker, start_date, end_date):
+        """Return raw KIS execution rows, preserving each partial fill.
+
+        ``get_execution_history`` keeps the legacy per-ODNO aggregation for old
+        display/sync callers.  Fill reconciliation must use this raw method so
+        the stable fill_key can include execution time and exact qty/price.
+        """
+        excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
+        rows = []
+        fk200, nk200 = "", ""
+        for attempt in range(10):
+            params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker, "ORD_STRT_DT": start_date, "ORD_END_DT": end_date, "SLL_BUY_DVSN": "00", "CCLD_NCCS_DVSN": "00", "OVRS_EXCG_CD": excg_cd, "SORT_SQN": "DS", "CTX_AREA_FK200": fk200, "CTX_AREA_NK200": nk200}
+            headers = self._get_header("TTTS3035R")
+            if fk200 or nk200: headers["tr_cont"] = "N"
+            res, resp_json = self._api_request("GET", f"{self.base_url}/uapi/overseas-stock/v1/trading/inquire-ccnl", headers, params=params)
+            if res and resp_json.get('rt_cd') == '0':
+                output = resp_json.get('output') or []
+                if isinstance(output, dict): output = [output]
+                if not isinstance(output, list): output = []
+                for item in output:
+                    if isinstance(item, dict) and self._safe_float(item.get('ft_ccld_qty', 0)) > 0:
+                        rows.append(dict(item))
+                fk200 = str(resp_json.get('ctx_area_fk200', '') or '').strip()
+                nk200 = str(resp_json.get('ctx_area_nk200', '') or '').strip()
+                if hasattr(res, 'headers') and res.headers.get('tr_cont', '') in ['M', 'F'] and nk200:
+                    time.sleep(0.3)
+                    continue
+                break
+            break
+        return rows
 
     def get_execution_history(self, ticker, start_date, end_date):
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
@@ -480,4 +966,3 @@ class KisOrderEngine(MarketDataProvider):
         if curr_qty > 0: ledger_records.append({'date': 'INCOMPLETE', 'side': 'UNKNOWN', 'qty': curr_qty, 'price': self._safe_float(t_info.get('avg', 0.0)), 'is_incomplete': True})
         ledger_records.reverse()
         return ledger_records, int(self._safe_float(t_info.get('qty', 0))), self._safe_float(t_info.get('avg', 0.0))
-
