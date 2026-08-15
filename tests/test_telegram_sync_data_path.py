@@ -56,7 +56,7 @@ class FakeBroker:
     def get_day_high_low(self, ticker):
         return 151.0, 147.0
 
-    def get_dynamic_sniper_target(self, ticker):
+    def get_dynamic_volatility_target(self, ticker):
         return SimpleNamespace(base_amp=8.79, metric_val=0.0)
 
 
@@ -108,7 +108,7 @@ def _isolated_cfg(tmp_path):
         "TICKER": tmp_path / "tickers.json",
         "SEED_CFG": tmp_path / "seed.json",
         "VERSION_CFG": tmp_path / "version.json",
-        "UPWARD_SNIPER": tmp_path / "sniper.json",
+        "UPWARD_VOLATILITY": tmp_path / "volatility.json",
         "PROFIT_CFG": tmp_path / "profit.json",
         "MANUAL_VWAP_CFG": tmp_path / "manual_vwap.json",
         "AVWAP_HYBRID_CFG": tmp_path / "avwap_hybrid.json",
@@ -166,7 +166,7 @@ def _isolated_cfg(tmp_path):
     files["TICKER"].write_text(json.dumps(["SOXL"]), encoding="utf-8")
     files["SEED_CFG"].write_text(json.dumps({"SOXL": 6720.0}), encoding="utf-8")
     files["VERSION_CFG"].write_text(json.dumps({"SOXL": "LAOER_V4_SOXL_20"}), encoding="utf-8")
-    files["UPWARD_SNIPER"].write_text("{}", encoding="utf-8")
+    files["UPWARD_VOLATILITY"].write_text("{}", encoding="utf-8")
     files["PROFIT_CFG"].write_text(json.dumps({"SOXL": 20.0}), encoding="utf-8")
     files["MANUAL_VWAP_CFG"].write_text("{}", encoding="utf-8")
     files["AVWAP_HYBRID_CFG"].write_text("{}", encoding="utf-8")
@@ -179,7 +179,7 @@ def _create_commands(cfg, view):
         cfg,
         broker=FakeBroker(),
         strategy=FakeStrategy(),
-        queue_ledger=None,
+        legacy_lot_book=None,
         sync_engine=SimpleNamespace(sync_locks={}),
         view=view,
         tx_lock=asyncio.Lock(),

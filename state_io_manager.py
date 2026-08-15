@@ -58,12 +58,12 @@ def _atomic_write_json_sync(filepath, data):
             logging.error(f"🚨 상태 파일 원자적 쓰기 실패 ({filepath}): {e}")
             raise e
 
-def read_avwap_state_sync(ticker, date_str):
+def read_aslice_state_sync(ticker, date_str):
     """ 
     🚨 [Case 39 방어] 암살자 자본 잠김(Capital Lock-up) 스캔 헬퍼
     - 순수 동기 함수이므로 호출부에서 반드시 asyncio.to_thread 래핑 강제
     """
-    state_file = f"data/avwap_trade_state_{ticker}.json"
+    state_file = f"data/aux_trade_state_{ticker}.json"
     return _read_json_safe_sync(state_file, date_str)
 
 def save_aftermarket_state_sync(ticker, date_str, slice_info):

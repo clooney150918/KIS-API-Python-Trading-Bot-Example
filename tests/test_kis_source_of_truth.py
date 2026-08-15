@@ -93,7 +93,7 @@ def test_sync_appends_kis_confirmed_facts_to_execution_ledger_without_overwritin
     before_text = paths["LEDGER"].read_text(encoding="utf-8")
     before_hash = hashlib.sha256(before_text.encode("utf-8")).hexdigest()
 
-    engine = TelegramSyncEngine(cfg, broker=None, strategy=None, queue_ledger=None, view=None, tx_lock=None, sync_locks={})
+    engine = TelegramSyncEngine(cfg, broker=None, strategy=None, legacy_lot_book=None, view=None, tx_lock=None, sync_locks={})
     appended = engine.sync_official_execution_facts(
         "SOXL",
         [
@@ -220,7 +220,7 @@ def test_process_auto_sync_appends_official_kis_facts_reconciles_and_never_calls
         cfg,
         broker=_AppendOnlyBroker(),
         strategy=SimpleNamespace(),
-        queue_ledger=None,
+        legacy_lot_book=None,
         view=SimpleNamespace(),
         tx_lock=asyncio.Lock(),
         sync_locks={},

@@ -52,7 +52,7 @@ def _callbacks(config=None):
         config or FakeConfig(),
         broker=Mock(),
         strategy=Mock(),
-        queue_ledger=Mock(),
+        legacy_lot_book=Mock(),
         sync_engine=Mock(),
         view=Mock(),
         tx_lock=Mock(),

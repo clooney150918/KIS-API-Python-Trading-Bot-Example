@@ -26,7 +26,7 @@ from telegram_commands import TelegramCommands  # 🚨 NEW: [도메인 주도 �
 from telegram_auth import deny_update, is_admin_update, require_admin
 
 class TelegramController:
-    def __init__(self, config, broker, strategy, tx_lock=None, queue_ledger=None, strategy_rev=None):
+    def __init__(self, config, broker, strategy, tx_lock=None, legacy_lot_book=None, strategy_rev=None):
         self.cfg = config
         self.broker = broker
         self.strategy = strategy
@@ -36,14 +36,14 @@ class TelegramController:
         self.sync_locks = {} 
         self.tx_lock = tx_lock or asyncio.Lock()
         
-        self.queue_ledger = queue_ledger
+        self.legacy_lot_book = legacy_lot_book
         self.strategy_rev = strategy_rev 
 
         # 🚨 MODIFIED: [도메인 핸들러 의존성 주입 및 인스턴스화]
-        self.sync_engine = TelegramSyncEngine(self.cfg, self.broker, self.strategy, self.queue_ledger, self.view, self.tx_lock, self.sync_locks)
-        self.states_handler = TelegramStates(self.cfg, self.broker, self.queue_ledger, self.sync_engine)
-        self.callbacks_handler = TelegramCallbacks(self.cfg, self.broker, self.strategy, self.queue_ledger, self.sync_engine, self.view, self.tx_lock)
-        self.commands_handler = TelegramCommands(self.cfg, self.broker, self.strategy, self.queue_ledger, self.sync_engine, self.view, self.tx_lock)
+        self.sync_engine = TelegramSyncEngine(self.cfg, self.broker, self.strategy, self.legacy_lot_book, self.view, self.tx_lock, self.sync_locks)
+        self.states_handler = TelegramStates(self.cfg, self.broker, self.legacy_lot_book, self.sync_engine)
+        self.callbacks_handler = TelegramCallbacks(self.cfg, self.broker, self.strategy, self.legacy_lot_book, self.sync_engine, self.view, self.tx_lock)
+        self.commands_handler = TelegramCommands(self.cfg, self.broker, self.strategy, self.legacy_lot_book, self.sync_engine, self.view, self.tx_lock)
 
         # 🚨 NEW: [하위 호환성 보장 락온] controller.cmd_* 별칭을 중앙 관리자 인증 래퍼로 결속
         self.cmd_start = require_admin(self.cfg, self.commands_handler.cmd_start)

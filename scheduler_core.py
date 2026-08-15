@@ -211,7 +211,7 @@ def perform_self_cleaning():
             ("logs/bot_app_*.log", seven_days),          
             ("logs/bot_app.log.*", seven_days),          
             ("data/daily_snapshot_*.json", seven_days),  
-            ("data/vwap_state_*.json", seven_days),      
+            ("data/slice_state_*.json", seven_days),      
             ("data/profit_*.png", seven_days),           
             ("data/profit_*.gif", seven_days),           
             ("data/*.bak_*", seven_days),       
@@ -403,7 +403,7 @@ async def scheduled_force_reset(context):
 # ==============================================================
 # 1. 🎓 실시간 조기 졸업 정산 (Scenario 2)
 # ==============================================================
-async def process_realtime_graduation(ticker, cfg, broker, queue_ledger, chat_id, context, tx_lock):
+async def process_realtime_graduation(ticker, cfg, broker, legacy_lot_book, chat_id, context, tx_lock):
     est = ZoneInfo('America/New_York')
     now_est = datetime.datetime.now(est)
     if now_est.time() >= datetime.time(15, 15): return

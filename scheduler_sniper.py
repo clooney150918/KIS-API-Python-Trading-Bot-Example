@@ -1,1 +1,1 @@
-async def scheduled_sniper_monitor(*a, **kw): pass
+async def scheduled_volatility_monitor(*a, **kw): pass

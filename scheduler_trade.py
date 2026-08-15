@@ -21,7 +21,7 @@
 # MODIFIED: [V29.11 핫픽스] AVWAP 엔진 get_decision() 매개변수 불일치(TypeError) 팩트 교정 완료
 # MODIFIED: [V29.12 핫픽스] 스나이퍼 모니터링 AttributeError(get_master_switch) Safe Casting 방어막 이식
 # MODIFIED: [V29.13 핫픽스] 스나이퍼 모니터링 이중 락(Nested tx_lock) 데드락 붕괴 현상 원천 적출 완료
-# MODIFIED: [V29.14 핫픽스] InfiniteStrategy check_sniper_condition 모듈 누락(AttributeError) Safe Bypass 방어막 이식
+# MODIFIED: [V29.14 핫픽스] InfiniteStrategy check_volatility_condition 모듈 누락(AttributeError) Safe Bypass 방어막 이식
 # MODIFIED: [V29.15 핫픽스] AVWAP 데이터 기아(Data Starvation) 원천 차단 및 필수 파라미터 배선 개통
 # MODIFIED: [V29.17 그랜드 수술] AVWAP 딕셔너리 맵핑 불일치(Zero-Price), 스레드 마비(은닉메서드 오호출) 및 L1 기억상실 이중타격 맹점 완벽 적출 수술
 # MODIFIED: [V29.20 팩트 수술] 미체결 스캔 문자열 참조 런타임 붕괴(AttributeError) 완벽 적출 및 시가 갭하락 시맨틱 오판 방어망(yfinance Open 팩트 파싱) 개통 완료
@@ -52,14 +52,14 @@ from scheduler_core import is_market_open, get_budget_allocation, get_target_hou
 # 코파일럿 등이 제안하는 외부 KIS API 래퍼(동기식 블로킹) 모듈을 무지성으로 병합하지 마세요.
 # asyncio 루프 내에서 requests나 동기 함수를 직접 호출하면 전체 스케줄러가 100% 교착(Deadlock)에 빠집니다.
 # 반드시 기존의 asyncio.to_thread 래핑과 내부 broker.py 엔진만을 사용해 비동기 무결성을 유지하세요.
-async def scheduled_sniper_monitor(context):
+async def scheduled_volatility_monitor(context):
     if not is_market_open(): return
     
     est = pytz.timezone('US/Eastern')
     now_est = datetime.datetime.now(est)
     
     if context.job.data.get('tx_lock') is None:
-        logging.warning("⚠️ [sniper_monitor] tx_lock 미초기화. 이번 사이클 스킵.")
+        logging.warning("⚠️ [volatility_monitor] tx_lock 미초기화. 이번 사이클 스킵.")
         return
     
     try:
@@ -90,17 +90,17 @@ async def scheduled_sniper_monitor(context):
     base_map = app_data.get('base_map', {'SOXL': 'SOXX', 'TQQQ': 'QQQ'})
     chat_id = context.job.chat_id
     
-    tracking_cache = app_data.setdefault('sniper_tracking', {})
+    tracking_cache = app_data.setdefault('volatility_tracking', {})
     
     today_est_str = now_est.strftime('%Y%m%d')
     if tracking_cache.get('date') != today_est_str:
         tracking_cache.clear()
         tracking_cache['date'] = today_est_str
         try:
-            for _f in glob.glob("data/sniper_cache_*.json"): os.remove(_f)
+            for _f in glob.glob("data/volatility_cache_*.json"): os.remove(_f)
         except: pass
             
-    async def _do_sniper():
+    async def _do_volatility():
         async with tx_lock:
             cash, holdings = await asyncio.to_thread(broker.get_account_balance)
             if holdings is None: return
@@ -111,11 +111,11 @@ async def scheduled_sniper_monitor(context):
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
                 if False:
-                    if not cfg.get_avwap_hybrid_mode(t): continue
+                    if not cfg.get_aux_hybrid_mode(t): continue
                     
                     if not tracking_cache.get(f"AVWAP_INIT_{t}"):
                         try:
-                            saved_state = strategy.v_avwap_plugin.load_state(t, now_est)
+                            saved_state = strategy.aux_strategy_plugin.load_state(t, now_est)
                             if saved_state:
                                 tracking_cache[f"AVWAP_BOUGHT_{t}"] = saved_state.get('bought', False)
                                 tracking_cache[f"AVWAP_SHUTDOWN_{t}"] = saved_state.get('shutdown', False)
@@ -166,7 +166,7 @@ async def scheduled_sniper_monitor(context):
                     early_exit_mode = cfg.get_avwap_early_exit_mode(t)
                     early_target_profit = cfg.get_avwap_early_target(t) / 100.0
                     
-                    decision = strategy.v_avwap_plugin.get_decision(
+                    decision = strategy.aux_strategy_plugin.get_decision(
                         base_ticker=target_base,
                         exec_ticker=t,
                         base_curr_p=base_curr_p,
@@ -254,7 +254,7 @@ async def scheduled_sniper_monitor(context):
                                         "qty": new_qty,
                                         "avg_price": round(new_avg, 4)
                                     }
-                                    await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
+                                    await asyncio.to_thread(strategy.aux_strategy_plugin.save_state, t, now_est, state_data)
                     
                     elif action == "SELL":
                         price = float(decision.get("target_price", decision.get("price", 0.0)))
@@ -334,7 +334,7 @@ async def scheduled_sniper_monitor(context):
                                         'qty': new_qty,
                                         'avg_price': new_avg
                                     }
-                                    await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
+                                    await asyncio.to_thread(strategy.aux_strategy_plugin.save_state, t, now_est, state_data)
 
                     elif action == "SHUTDOWN":
                         if not tracking_cache.get(f"AVWAP_SHUTDOWN_{t}"):
@@ -345,21 +345,21 @@ async def scheduled_sniper_monitor(context):
                                 "qty": tracking_cache.get(f"AVWAP_QTY_{t}", 0),
                                 "avg_price": tracking_cache.get(f"AVWAP_AVG_{t}", 0.0)
                             }
-                            await asyncio.to_thread(strategy.v_avwap_plugin.save_state, t, now_est, state_data)
+                            await asyncio.to_thread(strategy.aux_strategy_plugin.save_state, t, now_est, state_data)
                             msg = f"🛡️ <b>[AVWAP] 암살자 작전 영구 셧다운(동결)</b>\n▫️ 타겟: {t}\n▫️ 사유: {reason}"
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
 
                 master_switch = getattr(cfg, 'get_master_switch', lambda x: "ALL")(t)
-                sniper_buy_locked = getattr(cfg, 'get_sniper_buy_locked', lambda x: False)(t)
-                sniper_sell_locked = getattr(cfg, 'get_sniper_sell_locked', lambda x: False)(t)
+                volatility_buy_locked = getattr(cfg, 'get_volatility_buy_locked', lambda x: False)(t)
+                volatility_sell_locked = getattr(cfg, 'get_volatility_sell_locked', lambda x: False)(t)
 
                 curr_p = await asyncio.to_thread(broker.get_current_price, t)
                 if curr_p is None or float(curr_p) <= 0:
                     continue
 
-                sniper_func = getattr(strategy, 'check_sniper_condition', None)
-                if sniper_func:
-                    res = await asyncio.to_thread(sniper_func, t, cfg, broker, chat_id)
+                volatility_func = getattr(strategy, 'check_volatility_condition', None)
+                if volatility_func:
+                    res = await asyncio.to_thread(volatility_func, t, cfg, broker, chat_id)
                 else:
                     res = {"action": "HOLD", "reason": "스나이퍼 모듈 누락(Bypass)", "limit_price": 0.0}
                     
@@ -369,7 +369,7 @@ async def scheduled_sniper_monitor(context):
 
                 is_rev = False
 
-                if action == "BUY" and not is_rev and not sniper_buy_locked and master_switch != "UP_ONLY":
+                if action == "BUY" and not is_rev and not volatility_buy_locked and master_switch != "UP_ONLY":
                     qty = res.get("qty", 0)
                     if qty > 0:
                         cancelled = await asyncio.to_thread(broker.cancel_targeted_orders, t, "02", "03")
@@ -414,8 +414,8 @@ async def scheduled_sniper_monitor(context):
                                 except: pass
 
                             if ccld_qty > 0:
-                                if hasattr(cfg, 'set_sniper_buy_locked'):
-                                    cfg.set_sniper_buy_locked(t, True)
+                                if hasattr(cfg, 'set_volatility_buy_locked'):
+                                    cfg.set_volatility_buy_locked(t, True)
                                     
                                 exec_history = await asyncio.to_thread(broker.get_execution_history, t, today_est_str, today_est_str)
                                 
@@ -438,8 +438,8 @@ async def scheduled_sniper_monitor(context):
                                 msg = f"🚨 <b>[{t}] 스나이퍼 딥-매수(Intercept) 명중!</b>\n▫️ 타겟가: ${limit_p}\n▫️ 팩트 단가: ${display_price}\n▫️ 체결수량: {ccld_qty}주 (요청: {qty}주)\n▫️ 사유: {reason}\n▫️ 하방 방어망이 잠깁니다 (상방 독립 유지)."
                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                 
-                upward_mode = getattr(cfg, 'get_upward_sniper_mode', lambda x: False)(t)
-                is_upward_active = upward_mode and not is_rev and not sniper_sell_locked and master_switch != "DOWN_ONLY"
+                upward_mode = getattr(cfg, 'get_upward_volatility_mode', lambda x: False)(t)
+                is_upward_active = upward_mode and not is_rev and not volatility_sell_locked and master_switch != "DOWN_ONLY"
 
                 if is_upward_active and action in ["SELL_QUARTER", "SELL_JACKPOT"]:
                     qty = res.get("qty", 0)
@@ -486,8 +486,8 @@ async def scheduled_sniper_monitor(context):
                                 except: pass
 
                             if ccld_qty > 0:
-                                if hasattr(cfg, 'set_sniper_sell_locked'):
-                                    cfg.set_sniper_sell_locked(t, True)
+                                if hasattr(cfg, 'set_volatility_sell_locked'):
+                                    cfg.set_volatility_sell_locked(t, True)
                                     
                                 exec_history = await asyncio.to_thread(broker.get_execution_history, t, today_est_str, today_est_str)
                                 
@@ -511,7 +511,7 @@ async def scheduled_sniper_monitor(context):
                                 await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
 
     try:
-        await asyncio.wait_for(_do_sniper(), timeout=45.0)
+        await asyncio.wait_for(_do_volatility(), timeout=45.0)
     except Exception as e:
         logging.error(f"🚨 스나이퍼 타임아웃 에러: {e}", exc_info=True)
 # ==========================================================
@@ -555,9 +555,9 @@ async def scheduled_vwap_init_and_cancel(context):
         async with tx_lock:
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+                is_manual_slice = getattr(cfg, 'get_manual_slice_mode', lambda x: False)(t)
                 
-                if version == "V14" and is_manual_vwap:
+                if version == "V14" and is_manual_slice:
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
                             await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
@@ -637,9 +637,9 @@ async def scheduled_vwap_trade(context):
             
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+                is_manual_slice = getattr(cfg, 'get_manual_slice_mode', lambda x: False)(t)
                 
-                if version == "V14" and is_manual_vwap:
+                if version == "V14" and is_manual_slice:
                     if not vwap_cache.get(f"REV_{t}_nuked"):
                         try:
                             await asyncio.to_thread(broker.cancel_all_orders_safe, t, "BUY")
@@ -747,7 +747,7 @@ async def scheduled_regular_trade(context):
     app_data = context.job.data
     cfg, broker, strategy, tx_lock = app_data['cfg'], app_data['broker'], app_data['strategy'], app_data['tx_lock']
     strategy_rev = app_data.get('strategy_rev')
-    queue_ledger = app_data.get('queue_ledger')
+    legacy_lot_book = app_data.get('legacy_lot_book')
     
     if tx_lock is None:
         logging.warning("⚠️ [regular_trade] tx_lock 미초기화. 이번 사이클 스킵.")
@@ -821,9 +821,9 @@ async def scheduled_regular_trade(context):
                     continue
                 
                 version = cfg.get_version(t)
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
+                is_manual_slice = getattr(cfg, 'get_manual_slice_mode', lambda x: False)(t)
 
-                if version == "V14" and is_manual_vwap:
+                if version == "V14" and is_manual_slice:
                     loc_orders = []
                     
                     if version == "V14":
@@ -977,8 +977,8 @@ async def scheduled_after_market_lottery(context):
                 version = cfg.get_version(t)
                 continue
 
-                is_manual_vwap = getattr(cfg, 'get_manual_vwap_mode', lambda x: False)(t)
-                if is_manual_vwap: continue
+                is_manual_slice = getattr(cfg, 'get_manual_slice_mode', lambda x: False)(t)
+                if is_manual_slice: continue
 
                 h = safe_holdings.get(t) or {}
                 qty = int(float(h.get('qty') or 0))

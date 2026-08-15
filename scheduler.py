@@ -186,7 +186,7 @@ async def scheduled_force_reset(context):
     except Exception as e:
         await context.bot.send_message(chat_id=context.job.chat_id, text=f"🚨 <b>시스템 초기화 중 에러 발생:</b> {e}", parse_mode='HTML')
 
-async def scheduled_sniper_monitor(context):
+async def scheduled_volatility_monitor(context):
     if not is_market_open(): return
     
     est = pytz.timezone('US/Eastern')
@@ -214,17 +214,17 @@ async def scheduled_sniper_monitor(context):
 
     is_regular_session = market_open <= now_est <= market_close
     
-    is_sniper_active_time = False
+    is_volatility_active_time = False
     switch_time = market_open + datetime.timedelta(minutes=50)
     if now_est >= switch_time:
-        is_sniper_active_time = True
+        is_volatility_active_time = True
 
     app_data = context.job.data
     cfg, broker, strategy, tx_lock = app_data['cfg'], app_data['broker'], app_data['strategy'], app_data['tx_lock']
     chat_id = context.job.chat_id
     
     target_cache = app_data.setdefault('dynamic_targets', {})
-    tracking_cache = app_data.setdefault('sniper_tracking', {})
+    tracking_cache = app_data.setdefault('volatility_tracking', {})
     master_switch_alerted = app_data.setdefault('master_switch_alerted', {}) 
     
     today_est_str = now_est.strftime('%Y%m%d')
@@ -240,11 +240,11 @@ async def scheduled_sniper_monitor(context):
         
         if saved_date is not None:
             try:
-                for _f in glob.glob("data/sniper_cache_*.json"):
+                for _f in glob.glob("data/volatility_cache_*.json"):
                     os.remove(_f)
             except: pass
             
-    async def _do_sniper():
+    async def _do_volatility():
         async with tx_lock:
             cash, holdings = broker.get_account_balance()
             if holdings is None: return
@@ -253,17 +253,17 @@ async def scheduled_sniper_monitor(context):
             
             for t in cfg.get_active_tickers():
                 version = cfg.get_version(t)
-                is_upward_sniper_on = cfg.get_upward_sniper_mode()
+                is_upward_volatility_on = cfg.get_upward_volatility_mode()
                 
                 # 💡 V_VWAP 엔진은 스나이퍼 모니터를 100% 무시함
                 if version == "V_VWAP":
                     continue
                 
-                if version != "V17" and not is_upward_sniper_on:
+                if version != "V17" and not is_upward_volatility_on:
                     continue
                 
-                lock_buy = cfg.check_lock(t, "SNIPER_BUY")
-                lock_sell = cfg.check_lock(t, "SNIPER_SELL")
+                lock_buy = cfg.check_lock(t, "VOLATILITY_BUY")
+                lock_sell = cfg.check_lock(t, "VOLATILITY_SELL")
                 
                 if lock_buy and lock_sell:
                     continue
@@ -289,30 +289,30 @@ async def scheduled_sniper_monitor(context):
                 
                 if version == "V17":
                     idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
-                    current_weight = cfg.get_sniper_multiplier(t)
+                    current_weight = cfg.get_volatility_multiplier(t)
                     cached_data = target_cache.get(t)
                     
                     if cached_data is None or cached_data.get('weight') != current_weight:
-                        tgt = await asyncio.to_thread(broker.get_dynamic_sniper_target, idx_ticker)
+                        tgt = await asyncio.to_thread(broker.get_dynamic_volatility_target, idx_ticker)
                         if tgt is not None:
                             target_cache[t] = {'value': float(tgt), 'weight': current_weight, 'metric_weight': tgt.weight}
                         else:
                             target_cache[t] = {'value': (7.59 if t=="SOXL" else 6.18), 'weight': current_weight, 'metric_weight': 1.0}
 
-                    sniper_pct = target_cache[t]['value']
+                    volatility_pct = target_cache[t]['value']
                     market_weight = target_cache[t]['metric_weight']
                     
-                    if is_sniper_active_time and not master_switch_alerted.get(t, False):
+                    if is_volatility_active_time and not master_switch_alerted.get(t, False):
                         master_switch_alerted[t] = True
                         state_msg = "🔫 하방 매수[ON] / 🛡️ 상방 익절[OFF] (추세 이익 극대화)" if market_weight <= 1.0 else "🔫 하방 매수[OFF] / 🛡️ 상방 익절[ON] (폭락장 칼날 회피)"
                         msg = f"📡 <b>[{t}] 마스터 스위치 락온 (10:20 EST)</b>\n"
                         msg += f"▫️ 공포 가중치: {market_weight:.2f}배\n"
-                        msg += f"▫️ 고정 타격선(1년 ATR): -{abs(sniper_pct):.2f}%\n"
+                        msg += f"▫️ 고정 타격선(1년 ATR): -{abs(volatility_pct):.2f}%\n"
                         msg += f"▫️ 당일 자율제어: {state_msg}\n"
                         msg += f"👀 오프닝 휩소가 진정되었습니다. 누적된 최고점(${tracking_info['day_high']:.2f})을 앵커로 실사냥을 개시합니다."
                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
 
-                    if not is_sniper_active_time:
+                    if not is_volatility_active_time:
                         continue
 
                     if market_weight <= 1.0: 
@@ -329,15 +329,15 @@ async def scheduled_sniper_monitor(context):
                                     
                                 current_drop = (tracking_info['day_high'] - c_low) / tracking_info['day_high'] if tracking_info['day_high'] > 0 else 0
                                 
-                                if not tracking_info['is_tracking'] and current_drop >= (abs(sniper_pct) / 100.0):
+                                if not tracking_info['is_tracking'] and current_drop >= (abs(volatility_pct) / 100.0):
                                     tracking_info['is_tracking'] = True
-                                    tracking_info['armed_price'] = tracking_info['day_high'] * (1 - (abs(sniper_pct) / 100.0))
+                                    tracking_info['armed_price'] = tracking_info['day_high'] * (1 - (abs(volatility_pct) / 100.0))
                                     tracking_info['lowest_price'] = c_low
                                     
                                     if not tracking_info['alerted']:
                                         msg = f"🎯 <b>[{t}] 하방 매수 스나이퍼 안전장 해제 (Armed)!</b>\n"
                                         msg += f"📈 <b>장중 고점: ${tracking_info['day_high']:.2f}</b>\n"
-                                        msg += f"📉 <b>에너지 소진: -{abs(sniper_pct):.2f}% (방어선 ${tracking_info['armed_price']:.2f} 돌파)</b>\n"
+                                        msg += f"📉 <b>에너지 소진: -{abs(volatility_pct):.2f}% (방어선 ${tracking_info['armed_price']:.2f} 돌파)</b>\n"
                                         msg += f"👀 진짜 바닥을 다질 때까지 발목을 노리며 추적을 시작합니다."
                                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                                         tracking_info['alerted'] = True
@@ -364,19 +364,19 @@ async def scheduled_sniper_monitor(context):
                                                 
                                                 ma_5day = await asyncio.to_thread(broker.get_5day_ma, t)
                                                 temp_plan = strategy.get_plan(t, curr_p, avg_price, qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_cash[t], is_simulation=True)
-                                                sniper_budget = temp_plan.get('one_portion', 0.0)
+                                                volatility_budget = temp_plan.get('one_portion', 0.0)
                                                 
                                                 exec_price = min(c_close, tracking_info['armed_price'])
                                                 
-                                                if sniper_budget >= exec_price and exec_price > 0:
+                                                if volatility_budget >= exec_price and exec_price > 0:
                                                     await asyncio.to_thread(broker.cancel_targeted_orders, t, "BUY", "34")
                                                     await asyncio.sleep(1.0)
                                                     
                                                     is_rev = temp_plan.get('is_reverse', False)
                                                     if not is_rev and exec_price > avg_price:
-                                                        sniper_budget = sniper_budget * 0.5
+                                                        volatility_budget = volatility_budget * 0.5
                                                         
-                                                    rem_qty = math.floor(sniper_budget / exec_price)
+                                                    rem_qty = math.floor(volatility_budget / exec_price)
                                                     hunt_success = False
                                                     actual_buy_price = exec_price
                                                     
@@ -432,12 +432,12 @@ async def scheduled_sniper_monitor(context):
                                                         await asyncio.sleep(0.5)
                                                     
                                                     if hunt_success:
-                                                        cfg.set_lock(t, "SNIPER_BUY") 
+                                                        cfg.set_lock(t, "VOLATILITY_BUY") 
                                                         tracking_info['hit_price'] = actual_buy_price
                                                         tracking_info['is_tracking'] = False
                                                         
                                                         try:
-                                                            with open(f"data/sniper_cache_{t}.json", "w") as f:
+                                                            with open(f"data/volatility_cache_{t}.json", "w") as f:
                                                                 json.dump({"hit_price": actual_buy_price, "lowest_price": tracking_info['lowest_price']}, f)
                                                         except: pass
                                                         
@@ -454,7 +454,7 @@ async def scheduled_sniper_monitor(context):
                                                         continue
 
                                                     now_ts = time.time()
-                                                    fail_history = app_data.setdefault('sniper_fail_ts', {})
+                                                    fail_history = app_data.setdefault('volatility_fail_ts', {})
                                                     if now_ts - fail_history.get(t, 0) > 60:
                                                         msg = f"🛡️ <b>[{t}] 능동형 스나이퍼 기습 실패 (1분 쿨타임 진입)</b>\n"
                                                         msg += f"📉 반등 타점(${exec_price:.2f})에 3회 지정가 덫을 던졌으나 잔량이 남았습니다.\n"
@@ -470,7 +470,7 @@ async def scheduled_sniper_monitor(context):
                                                     continue
                                         else:
                                             now_ts = time.time()
-                                            fail_history = app_data.setdefault('sniper_fail_ts', {})
+                                            fail_history = app_data.setdefault('volatility_fail_ts', {})
                                             if now_ts - fail_history.get(f"{t}_vwap", 0) > 300:
                                                 msg = f"🛡️ <b>[{t}] 하방 스나이퍼 매수 취소 (VWAP 필터 가동)</b>\n"
                                                 msg += f"반등 조건은 충족했으나 현재가(${c_close:.2f})가 당일 평균가(${c_vwap:.2f})를 넘어선 비싼 가격입니다. 가짜 반등(데드캣 바운스)으로 판별하여 사격을 취소합니다."
@@ -479,7 +479,7 @@ async def scheduled_sniper_monitor(context):
                     else:
                         pass
 
-                if not is_sniper_active_time:
+                if not is_volatility_active_time:
                     continue
 
                 if version == "V17":
@@ -556,7 +556,7 @@ async def scheduled_sniper_monitor(context):
                             await asyncio.sleep(0.5)
                             
                         if hunt_success:
-                            cfg.set_lock(t, "SNIPER_SELL")
+                            cfg.set_lock(t, "VOLATILITY_SELL")
                             msg = f"🎉 <b>[{t}] 12% 잭팟 대원칙 달성! (전량 강제 익절)</b>\n\n"
                             msg += f"▫️ 12% 목표가(${target_price:.2f}) 돌파를 확인했습니다.\n"
                             msg += f"▫️ 대기 중인 모든 쿼터/LOC 방어선을 즉시 해제합니다.\n"
@@ -566,7 +566,7 @@ async def scheduled_sniper_monitor(context):
                             continue
                             
                         now_ts = time.time()
-                        fail_history_j = app_data.setdefault('sniper_j_fail_ts', {})
+                        fail_history_j = app_data.setdefault('volatility_j_fail_ts', {})
                         if now_ts - fail_history_j.get(t, 0) > 60:
                             msg = f"🛡️ <b>[{t}] 스나이퍼 잭팟 기습 실패 (방어선 복구)</b>\n"
                             msg += f"🎯 3회에 걸쳐 전량 익절을 시도했으나 체결되지 않았습니다.\n"
@@ -646,7 +646,7 @@ async def scheduled_sniper_monitor(context):
                             await asyncio.sleep(1.0) 
                         else:
                             now_ts = time.time()
-                            fail_history_sync = app_data.setdefault('sniper_sync_fail_ts', {})
+                            fail_history_sync = app_data.setdefault('volatility_sync_fail_ts', {})
                             if now_ts - fail_history_sync.get(t, 0) > 300:
                                 msg = f"⚠️ <b>[{t}] 상방 스나이퍼 가로채기 대기 (이중 체결 방지)</b>\n"
                                 msg += f"가격(${curr_p:.2f})이 붕괴 조건을 충족했으나, 한투 서버에서 기존 방어선(LOC)을 찾지 못했습니다.\n"
@@ -709,7 +709,7 @@ async def scheduled_sniper_monitor(context):
                             await asyncio.sleep(0.5)
                                 
                         if hunt_success:
-                            cfg.set_lock(t, "SNIPER_SELL")
+                            cfg.set_lock(t, "VOLATILITY_SELL")
                             tracking_info['is_trailing'] = False
                             
                             msg = f"💥 <b>[{t}] 상방 쿼터 스나이퍼 명중! (기습 익절 완료)</b>\n\n"
@@ -733,7 +733,7 @@ async def scheduled_sniper_monitor(context):
                             continue
                             
                         now_ts = time.time()
-                        fail_history_q = app_data.setdefault('sniper_q_fail_ts', {})
+                        fail_history_q = app_data.setdefault('volatility_q_fail_ts', {})
                         if now_ts - fail_history_q.get(t, 0) > 60:
                             msg = f"🛡️ <b>[{t}] 스나이퍼 쿼터 가로채기 실패 (방어선 복구)</b>\n"
                             msg += f"🎯 지정가 기습 매도를 시도했으나 잔량이 남았습니다.\n"
@@ -752,14 +752,14 @@ async def scheduled_sniper_monitor(context):
                         continue
     
     try:
-        await asyncio.wait_for(_do_sniper(), timeout=45.0)
+        await asyncio.wait_for(_do_volatility(), timeout=45.0)
     except asyncio.TimeoutError:
         app_data = context.job.data
-        fail_history_t = app_data.setdefault('sniper_timeout_ts', 0)
+        fail_history_t = app_data.setdefault('volatility_timeout_ts', 0)
         now_ts = time.time()
         if now_ts - fail_history_t > 1800: 
             await context.bot.send_message(chat_id=context.job.chat_id, text="🚨 <b>[긴급] 야후 파이낸스 등 외부 API 응답 지연으로 스나이퍼 감시가 무한 대기 상태에 빠졌습니다. \n\n1회 건너뛰고 통제권(Lock)을 강제 반환하여 정규장 로직을 보호합니다!</b>", parse_mode='HTML')
-            app_data['sniper_timeout_ts'] = now_ts
+            app_data['volatility_timeout_ts'] = now_ts
     except Exception as e:
         logging.error(f"🚨 스나이퍼 모니터 에러: {e}")
 

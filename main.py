@@ -159,12 +159,12 @@ def main():
     strategy = InfiniteStrategy(cfg)
     bot = TelegramController(
         cfg, broker, strategy, tx_lock=None, 
-        queue_ledger=None, strategy_rev=None
+        legacy_lot_book=None, strategy_rev=None
     )
     
     app_data = {
         'cfg': cfg, 'broker': broker, 'strategy': strategy, 
-        'queue_ledger': None, 'strategy_rev': None,
+        'legacy_lot_book': None, 'strategy_rev': None,
         'runtime_safety_gate': runtime_safety_gate,
         'scheduler_safety_gate': runtime_safety_gate,
         'shadow_intent_recorder': shadow_intent_recorder,

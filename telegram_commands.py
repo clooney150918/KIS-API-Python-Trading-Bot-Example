@@ -4,7 +4,7 @@
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 48대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [제1헌법 철저 준수] 달력 API(mcal) 스캔 전 파편화된 호출망을 소각하고, GlobalThrottle.wait_api_sync()를 강제 주입하여 썬더링 허드 완벽 차단.
 # 🚨 MODIFIED: [원인 추적 시스템 락온] /record 명령어 실행 시 KIS 서버 통신 장애의 정확한 원인(Endpoint 및 Timeout 등)을 텔레그램 UI로 직접 표출하도록 에러 파싱 로직 전면 팩트 교정 완료.
-# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 조작 시 낡은 스냅샷과 vwap_state 캐시를 소각하여 잔존 지시서에 의한 중복 매매를 차단.
+# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 조작 시 낡은 스냅샷과 slice_state 캐시를 소각하여 잔존 지시서에 의한 중복 매매를 차단.
 # ==========================================================
 import logging
 import datetime
@@ -29,11 +29,11 @@ from telegram_auth import UNSUPPORTED_OFFICIAL_SOXL_MESSAGE
 from daily_report import build_daily_report
 
 class TelegramCommands:
-    def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
+    def __init__(self, config, broker, strategy, legacy_lot_book, sync_engine, view, tx_lock):
         self.cfg = config
         self.broker = broker
         self.strategy = strategy
-        self.queue_ledger = queue_ledger
+        self.legacy_lot_book = legacy_lot_book
         self.sync_engine = sync_engine
         self.view = view
         self.tx_lock = tx_lock
@@ -315,13 +315,13 @@ class TelegramCommands:
             return nyse.schedule(start_date=target_now.date(), end_date=target_now.date())
 
         schedule = await self._retry_api(_check_schedule, now_est)
-        is_sniper_active_time = False
+        is_volatility_active_time = False
         if schedule is not None and not schedule.empty:
             market_open = schedule.iloc[0]['market_open'].astimezone(est)
             if now_est >= market_open + datetime.timedelta(minutes=30):
-                is_sniper_active_time = True
+                is_volatility_active_time = True
         elif now_est.weekday() < 5 and now_est.time() >= datetime.time(10, 0):
-            is_sniper_active_time = True
+            is_volatility_active_time = True
 
         for t in sorted_tickers:
             is_avwap_active = False
@@ -383,7 +383,7 @@ class TelegramCommands:
                 curr = safe_prev_close
 
             idx_ticker = "SOXX" if t == "SOXL" else "QQQ"
-            dynamic_pct_obj = await self._retry_api(self.broker.get_dynamic_sniper_target, idx_ticker)
+            dynamic_pct_obj = await self._retry_api(self.broker.get_dynamic_volatility_target, idx_ticker)
             dynamic_pct = self._safe_float(getattr(dynamic_pct_obj, 'base_amp', 0.0)) if hasattr(dynamic_pct_obj, 'base_amp') else (8.79 if t == "SOXL" else 4.95)
             if dynamic_pct == 0.0: dynamic_pct = (8.79 if t == "SOXL" else 4.95)
             
@@ -393,11 +393,11 @@ class TelegramCommands:
             trigger_reason = f"-{abs(dynamic_pct)}%"
             
             is_locked_reg = await self._retry_api(self.cfg.check_lock, t, "REG", default=False)
-            is_locked_sniper = await self._retry_api(self.cfg.check_lock, t, "SNIPER", default=False)
-            is_already_ordered = is_locked_reg or is_locked_sniper
+            is_locked_volatility = await self._retry_api(self.cfg.check_lock, t, "VOLATILITY", default=False)
+            is_already_ordered = is_locked_reg or is_locked_volatility
              
             ver = await self._retry_api(self.cfg.get_version, t) or "V4.0"
-            is_manual_vwap = False
+            is_manual_slice = False
             
             cached_snap = None
             if hasattr(self.strategy, 'v14_plugin') and hasattr(self.strategy.v14_plugin, 'load_daily_snapshot'):
@@ -433,25 +433,25 @@ class TelegramCommands:
             
             v_rev_q_qty, v_rev_q_lots = 0, 0
 
-            is_avwap_hybrid_on = await self._retry_api(getattr(self.cfg, 'get_avwap_hybrid_mode', lambda x: False), t, default=False)
+            is_avwap_hybrid_on = await self._retry_api(getattr(self.cfg, 'get_aux_hybrid_mode', lambda x: False), t, default=False)
 
             if is_avwap_hybrid_on:
                 is_avwap_active = True
                 avwap_status_txt = "👀 관측 중"
                 avwap_base_ticker = 'SOXX' if t == 'SOXL' else ('QQQ' if t == 'TQQQ' else t)
-                avwap_ctx = await self._retry_api(self.strategy.v_avwap_plugin.fetch_macro_context, avwap_base_ticker)
+                avwap_ctx = await self._retry_api(self.strategy.aux_strategy_plugin.fetch_macro_context, avwap_base_ticker)
       
                 if status_code in ["PRE", "REG"]:
                     df_1min_base = await self._retry_api(self.broker.get_1min_candles_df, avwap_base_ticker)
                     base_curr_p = self._safe_float(await self._retry_api(self.broker.get_current_price, avwap_base_ticker))
                    
-                    if hasattr(self.strategy, 'v_avwap_plugin'):
+                    if hasattr(self.strategy, 'aux_strategy_plugin'):
                         decision = await self._retry_api(
-                            self.strategy.v_avwap_plugin.get_decision,
+                            self.strategy.aux_strategy_plugin.get_decision,
                             base_ticker=avwap_base_ticker, exec_ticker=t,
                             base_curr_p=base_curr_p, exec_curr_p=curr,
                             df_1min_base=df_1min_base, avwap_qty=0, avwap_alloc_cash=0.0, 
-                            now_est=now_est, avwap_state={"strikes": 0, "cooldown_active": False},
+                            now_est=now_est, aslice_state={"strikes": 0, "cooldown_active": False},
                             context_data=avwap_ctx, is_simulation=True,
                             amp5=self._safe_float(getattr(dynamic_pct_obj, 'base_amp', 0.0)) if hasattr(dynamic_pct_obj, 'base_amp') else 0.0,
                             prev_close=safe_prev_close, ma_5day=ma_5day, sortie_mode="SINGLE"
@@ -460,7 +460,7 @@ class TelegramCommands:
                         if decision:
                             avwap_status_txt = f"👁️ 관측 중: {decision.get('reason', '타점 계산중')}"
 
-            upward_sniper_mode_on = await self._retry_api(self.cfg.get_upward_sniper_mode, t, default=False)
+            upward_volatility_mode_on = await self._retry_api(self.cfg.get_upward_volatility_mode, t, default=False)
             target_val = await self._retry_api(self.cfg.get_target_profit, t, default=10.0)
 
             official_balance = self._build_official_balance_for_sync(cash, h)
@@ -491,7 +491,7 @@ class TelegramCommands:
                 'order_status_warning': order_status_warning,
                 'profit_amt': (curr - actual_avg) * actual_qty if actual_qty > 0 else 0, 
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
-                'upward_' + 'sni' + 'per': "ON" if upward_sniper_mode_on else "OFF",
+                'upward_' + 'sni' + 'per': "ON" if upward_volatility_mode_on else "OFF",
                 'target': target_val, 'star_pct': round(self._safe_float(plan.get('star_ratio', 0.0)) * 100, 2),
                 'seed': safe_seed, 'one_portion': self._safe_float(plan.get('one_portion', 0.0)), 'plan': plan,
                 'is_locked': is_already_ordered, 'mode': "REG",
@@ -503,12 +503,12 @@ class TelegramCommands:
                 'prev_close': safe_prev_close,
                 'tracking_info': tracking_status,
                 'dynamic_obj': dynamic_pct_obj,
-                'is_sni' + 'per_active_time': is_sniper_active_time,
+                'is_sni' + 'per_active_time': is_volatility_active_time,
                 'vol_weight': round(real_val, 2), 
                 'vol_status': vol_status,
                 'v_rev_q_lots': v_rev_q_lots,
                 'v_rev_q_qty': v_rev_q_qty,
-                'is_manual_vwap': is_manual_vwap,
+                'is_manual_slice': is_manual_slice,
                 'is_zero_start': is_zero_start_fact,
                 'has_snapshot': bool(cached_snap),
                 'reverse_state': reverse_state

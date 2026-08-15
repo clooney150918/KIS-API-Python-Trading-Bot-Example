@@ -200,14 +200,14 @@ def main():
     strategy = InfiniteStrategy(cfg)
     bot = TelegramController(
         cfg, broker, strategy, tx_lock=None, 
-        queue_ledger=None, strategy_rev=None
+        legacy_lot_book=None, strategy_rev=None
     )
     
     # 🚨 MODIFIED: [V44.65 엣지 타임라인 동기화 및 오프닝 휩소 원천 락다운]
     # 🚨 [AI 에이전트 절대 주의 - 환각(Hallucination) 방어막]
     app_data = {
         'cfg': cfg, 'broker': broker, 'strategy': strategy, 
-        'queue_ledger': None, 'strategy_rev': None,  
+        'legacy_lot_book': None, 'strategy_rev': None,  
         'bot': bot, 'tx_lock': None, 'base_map': TICKER_BASE_MAP,
         'tz_est': est_zone, 'regime_data': {"status": "pending", "msg": "10:00 EST 이전 오프닝 휩소 대기"} 
     }

@@ -24,18 +24,18 @@ from callback_config_handler import CallbackConfigHandler
 from telegram_auth import answer_unsupported_callback, deny_callback, is_admin_update, is_blocked_callback_action
 
 class TelegramCallbacks:
-    def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
+    def __init__(self, config, broker, strategy, legacy_lot_book, sync_engine, view, tx_lock):
         self.cfg = config
         self.broker = broker
         self.strategy = strategy
-        self.queue_ledger = queue_ledger
+        self.legacy_lot_book = legacy_lot_book
         self.sync_engine = sync_engine
         self.view = view
         self.tx_lock = tx_lock
 
         # 🚨 [도메인 핸들러 초기화 (의존성 주입)]
-        self.order_handler = CallbackOrderHandler(config, broker, strategy, queue_ledger, sync_engine, view, tx_lock)
-        self.config_handler = CallbackConfigHandler(config, broker, strategy, queue_ledger, sync_engine, view, tx_lock)
+        self.order_handler = CallbackOrderHandler(config, broker, strategy, legacy_lot_book, sync_engine, view, tx_lock)
+        self.config_handler = CallbackConfigHandler(config, broker, strategy, legacy_lot_book, sync_engine, view, tx_lock)
 
     async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, controller):
         query = update.callback_query

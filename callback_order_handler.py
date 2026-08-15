@@ -11,13 +11,13 @@
 # 🚨 NEW: [1회분 수동 매수/매도 엔진 팩트 결속 (MANUAL_PORTION)]
 #  └ 1. [V4.0 오리지널 격리] 오직 V4.0 모드일 때만 동작하도록 API 통신 전 100% 교차 검증 락온 (V14 팻핑거 붕괴 원천 차단).
 #  └ 2. [자본 잠김 방어 캡핑] 매수(BUY) 시 KIS 실시간 가용 현금 최대치로 내림 캡핑, 매도(SELL) 시 로컬 큐(Queue) 장부 최대치로 동적 스케일링 캡핑.
-#  └ 3. [2-Tier 지층 자동 병합 사수] 타격 직후 QueueLedger의 add_lot/pop_lots를 원자적으로 호출하여 하위 2-Tier 병합 아키텍처를 무결하게 자동 연동.
+#  └ 3. [2-Tier 지층 자동 병합 사수] 타격 직후 RetiredLotLedger의 append_lot_record/remove_lots를 원자적으로 호출하여 하위 2-Tier 병합 아키텍처를 무결하게 자동 연동.
 #  └ 4. [애프터장 족쇄 해제 및 REG Lock 결속] 애프터마켓(AFTER) 진입 후에도 수동 타격을 100% 상시 허용하고, 체결 즉시 당일 스케줄러를 무효화(REG Lock)하여 중복 매매를 원천 차단함.
 # 🚨 MODIFIED: [팻핑거 절대 방어망 결속] MANUAL_PORTION 실행 시 즉시 격발되는 맹독성 로직을 소각하고, 예상 체결 수량과 단가를 브리핑하는 [2단계 확인 메뉴(Confirmation Menu)]를 강제 주입하여 오작동 대참사를 원천 봉쇄.
-# 🚨 MODIFIED: [제1헌법 철저 준수] get_exact_prev_close 및 모든 API 통신 내부 동기 블로킹 time.sleep(0.06)을 영구 소각하고 GlobalThrottle.wait_api_sync()로 100% 위임하여 스레드 마비 원천 차단 완료. 또한 QueueLedger 및 CFG 파일 I/O 전역에 wait_for(timeout=10.0) 족쇄 100% 강제 래핑.
+# 🚨 MODIFIED: [제1헌법 철저 준수] get_exact_prev_close 및 모든 API 통신 내부 동기 블로킹 time.sleep(0.06)을 영구 소각하고 GlobalThrottle.wait_api_sync()로 100% 위임하여 스레드 마비 원천 차단 완료. 또한 RetiredLotLedger 및 CFG 파일 I/O 전역에 wait_for(timeout=10.0) 족쇄 100% 강제 래핑.
 # 🚨 MODIFIED: [데드락(Deadlock) 궁극 수술] MANUAL_PORTION 실행 직후 호출되는 process_auto_sync 로직을 tx_lock 임계 구역 바깥으로 100% 디커플링하여, 동기화 엔진 내부의 tx_lock 재진입 요구로 인한 스케줄러 연쇄 폭발(Timeout) 대참사를 완벽히 봉쇄 완료.
 # 🚨 MODIFIED: [Case 50 전역 락 병목 원천 봉쇄] EXEC 및 MANUAL_PORTION 내부에 광범위하게 적용되어 있던 `async with self.tx_lock:` 족쇄를 해체. 잔고/호가 스캔 등 API 대기 시간(Network I/O)을 락 외부로 100% 끄집어내고, 오직 `send_order` 주문 발사 찰나의 임계 구역에만 국소적으로 락을 래핑하여 병렬 처리 성능 극대화 팩트 락온.
-# 🚨 MODIFIED: [이중 타격(Double Spending) 대참사 원천 봉쇄] 수동 타격 직후 낡은 스냅샷과 vwap_state 캐시를 소각해 중복 주문을 방어.
+# 🚨 MODIFIED: [이중 타격(Double Spending) 대참사 원천 봉쇄] 수동 타격 직후 낡은 스냅샷과 slice_state 캐시를 소각해 중복 주문을 방어.
 # ==========================================================
 import logging
 import datetime
@@ -33,11 +33,11 @@ from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle # 🚨 NEW: 중앙 통제소 결속
 
 class CallbackOrderHandler:
-    def __init__(self, config, broker, strategy, queue_ledger, sync_engine, view, tx_lock):
+    def __init__(self, config, broker, strategy, legacy_lot_book, sync_engine, view, tx_lock):
         self.cfg = config
         self.broker = broker
         self.strategy = strategy
-        self.queue_ledger = queue_ledger
+        self.legacy_lot_book = legacy_lot_book
         self.sync_engine = sync_engine
         self.view = view
         self.tx_lock = tx_lock
@@ -63,11 +63,11 @@ class CallbackOrderHandler:
                 await query.answer("❌ [격발 차단] 현재 장운영시간(정규장/프리장)이 아닙니다.", show_alert=True)
                 return
                 
-            if not getattr(self, 'queue_ledger', None):
-                from queue_ledger import QueueLedger
-                self.queue_ledger = await asyncio.wait_for(asyncio.to_thread(QueueLedger), timeout=5.0)
+            if not getattr(self, 'legacy_lot_book', None):
+                from retired_lot_ledger import RetiredLotLedger
+                self.legacy_lot_book = await asyncio.wait_for(asyncio.to_thread(RetiredLotLedger), timeout=5.0)
             
-            q_data = await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.get_queue, ticker), timeout=10.0) or []
+            q_data = await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.get_lots, ticker), timeout=10.0) or []
             valid_q_data = [item for item in q_data if isinstance(item, dict)]
             
             total_q = sum(int(self._safe_float(item.get("qty"))) for item in valid_q_data)
@@ -99,11 +99,11 @@ class CallbackOrderHandler:
                 await query.answer("❌ [격발 차단] 현재 장운영시간(정규장/프리장)이 아닙니다.", show_alert=True)
                 return
              
-            if not getattr(self, 'queue_ledger', None):
-                from queue_ledger import QueueLedger
-                self.queue_ledger = await asyncio.wait_for(asyncio.to_thread(QueueLedger), timeout=5.0)
+            if not getattr(self, 'legacy_lot_book', None):
+                from retired_lot_ledger import RetiredLotLedger
+                self.legacy_lot_book = await asyncio.wait_for(asyncio.to_thread(RetiredLotLedger), timeout=5.0)
      
-            q_data = await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.get_queue, ticker), timeout=10.0) or []
+            q_data = await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.get_lots, ticker), timeout=10.0) or []
             valid_q_data = [item for item in q_data if isinstance(item, dict)]
             
             if not valid_q_data:
@@ -131,7 +131,7 @@ class CallbackOrderHandler:
                         res = None
                     
                     if isinstance(res, dict) and str(res.get('rt_cd', '')) == '0':
-                        await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.pop_lots, ticker, emergency_qty), timeout=10.0)
+                        await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.remove_lots, ticker, emergency_qty), timeout=10.0)
                         
                         # 🚨 MODIFIED: [이중 타격 방어] 수동 긴급 수혈 후 낡은 스냅샷, 상태 캐시, 슬라이스 지시서까지 완벽 소각
                         def _nuke_snapshot_and_state_emg():
@@ -139,7 +139,7 @@ class CallbackOrderHandler:
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
                                     except OSError: pass
-                            for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
+                            for f in glob.glob(f"data/slice_state_*_{ticker}.json"):
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
                                     except OSError: pass
@@ -293,7 +293,7 @@ class CallbackOrderHandler:
                     if attempt == 2: ma_5day = 0.0
                     else: await asyncio.sleep(1.0 * (2 ** attempt))
                     
-            is_manual_vwap = await asyncio.wait_for(asyncio.to_thread(getattr(self.cfg, 'get_manual_vwap_mode', lambda x: False), t), timeout=10.0)
+            is_manual_slice = await asyncio.wait_for(asyncio.to_thread(getattr(self.cfg, 'get_manual_slice_mode', lambda x: False), t), timeout=10.0)
             
             try:
                 plan = await asyncio.wait_for(asyncio.to_thread(self.strategy.get_plan, t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_budget, is_simulation=True, is_snapshot_mode=False), timeout=10.0)
@@ -422,7 +422,7 @@ class CallbackOrderHandler:
             except Exception:
                 pass
             
-            nuked_count = 0
+            canceled_count = 0
             err_count = 0
             
             try:
@@ -455,7 +455,7 @@ class CallbackOrderHandler:
                                         asyncio.to_thread(self.broker.cancel_reservation_order, ord_dt, odno),
                                         timeout=10.0
                                     )
-                                nuked_count += 1
+                                canceled_count += 1
                             except Exception as e:
                                 logging.error(f"🚨 [{t}] 수동 예약 덫 취소 실패: {e}")
                                 err_count += 1
@@ -488,20 +488,20 @@ class CallbackOrderHandler:
                                         asyncio.to_thread(self.broker.cancel_order, t, u_odno),
                                         timeout=10.0
                                     )
-                                nuked_count += 1
+                                canceled_count += 1
                             except Exception as e:
                                 logging.error(f"🚨 [{t}] 수동 일반 덫 취소 실패: {e}")
                                 err_count += 1
             except Exception as e:
                 err_count += 1
 
-            if nuked_count > 0:
+            if canceled_count > 0:
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.reset_lock_for_ticker, t), timeout=10.0)
 
             if err_count > 0:
-                await context.bot.send_message(chat_id, f"⚠️ <b>[{html.escape(str(t))}] 수동 취소 완료 (일부 오류 발생)</b>\n▫️ 총 <b>{nuked_count}건</b>의 덫을 파기하고 매매 잠금을 해제했으나, {err_count}건의 오류가 발생했습니다.", parse_mode='HTML')
-            elif nuked_count > 0:
-                await context.bot.send_message(chat_id, f"🛑 <b>[{html.escape(str(t))}] 수동 취소 완료</b>\n▫️ 총 <b>{nuked_count}건</b>의 미체결 및 예약 주문을 취소하고 당일 매매 잠금을 <b>해제</b>했습니다.", parse_mode='HTML')
+                await context.bot.send_message(chat_id, f"⚠️ <b>[{html.escape(str(t))}] 수동 취소 완료 (일부 오류 발생)</b>\n▫️ 총 <b>{canceled_count}건</b>의 덫을 파기하고 매매 잠금을 해제했으나, {err_count}건의 오류가 발생했습니다.", parse_mode='HTML')
+            elif canceled_count > 0:
+                await context.bot.send_message(chat_id, f"🛑 <b>[{html.escape(str(t))}] 수동 취소 완료</b>\n▫️ 총 <b>{canceled_count}건</b>의 미체결 및 예약 주문을 취소하고 당일 매매 잠금을 <b>해제</b>했습니다.", parse_mode='HTML')
             else:
                 await context.bot.send_message(chat_id, f"ℹ️ <b>[{html.escape(str(t))}] 수동 취소 결과</b>\n▫️ 취소할 덫이 없습니다.", parse_mode='HTML')
 
@@ -525,9 +525,9 @@ class CallbackOrderHandler:
                     seed = self._safe_float(await asyncio.wait_for(asyncio.to_thread(self.cfg.get_seed, ticker), timeout=10.0))
                     budget = seed * 0.15 
 
-                    if not getattr(self, 'queue_ledger', None):
-                        from queue_ledger import QueueLedger
-                        self.queue_ledger = await asyncio.wait_for(asyncio.to_thread(QueueLedger), timeout=5.0)
+                    if not getattr(self, 'legacy_lot_book', None):
+                        from retired_lot_ledger import RetiredLotLedger
+                        self.legacy_lot_book = await asyncio.wait_for(asyncio.to_thread(RetiredLotLedger), timeout=5.0)
 
                     cash = 0.0
                     for attempt in range(3):
@@ -576,7 +576,7 @@ class CallbackOrderHandler:
                         max_buy_qty = math.floor(cash / exec_price)
                         final_qty = min(target_qty, max_buy_qty)
                     else:
-                        q_data = await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.get_queue, ticker), timeout=10.0) or []
+                        q_data = await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.get_lots, ticker), timeout=10.0) or []
                         total_q = sum(int(self._safe_float(item.get("qty"))) for item in q_data if isinstance(item, dict))
                         final_qty = min(target_qty, total_q)
 
@@ -617,9 +617,9 @@ class CallbackOrderHandler:
                     seed = self._safe_float(await asyncio.wait_for(asyncio.to_thread(self.cfg.get_seed, ticker), timeout=10.0))
                     budget = seed * 0.15
 
-                    if not getattr(self, 'queue_ledger', None):
-                        from queue_ledger import QueueLedger
-                        self.queue_ledger = await asyncio.wait_for(asyncio.to_thread(QueueLedger), timeout=5.0)
+                    if not getattr(self, 'legacy_lot_book', None):
+                        from retired_lot_ledger import RetiredLotLedger
+                        self.legacy_lot_book = await asyncio.wait_for(asyncio.to_thread(RetiredLotLedger), timeout=5.0)
 
                     cash = 0.0
                     for attempt in range(3):
@@ -668,7 +668,7 @@ class CallbackOrderHandler:
                         max_buy_qty = math.floor(cash / exec_price)
                         final_qty = min(target_qty, max_buy_qty)
                     else:
-                        q_data = await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.get_queue, ticker), timeout=10.0) or []
+                        q_data = await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.get_lots, ticker), timeout=10.0) or []
                         total_q = sum(int(self._safe_float(item.get("qty"))) for item in q_data if isinstance(item, dict))
                         final_qty = min(target_qty, total_q)
 
@@ -687,9 +687,9 @@ class CallbackOrderHandler:
 
                         if isinstance(res, dict) and str(res.get('rt_cd', '')) == '0':
                             if side == "BUY":
-                                await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.add_lot, ticker, final_qty, exec_price, "MANUAL_PORTION_BUY"), timeout=10.0)
+                                await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.append_lot_record, ticker, final_qty, exec_price, "MANUAL_PORTION_BUY"), timeout=10.0)
                             else:
-                                await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.pop_lots, ticker, final_qty, exec_price), timeout=10.0)
+                                await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.remove_lots, ticker, final_qty, exec_price), timeout=10.0)
 
                             await asyncio.wait_for(asyncio.to_thread(self.cfg.set_lock, ticker, "REG"), timeout=10.0)
 
@@ -699,7 +699,7 @@ class CallbackOrderHandler:
                                     with GlobalThrottle.get_file_lock(f):
                                         try: os.remove(f)
                                         except OSError: pass
-                                for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
+                                for f in glob.glob(f"data/slice_state_*_{ticker}.json"):
                                     with GlobalThrottle.get_file_lock(f):
                                         try: os.remove(f)
                                         except OSError: pass

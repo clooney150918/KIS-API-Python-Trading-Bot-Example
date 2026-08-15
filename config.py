@@ -52,7 +52,7 @@ class ConfigManager:
             "HISTORY": "data/manual_history.json", 
             "SPLIT": "data/split_config.json",
             "TICKER": "data/active_tickers.json",
-            "UPWARD_SNIPER": "data/upward_sniper.json", 
+            "UPWARD_VOLATILITY": "data/upward_volatility.json", 
             "SECRET_MODE": "data/secret_mode.dat",
             "PROFIT_CFG": "data/profit_config.json",
             "LOCKS": "data/trade_locks.json",
@@ -66,15 +66,15 @@ class ConfigManager:
             "LEGACY_HISTORY": "data/legacy_history_SOXL_20260622_20260810.json",
             "EXECUTION_LEDGER": "data/execution_ledger_SOXL.jsonl",
             "PROCESSED_FILLS": "data/processed_fills_SOXL.jsonl",
-            "SNIPER_MULTIPLIER_CFG": "data/sniper_multiplier.json",
+            "VOLATILITY_MULTIPLIER_CFG": "data/volatility_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
             "AVWAP_SORTIE_CFG": "data/avwap_sortie.json",
             "MANUAL_VWAP_CFG": "data/manual_vwap_config.json",
             "FEE_CFG": "data/fee_config.json", 
             "MASTER_SWITCH": "data/master_switch.json",
-            "SNIPER_BUY_LOCKED": "data/sniper_buy_locked.json",
-            "SNIPER_SELL_LOCKED": "data/sniper_sell_locked.json",
+            "VOLATILITY_BUY_LOCKED": "data/volatility_buy_locked.json",
+            "VOLATILITY_SELL_LOCKED": "data/volatility_sell_locked.json",
             "AVWAP_GAP_THRESH_CFG": "data/avwap_gap_thresh.json",
             "AVWAP_ANCHOR_CFG": "data/avwap_anchor.json",
             "AVWAP_BUDGET_CFG": "data/avwap_budget.json",         
@@ -86,7 +86,7 @@ class ConfigManager:
         self.DEFAULT_TARGET = {"SOXL": 20.0, "TQQQ": 20.0}
         self.DEFAULT_VERSION = {"SOXL": "LAOER_V4_SOXL_20", "TQQQ": "LAOER_V4_SOXL_20"}
         self.DEFAULT_COMPOUND = {"SOXL": 70.0, "TQQQ": 70.0}
-        self.DEFAULT_SNIPER_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
+        self.DEFAULT_VOLATILITY_MULTIPLIER = {"SOXL": 1.0, "TQQQ": 0.9}
         self.DEFAULT_FEE = {"SOXL": 0.07, "TQQQ": 0.07} 
         self._last_t_event_status = {}
 
@@ -893,32 +893,32 @@ class ConfigManager:
             d[t] = self._safe_float(v)
             self._save_json(self.FILES["FEE_CFG"], d)
 
-    def get_sniper_multiplier(self, t):
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_MULTIPLIER_CFG"]):
-            default_val = self.DEFAULT_SNIPER_MULTIPLIER.get(t, 1.0)
-            return self._safe_float(self._load_json(self.FILES["SNIPER_MULTIPLIER_CFG"], self.DEFAULT_SNIPER_MULTIPLIER).get(t, default_val))
+    def get_volatility_multiplier(self, t):
+        with GlobalThrottle.get_file_lock(self.FILES["VOLATILITY_MULTIPLIER_CFG"]):
+            default_val = self.DEFAULT_VOLATILITY_MULTIPLIER.get(t, 1.0)
+            return self._safe_float(self._load_json(self.FILES["VOLATILITY_MULTIPLIER_CFG"], self.DEFAULT_VOLATILITY_MULTIPLIER).get(t, default_val))
         
-    def set_sniper_multiplier(self, t, v):
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_MULTIPLIER_CFG"]):
-            d = self._load_json(self.FILES["SNIPER_MULTIPLIER_CFG"], self.DEFAULT_SNIPER_MULTIPLIER)
+    def set_volatility_multiplier(self, t, v):
+        with GlobalThrottle.get_file_lock(self.FILES["VOLATILITY_MULTIPLIER_CFG"]):
+            d = self._load_json(self.FILES["VOLATILITY_MULTIPLIER_CFG"], self.DEFAULT_VOLATILITY_MULTIPLIER)
             d[t] = self._safe_float(v)
-            self._save_json(self.FILES["SNIPER_MULTIPLIER_CFG"], d)
+            self._save_json(self.FILES["VOLATILITY_MULTIPLIER_CFG"], d)
 
-    def get_upward_sniper_mode(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_SNIPER"]):
-            return bool(self._load_json(self.FILES["UPWARD_SNIPER"], {}).get(ticker, False))
+    def get_upward_volatility_mode(self, ticker): 
+        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_VOLATILITY"]):
+            return bool(self._load_json(self.FILES["UPWARD_VOLATILITY"], {}).get(ticker, False))
          
-    def set_upward_sniper_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_SNIPER"]):
-             d = self._load_json(self.FILES["UPWARD_SNIPER"], {})
+    def set_upward_volatility_mode(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["UPWARD_VOLATILITY"]):
+             d = self._load_json(self.FILES["UPWARD_VOLATILITY"], {})
              d[ticker] = bool(v)
-             self._save_json(self.FILES["UPWARD_SNIPER"], d)
+             self._save_json(self.FILES["UPWARD_VOLATILITY"], d)
 
-    def get_avwap_hybrid_mode(self, ticker): 
+    def get_aux_hybrid_mode(self, ticker): 
         with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
             return bool(self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {}).get(ticker, False))
     
-    def set_avwap_hybrid_mode(self, ticker, v):
+    def set_aux_hybrid_mode(self, ticker, v):
         with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
             d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
             d[ticker] = bool(v)
@@ -934,11 +934,11 @@ class ConfigManager:
             d[ticker] = str(v)
             self._save_json(self.FILES["AVWAP_SORTIE_CFG"], d)
 
-    def get_manual_vwap_mode(self, ticker): 
+    def get_manual_slice_mode(self, ticker): 
         with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
             return bool(self._load_json(self.FILES["MANUAL_VWAP_CFG"], {}).get(ticker, False))
         
-    def set_manual_vwap_mode(self, ticker, v):
+    def set_manual_slice_mode(self, ticker, v):
         with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
             d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
             d[ticker] = bool(v)
@@ -954,25 +954,25 @@ class ConfigManager:
             d[ticker] = str(v)
             self._save_json(self.FILES["MASTER_SWITCH"], d)
 
-    def get_sniper_buy_locked(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_BUY_LOCKED"]):
-            return bool(self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {}).get(ticker, False))
+    def get_volatility_buy_locked(self, ticker): 
+        with GlobalThrottle.get_file_lock(self.FILES["VOLATILITY_BUY_LOCKED"]):
+            return bool(self._load_json(self.FILES["VOLATILITY_BUY_LOCKED"], {}).get(ticker, False))
         
-    def set_sniper_buy_locked(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_BUY_LOCKED"]):
-            d = self._load_json(self.FILES["SNIPER_BUY_LOCKED"], {})
+    def set_volatility_buy_locked(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["VOLATILITY_BUY_LOCKED"]):
+            d = self._load_json(self.FILES["VOLATILITY_BUY_LOCKED"], {})
             d[ticker] = bool(v)
-            self._save_json(self.FILES["SNIPER_BUY_LOCKED"], d)
+            self._save_json(self.FILES["VOLATILITY_BUY_LOCKED"], d)
 
-    def get_sniper_sell_locked(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_SELL_LOCKED"]):
-            return bool(self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {}).get(ticker, False))
+    def get_volatility_sell_locked(self, ticker): 
+        with GlobalThrottle.get_file_lock(self.FILES["VOLATILITY_SELL_LOCKED"]):
+            return bool(self._load_json(self.FILES["VOLATILITY_SELL_LOCKED"], {}).get(ticker, False))
         
-    def set_sniper_sell_locked(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["SNIPER_SELL_LOCKED"]):
-            d = self._load_json(self.FILES["SNIPER_SELL_LOCKED"], {})
+    def set_volatility_sell_locked(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["VOLATILITY_SELL_LOCKED"]):
+            d = self._load_json(self.FILES["VOLATILITY_SELL_LOCKED"], {})
             d[ticker] = bool(v)
-            self._save_json(self.FILES["SNIPER_SELL_LOCKED"], d)
+            self._save_json(self.FILES["VOLATILITY_SELL_LOCKED"], d)
 
     def get_secret_mode(self): 
         with GlobalThrottle.get_file_lock(self.FILES["SECRET_MODE"]):

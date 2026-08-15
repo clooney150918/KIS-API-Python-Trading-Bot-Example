@@ -495,7 +495,7 @@ class MarketDataProvider(KisApiClient):
                 time.sleep(1.0 * (2 ** attempt))
         return 0.0, ""
 
-    def get_dynamic_sniper_target(self, index_ticker):
+    def get_dynamic_volatility_target(self, index_ticker):
         target_index = "SOXX" if index_ticker in ["SOXX", "SOXL"] else index_ticker
         try:
             class TargetFloat(float): pass

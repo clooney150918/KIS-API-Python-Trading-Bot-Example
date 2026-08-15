@@ -346,7 +346,7 @@ class TelegramView:
 
             t = html.escape(str(t_info.get('ticker') or 'UNK'))
             v_mode = str(t_info.get('version') or 'V4.0')
-            is_manual_vwap = False
+            is_manual_slice = False
 
             is_zero_start = bool(t_info.get('is_zero_start'))
 
@@ -378,7 +378,7 @@ class TelegramView:
             day_high = self._safe_float(t_info.get('day_high') or 0.0)
             day_low = self._safe_float(t_info.get('day_low') or 0.0)
             prev_close = self._safe_float(t_info.get('prev_close') or 0.0)
-            sniper_status_txt = html.escape(str(t_info.get('upward_' + 'sni' + 'per') or 'OFF'))
+            volatility_status_txt = html.escape(str(t_info.get('upward_' + 'sni' + 'per') or 'OFF'))
             plan_orders = plan_dict.get('orders') or []
             raw_status_for_mode = str(plan_dict.get('process_status') or '')
             if '리버스' in raw_status_for_mode or is_rev_logic:
@@ -458,7 +458,7 @@ class TelegramView:
             icon = "🔺" if safe_profit_amt >= 0 else "🔻"
             body_msg += f"{icon} 수익   <b>{sign}{abs(safe_profit_pct):.1f}% ({sign}${abs(safe_profit_amt):,.0f})</b>\n\n"
 
-            if is_zero_start and sniper_status_txt == "ON": sniper_status_txt = "OFF (0주)"
+            if is_zero_start and volatility_status_txt == "ON": volatility_status_txt = "OFF (0주)"
 
             safe_target = self._safe_float(t_info.get('target') or 10.0)
             safe_star_pct = self._safe_float(t_info.get('star_pct') or official_star_pct)
@@ -469,14 +469,14 @@ class TelegramView:
                 target_price = safe_avg * (1 + safe_target / 100.0)
                 body_msg += f"🎯 목표가  <b>${target_price:.2f} (+{safe_target:g}%)</b>\n"
             elif is_rev_logic:
-                body_msg += f"🎯 감시   <b>{sniper_status_txt}</b>\n"
+                body_msg += f"🎯 감시   <b>{volatility_status_txt}</b>\n"
 
             if prev_close > 0 and day_high > 0 and day_low > 0:
                 high_pct = (day_high - prev_close) / prev_close * 100
                 low_pct = (day_low - prev_close) / prev_close * 100
                 body_msg += f"📉 고가 <b>${day_high:.2f}</b> · 저가 <b>${day_low:.2f}</b>\n"
 
-            if sniper_status_txt == "ON":
+            if volatility_status_txt == "ON":
                 if not is_trade_active:
                     body_msg += "🎯 변동성 지표 분석: 감시 종료 (장마감)\n"
                 elif tracking_info.get('is_trailing', False):
@@ -776,10 +776,10 @@ class TelegramView:
              body = "… (글자 수 제한으로 이전 로그 생략) …\n" + body[-(3800 - len(header) - len(footer)):]
         return header + body + footer
 
-    def get_queue_management_menu(self, *a, **kw):
+    def get_lots_management_menu(self, *a, **kw):
         return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
-    def get_queue_action_confirm_menu(self, *a, **kw):
+    def get_lots_action_confirm_menu(self, *a, **kw):
         return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
     def get_avwap_reset_confirm_menu(self, *a, **kw):

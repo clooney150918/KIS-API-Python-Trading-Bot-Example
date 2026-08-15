@@ -8,14 +8,14 @@ class _StubPlugin:
     def fetch_macro_context(self, *a, **kw): return {}
     def get_dynamic_plan(self, *a, **kw): return {}
     def get_plan(self, *a, **kw): return {}
-    def get_queue(self, *a, **kw): return []
+    def get_lots(self, *a, **kw): return []
 
 class InfiniteStrategy:
     def __init__(self, config):
         self.cfg = config
         self.v4 = V4Strategy(config)
         self.v_rev_plugin = _StubPlugin()
-        self.v_avwap_plugin = _StubPlugin()
+        self.aux_strategy_plugin = _StubPlugin()
         self.v14_vwap_plugin = _StubPlugin()
 
     def _halt_plan(self, ticker, reason):
@@ -61,9 +61,9 @@ class InfiniteStrategy:
             **kwargs,
         )
 
-    def load_avwap_state(self, *a, **kw): return {}
-    def save_avwap_state(self, *a, **kw): pass
+    def load_aslice_state(self, *a, **kw): return {}
+    def save_aslice_state(self, *a, **kw): pass
     def fetch_avwap_macro(self, *a, **kw): return None
     def get_avwap_decision(self, *a, **kw): return {}
-    def check_sniper_condition(self, *a, **kw):
+    def check_volatility_condition(self, *a, **kw):
         return {"action": "HOLD", "reason": "V4.0 — 스나이퍼 제거됨", "limit_price": 0.0, "qty": 0}

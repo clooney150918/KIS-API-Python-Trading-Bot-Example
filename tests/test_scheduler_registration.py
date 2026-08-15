@@ -5,7 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 FORBIDDEN_SCHEDULES = {
     "scheduled_volatility_scan",
-    "scheduled_sniper_monitor",
+    "scheduled_volatility_monitor",
     "scheduled_vwap_trade",
     "scheduled_vwap_init_and_cancel",
     "scheduled_regular_trade_delayed",
@@ -13,7 +13,7 @@ FORBIDDEN_SCHEDULES = {
 }
 
 FORBIDDEN_IMPORT_MODULES = {
-    "scheduler_sniper",
+    "scheduler_volatility",
     "scheduler_vwap",
     "volatility_engine",
     "strategy_reversion",

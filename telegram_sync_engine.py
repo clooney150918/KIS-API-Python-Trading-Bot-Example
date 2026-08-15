@@ -30,11 +30,11 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from global_throttle import GlobalThrottle # 🚨 중앙 통제소 결속
 
 class TelegramSyncEngine:
-    def __init__(self, config, broker, strategy, queue_ledger, view, tx_lock, sync_locks):
+    def __init__(self, config, broker, strategy, legacy_lot_book, view, tx_lock, sync_locks):
         self.cfg = config
         self.broker = broker
         self.strategy = strategy
-        self.queue_ledger = queue_ledger
+        self.legacy_lot_book = legacy_lot_book
         self.view = view
         self.tx_lock = tx_lock
         self.sync_locks = sync_locks
@@ -135,10 +135,10 @@ class TelegramSyncEngine:
                 if split_ratio > 0.0 and split_date != "":
                     snapshot_needs_regen = True # 🚨 트리거 발동
                     await self._retry_api(self.cfg.apply_stock_split, ticker, split_ratio, timeout=10.0)
-                    if getattr(self, 'queue_ledger', None):
-                        await self._retry_api(self.queue_ledger.apply_stock_split, ticker, split_ratio, timeout=10.0)
-                    if hasattr(self.strategy, 'v_avwap_plugin'):
-                        await self._retry_api(self.strategy.v_avwap_plugin.apply_stock_split, ticker, split_ratio, now_est, timeout=10.0)
+                    if getattr(self, 'legacy_lot_book', None):
+                        await self._retry_api(self.legacy_lot_book.apply_stock_split, ticker, split_ratio, timeout=10.0)
+                    if hasattr(self.strategy, 'aux_strategy_plugin'):
+                        await self._retry_api(self.strategy.aux_strategy_plugin.apply_stock_split, ticker, split_ratio, now_est, timeout=10.0)
                     
                     try:
                         from assassin_ledger import AssassinLedger
@@ -199,11 +199,11 @@ class TelegramSyncEngine:
                 max_check_qty = max(max_check_qty, a_qty_for_check)
 
                 # 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 암살자 캐시에 기록된 주문번호 추출 (Ghosting 필터 용도)
-                avwap_state_file = f"data/avwap_trade_state_{ticker}.json"
+                aslice_state_file = f"data/aux_trade_state_{ticker}.json"
                 history_odnos = []
-                with GlobalThrottle.get_file_lock(avwap_state_file):
+                with GlobalThrottle.get_file_lock(aslice_state_file):
                     try:
-                        with open(avwap_state_file, 'r', encoding='utf-8') as f:
+                        with open(aslice_state_file, 'r', encoding='utf-8') as f:
                             avwap_data = json.load(f)
                             if isinstance(avwap_data, dict) and avwap_data.get('date') == target_ledger_str:
                                 history_odnos = avwap_data.get('history_odnos', [])
@@ -336,7 +336,7 @@ class TelegramSyncEngine:
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
                                     except OSError: pass
-                            for f in glob.glob(f"data/vwap_state_*_{ticker}.json"):
+                            for f in glob.glob(f"data/slice_state_*_{ticker}.json"):
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
                                     except OSError: pass

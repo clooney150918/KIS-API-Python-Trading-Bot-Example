@@ -124,10 +124,10 @@ def require_admin(config: Any, handler: Callable[..., Awaitable[Any]]) -> Callab
 def is_blocked_callback_action(action: str, sub: str = "") -> bool:
     if action in BLOCKED_CALLBACK_ACTIONS:
         return True
-    if action == "MODE" and str(sub).upper().startswith(("VWAP", "SNIPER")):
+    if action == "MODE" and str(sub).upper().startswith(("VWAP", "VOLATILITY")):
         return True
-    if action == "SET_VER_CONFIRM" and any(token in str(sub).upper() for token in ("VWAP", "SNIPER")):
+    if action == "SET_VER_CONFIRM" and any(token in str(sub).upper() for token in ("VWAP", "VOLATILITY")):
         return True
-    if action == "INPUT" and any(token in str(sub).upper() for token in ("VWAP", "SNIPER")):
+    if action == "INPUT" and any(token in str(sub).upper() for token in ("VWAP", "VOLATILITY")):
         return True
     return False

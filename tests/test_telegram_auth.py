@@ -68,7 +68,7 @@ def _commands(chat_id=ADMIN_ID):
         FakeConfig(chat_id=chat_id),
         broker=Mock(),
         strategy=Mock(),
-        queue_ledger=Mock(),
+        legacy_lot_book=Mock(),
         sync_engine=Mock(sync_locks={}),
         view=TelegramView(),
         tx_lock=asyncio.Lock(),
@@ -119,8 +119,8 @@ def test_admin_sensitive_command_is_allowed():
 def test_blocked_commands_are_compatibility_stubs_without_side_effects(method_name, args):
     commands = _commands()
     commands.broker.get_current_price.side_effect = AssertionError("old broker path called")
-    commands.queue_ledger.get_queue.side_effect = AssertionError("old queue path called")
-    commands.queue_ledger.overwrite_queue.side_effect = AssertionError("old queue mutation called")
+    commands.legacy_lot_book.get_lots.side_effect = AssertionError("old queue path called")
+    commands.legacy_lot_book.overwrite_queue.side_effect = AssertionError("old queue mutation called")
     update = FakeUpdate(chat_id=ADMIN_ID, user_id=ADMIN_ID)
 
     run(getattr(commands, method_name)(update, FakeContext(args=args)))
