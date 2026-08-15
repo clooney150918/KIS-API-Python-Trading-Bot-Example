@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from t_event_engine import apply_t_event, get_current_t_from_ledger
+from t_event_engine import apply_fill_event_extended, apply_t_event, get_current_t_from_ledger
 
 
 BASELINE = {
@@ -46,6 +46,10 @@ def test_apply_t_event_delegates_event_type_to_laoer_kernel():
 
     assert state.t == Decimal("19.32")
     assert state.revision == 2
+
+
+def test_apply_fill_event_extended_maps_quarter_sell_alias_to_seventy_five_percent_t():
+    assert apply_fill_event_extended(Decimal("14.7400"), "QUARTER_SELL") == Decimal("11.055000")
 
 
 def test_apply_t_event_validates_untyped_json_fields_before_kernel_dataclasses():

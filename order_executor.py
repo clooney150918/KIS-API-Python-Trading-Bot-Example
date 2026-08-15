@@ -23,6 +23,7 @@ from runtime_safety import (
     shadow_record_failure_decision,
 )
 from order_intent_store import (
+    DuplicateOrderIntentError,
     InvalidOrderIntentError,
     REQUIRED_PLAN_FIELDS,
     STRATEGY as OFFICIAL_ORDER_STRATEGY,
@@ -190,6 +191,30 @@ def _order_success_cache_key(trade_date, ticker, order, side, order_type, fallba
     return canonical_intent_id
 
 
+def _official_intent_payload(order, side, order_type):
+    return {
+        "strategy": order.get("strategy"),
+        "strategy_revision": order.get("strategy_revision"),
+        "t_revision": order.get("t_revision"),
+        "ticker": order.get("ticker"),
+        "trade_date": order.get("trade_date"),
+        "event_type": order.get("event_type"),
+        "side": side,
+        "order_type": order_type,
+        "price": str(order.get("price")),
+        "qty": order.get("qty"),
+    }
+
+
+def _ensure_planned_official_intent(order_intent_store, order, side, order_type):
+    if order_intent_store is None or not hasattr(order_intent_store, "create_planned"):
+        return None
+    try:
+        return order_intent_store.create_planned(_official_intent_payload(order, side, order_type))
+    except DuplicateOrderIntentError:
+        return None
+
+
 async def execute_order_list(broker, ticker, orders_list, successful_orders_cache, is_market_active_now, today_str, is_capital_locked=False, order_category="1차 필수", runtime_safety_gate=None, shadow_intent_recorder=None, current_t_revision_provider=None, order_intent_store=None, t_event_store=None, fill_reconciliation_guard=None):
     msgs = ""
     all_success = True
@@ -337,6 +362,16 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
                 loop_fail_reason = f"[{ticker}] {order_category} 안전 게이트 차단: {code}"
                 msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({code})\n"
                 break
+
+            if official_order:
+                try:
+                    _ensure_planned_official_intent(order_intent_store, o, o_side, o_type)
+                except Exception as error:
+                    all_success = False
+                    err_msg = f"ORDER_INTENT_PLANNED_RECORD_FAILED {html.escape(str(error))}"
+                    loop_fail_reason = f"[{ticker}] {order_category}: {err_msg}"
+                    msgs += f"└ {order_category}: {o_desc} {o_qty}주 (${o_price}): ❌({err_msg})\n"
+                    break
 
             res = {}
 

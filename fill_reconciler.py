@@ -133,6 +133,13 @@ class ProcessedFillStore:
     def has_fill_key(self, fill_key: str) -> bool:
         return any(r.get("fill_key") == fill_key for r in self.list_records())
 
+    def latest_record_for_fill_key(self, fill_key: str) -> dict[str, Any] | None:
+        latest = None
+        for record in self.list_records():
+            if record.get("fill_key") == fill_key:
+                latest = record
+        return latest
+
     def _read_unlocked(self) -> list[dict[str, Any]]:
         if not self.ledger_path.exists():
             raise ProcessedFillLedgerCorruptError(f"processed fill ledger missing: {self.ledger_path}")
@@ -192,6 +199,7 @@ class FillReconciler:
         try:
             latest = _latest_by_intent(self.intent_store.list_intents(ticker))
             processed = self.processed_fill_store.list_records()
+            t_event_fill_keys = self._t_event_fill_keys(ticker)
         except (OrderIntentLedgerCorruptError, ProcessedFillLedgerCorruptError):
             return True
         if any(record.get("status") == "PARTIAL" for record in latest.values()):
@@ -204,6 +212,7 @@ class FillReconciler:
         return any(
             _text(record.get("ticker")).upper() == ticker
             and record.get("classification") in durable_halt_classifications
+            and record.get("fill_key") not in t_event_fill_keys
             for record in processed
         )
 
@@ -214,9 +223,18 @@ class FillReconciler:
         with _FileLock(self.tx_lock_path, fcntl.LOCK_EX):
             for fill in normalized:
                 fill_key = build_fill_key(fill)
-                if self.processed_fill_store.has_fill_key(fill_key):
+                existing_processed = self.processed_fill_store.latest_record_for_fill_key(fill_key)
+                t_event_fill_keys = self._t_event_fill_keys(ticker)
+                if existing_processed is not None and fill_key in t_event_fill_keys:
                     continue
                 intent = self._match_intent(ticker, fill)
+                if existing_processed is not None and intent is None:
+                    continue
+                if (
+                    existing_processed is not None
+                    and existing_processed.get("classification") in {"PARTIAL", "FINAL"}
+                ):
+                    continue
                 if intent is None:
                     self._record_processed(fill, None, "UNCLASSIFIED")
                     result["new_fill_count"] += 1
@@ -398,6 +416,23 @@ class FillReconciler:
                 qty += int(record["qty"])
                 amount += _decimal(record["amount"], "processed.amount")
         return qty, amount
+
+    def _t_event_fill_keys(self, ticker: str) -> set[str]:
+        events_path = Path(self.trade_state_store.events_path)
+        if not events_path.exists():
+            return set()
+        keys: set[str] = set()
+        with events_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if _text(event.get("ticker")).upper() == ticker and event.get("fill_key"):
+                    keys.add(str(event["fill_key"]))
+        return keys
 
     def _build_t_event(self, intent: Mapping[str, Any], fill: Mapping[str, Any], qty: int, amount: Decimal) -> dict[str, Any]:
         event_type = str(intent["event_type"])

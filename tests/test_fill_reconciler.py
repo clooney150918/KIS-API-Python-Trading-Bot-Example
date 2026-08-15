@@ -279,6 +279,82 @@ def test_full_fill_transitions_intent_and_appends_one_t_event_atomically(tmp_pat
     assert processed["matching_key"] == "acct-A|SOXL|AMEX|20260812|ODNO-1"
 
 
+def test_quarter_sell_fill_appends_t_event_with_seventy_five_percent_t(tmp_path):
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
+    intent = submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(order_no="ODNO-QSELL"),
+        event_type="QUARTER",
+        side="SELL",
+        qty=19,
+        price="142.36",
+    )
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+
+    result = reconciler.reconcile(
+        "SOXL",
+        [
+            kis_fill(
+                odno="ODNO-QSELL",
+                sll_buy_dvsn_cd="01",
+                ft_ccld_qty="19",
+                ft_ccld_unpr3="144.95",
+            )
+        ],
+    )
+
+    assert result["new_fill_count"] == 1
+    assert result["operator_halt"] is False
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    assert event["intent_id"] == intent["intent_id"]
+    assert event["event_type"] == "QUARTER"
+    assert event["filled_qty"] == 19
+    assert event["t_before"] == "18.32"
+    assert event["t_after"] == "13.7400"
+    processed = json.loads(processed_path.read_text(encoding="utf-8"))
+    assert processed["classification"] == "FINAL"
+
+
+def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_available(tmp_path):
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    fill = kis_fill(
+        odno="ODNO-QSELL",
+        sll_buy_dvsn_cd="01",
+        ft_ccld_qty="19",
+        ft_ccld_unpr3="144.95",
+    )
+
+    first = reconciler.reconcile("SOXL", [fill])
+    assert first["operator_halt"] is True
+    assert events_path.read_text(encoding="utf-8") == ""
+
+    intent = submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(order_no="ODNO-QSELL"),
+        event_type="QUARTER",
+        side="SELL",
+        qty=19,
+        price="142.36",
+    )
+    recovered = reconciler.reconcile("SOXL", [fill])
+
+    assert recovered["new_fill_count"] == 1
+    assert recovered["operator_halt"] is False
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    assert event["intent_id"] == intent["intent_id"]
+    assert event["event_type"] == "QUARTER"
+    assert event["filled_qty"] == 19
+    assert event["t_before"] == "18.32"
+    assert event["t_after"] == "13.7400"
+
+    duplicate = reconciler.reconcile("SOXL", [fill])
+    assert duplicate["new_fill_count"] == 0
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
+
+
 def test_partial_then_additional_fill_accumulates_but_updates_t_only_after_final(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-2"), event_type="FULL_BUY", qty=4, price="100.00")

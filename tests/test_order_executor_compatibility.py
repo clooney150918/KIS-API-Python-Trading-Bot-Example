@@ -907,6 +907,13 @@ class TrackingIntentStore:
     def __init__(self):
         self.transitions = []
         self.accepted = []
+        self.planned = []
+
+    def create_planned(self, intent):
+        self.planned.append(dict(intent))
+        intent_id = compute_intent_id(intent)
+        self.transitions.append((intent_id, "PLANNED"))
+        return {"intent_id": intent_id, "status": "PLANNED", **dict(intent)}
 
     def transition_status(self, intent_id, status):
         self.transitions.append((intent_id, status))
@@ -946,7 +953,19 @@ def test_order_acceptance_transitions_official_intent_to_submitted_without_fill_
 
     assert success is True
     assert failure == ""
-    assert intent_store.transitions == [(order["intent_id"], "SUBMITTED")]
+    assert intent_store.transitions == [(order["intent_id"], "PLANNED"), (order["intent_id"], "SUBMITTED")]
+    assert intent_store.planned == [{
+        "strategy": "LAOER_V4_SOXL_20",
+        "strategy_revision": 1,
+        "t_revision": 3,
+        "ticker": "SOXL",
+        "trade_date": "2026-08-11",
+        "event_type": "FULL_BUY",
+        "side": "BUY",
+        "order_type": "LIMIT",
+        "price": "100",
+        "qty": 1,
+    }]
     assert intent_store.accepted == [(order["intent_id"], {
         "account_fingerprint": SYNTHETIC_ACCOUNT_FINGERPRINT,
         "ticker": "SOXL",
@@ -985,7 +1004,7 @@ def test_order_acceptance_missing_order_number_fails_closed_before_submitted_or_
 
     assert success is False
     assert cache == set()
-    assert intent_store.transitions == []
+    assert intent_store.transitions == [(order["intent_id"], "PLANNED")]
     assert "ORDER_ACCEPTED_WITHOUT_ORDER_NO" in messages
     assert "ORDER_ACCEPTED_WITHOUT_ORDER_NO" in failure
 
