@@ -278,6 +278,8 @@ class ExecutionLedger:
     def _load_existing_records(self, content: bytes) -> list[dict[str, Any]]:
         if not content:
             return []
+        if not content.endswith(b"\n"):
+            raise LegacyLedgerError("execution ledger has an incomplete tail")
         records: list[dict[str, Any]] = []
         for line_no, raw_line in enumerate(content.decode("utf-8").splitlines(), start=1):
             if not raw_line.strip():
@@ -317,16 +319,12 @@ class ExecutionLedger:
                 if self.path.exists():
                     existing = self.path.read_bytes()
                 self._reject_duplicate(record, self._load_existing_records(existing))
-                temp = self.path.with_name(f".{self.path.name}.tmp.{os.getpid()}")
-                fd = os.open(str(temp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                fd = os.open(str(self.path), os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o644)
                 try:
-                    if existing:
-                        os.write(fd, existing)
                     os.write(fd, payload.encode("utf-8"))
                     os.fsync(fd)
                 finally:
                     os.close(fd)
-                os.replace(str(temp), str(self.path))
                 self._fsync_parent_dir()
             finally:
                 fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)

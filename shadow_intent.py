@@ -150,15 +150,11 @@ class ShadowIntentRecorder:
                 encoded = (
                     json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
                 ).encode("utf-8")
-                os.lseek(journal_fd, original_offset, os.SEEK_SET)
-                try:
-                    self._write_all(journal_fd, encoded)
-                    os.fsync(journal_fd)
-                    _fsync_directory(self.path.parent)
-                except BaseException:
-                    os.ftruncate(journal_fd, original_offset)
-                    os.fsync(journal_fd)
-                    raise
+                os.close(journal_fd)
+                journal_fd = os.open(self.path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+                self._write_all(journal_fd, encoded)
+                os.fsync(journal_fd)
+                _fsync_directory(self.path.parent)
                 return record
             finally:
                 if journal_fd is not None:

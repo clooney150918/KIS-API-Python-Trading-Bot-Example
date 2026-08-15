@@ -340,34 +340,13 @@ class OrderIntentStore:
     def _append_record_unlocked(self, record: Mapping[str, Any]) -> None:
         payload = json.dumps(dict(record), ensure_ascii=False, separators=(",", ":")) + "\n"
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = b""
-        if self.ledger_path.exists():
-            with self.ledger_path.open("rb") as src:
-                existing = src.read()
-        temp_path = self.ledger_path.with_name(f".{self.ledger_path.name}.tmp.{os.getpid()}")
-        fd = os.open(str(temp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        fd = os.open(str(self.ledger_path), os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o644)
         try:
-            if existing:
-                os.write(fd, existing)
             os.write(fd, payload.encode("utf-8"))
             os.fsync(fd)
-        except Exception:
-            os.close(fd)
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise
-        else:
-            os.close(fd)
-        try:
-            os.replace(str(temp_path), str(self.ledger_path))
-            self._fsync_dir(self.ledger_path.parent)
         finally:
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
+            os.close(fd)
+        self._fsync_dir(self.ledger_path.parent)
 
     def _exclusive_lock(self):
         return _FileLock(self.lock_path, fcntl.LOCK_EX)

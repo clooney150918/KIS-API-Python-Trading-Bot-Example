@@ -215,34 +215,13 @@ class TradeStateStore:
 
     def _atomic_append_line(self, payload: str) -> None:
         self.events_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = b""
-        if self.events_path.exists():
-            with self.events_path.open("rb") as src:
-                existing = src.read()
-        temp_path = self.events_path.with_name(f".{self.events_path.name}.tmp.{os.getpid()}")
-        fd = os.open(str(temp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        fd = os.open(str(self.events_path), os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o644)
         try:
-            if existing:
-                os.write(fd, existing)
             os.write(fd, payload.encode("utf-8"))
             os.fsync(fd)
-        except Exception:
-            os.close(fd)
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise
-        else:
-            os.close(fd)
-        try:
-            os.replace(str(temp_path), str(self.events_path))
-            self._fsync_dir(self.events_path.parent)
         finally:
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
+            os.close(fd)
+        self._fsync_dir(self.events_path.parent)
 
     @staticmethod
     def _fsync_dir(path: Path) -> None:

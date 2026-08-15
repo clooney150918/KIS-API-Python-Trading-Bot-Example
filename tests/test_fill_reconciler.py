@@ -1,5 +1,6 @@
 import json
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -189,7 +190,7 @@ def test_reconciler_only_matches_exact_accepted_order_key(tmp_path, accepted_ove
     assert events_path.read_text(encoding="utf-8") == ""
 
 
-def test_append_event_failure_leaves_final_fill_retryable_without_terminal_status_or_processed_fill(tmp_path, monkeypatch):
+def test_append_event_failure_appends_failure_record_and_leaves_fill_retryable(tmp_path, monkeypatch):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-FAIL"), event_type="FULL_BUY", qty=4)
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
@@ -209,31 +210,30 @@ def test_append_event_failure_leaves_final_fill_retryable_without_terminal_statu
 
     assert intent_store.list_intents("SOXL")[-1]["status"] == "SUBMITTED"
     assert events_path.read_text(encoding="utf-8") == ""
-    assert processed_path.read_text(encoding="utf-8") == ""
+    failed = json.loads(processed_path.read_text(encoding="utf-8"))
+    assert failed["classification"] == "FINALIZATION_FAILED"
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-FAIL")])
     assert result["operator_halt"] is False
     assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
     assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
-    assert len(processed_path.read_text(encoding="utf-8").splitlines()) == 1
+    assert [json.loads(line)["classification"] for line in processed_path.read_text(encoding="utf-8").splitlines()] == [
+        "FINALIZATION_FAILED",
+        "FINAL",
+    ]
 
 
-def test_rollback_does_not_clobber_unrelated_intent_appended_after_snapshot(tmp_path, monkeypatch):
+def test_finalization_failure_appends_failure_record_without_removing_existing_lines(tmp_path, monkeypatch):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-ROLLBACK"), event_type="FULL_BUY", qty=4)
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
-    real_snapshot = reconciler._snapshot_ledgers
-
-    def snapshot_then_unrelated_append():
-        snapshots = real_snapshot()
-        intent_store.create_planned(planned_intent(trade_date="2026-08-13", event_type="HALF_BUY"))
-        return snapshots
 
     def crash_after_t_event(intent_id, status):
         raise RuntimeError("simulated crash after snapshot while unrelated writer appended")
 
-    monkeypatch.setattr(reconciler, "_snapshot_ledgers", snapshot_then_unrelated_append)
     monkeypatch.setattr(intent_store, "transition_status", crash_after_t_event)
+    intent_store.create_planned(planned_intent(trade_date="2026-08-13", event_type="HALF_BUY"))
+    before_intents = Path(intent_store.ledger_path).read_text(encoding="utf-8").splitlines()
 
     with pytest.raises(FillReconciliationError):
         reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-ROLLBACK")])
@@ -241,8 +241,12 @@ def test_rollback_does_not_clobber_unrelated_intent_appended_after_snapshot(tmp_
     intents = intent_store.list_intents("SOXL")
     assert any(record["event_type"] == "HALF_BUY" and record["status"] == "PLANNED" for record in intents)
     assert any(record["event_type"] == "FULL_BUY" and record["status"] == "SUBMITTED" for record in intents)
-    assert events_path.read_text(encoding="utf-8") == ""
-    assert processed_path.read_text(encoding="utf-8") == ""
+    assert Path(intent_store.ledger_path).read_text(encoding="utf-8").splitlines() == before_intents
+    assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
+    assert [json.loads(line)["classification"] for line in processed_path.read_text(encoding="utf-8").splitlines()] == [
+        "FINAL",
+        "FINALIZATION_FAILED",
+    ]
 
 def test_order_acceptance_without_any_fill_keeps_submitted_and_does_not_append_t_event(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)

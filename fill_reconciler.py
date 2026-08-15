@@ -138,6 +138,10 @@ class ProcessedFillStore:
         new_classification = str(new_record.get("classification") or "")
         if existing_classification == new_classification:
             return False
+        if existing_classification == "FINAL" and new_classification == "FINALIZATION_FAILED":
+            return True
+        if existing_classification == "FINALIZATION_FAILED" and new_classification == "FINAL":
+            return True
         if existing_classification in {"UNCLASSIFIED", "UNCLASSIFIED_AFTER_FILLED"} and new_classification in {"PARTIAL", "FINAL"}:
             return True
         if existing_classification == "PARTIAL" and new_classification == "FINAL":
@@ -173,26 +177,12 @@ class ProcessedFillStore:
 
     def _atomic_append_line(self, payload: str) -> None:
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
-        existing = b""
-        if self.ledger_path.exists():
-            existing = self.ledger_path.read_bytes()
-        temp_path = self.ledger_path.with_name(f".{self.ledger_path.name}.tmp.{os.getpid()}")
-        fd = os.open(str(temp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        fd = os.open(str(self.ledger_path), os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o644)
         try:
-            if existing:
-                os.write(fd, existing)
             os.write(fd, payload.encode("utf-8"))
             os.fsync(fd)
-        except Exception:
+        finally:
             os.close(fd)
-            try:
-                temp_path.unlink()
-            except FileNotFoundError:
-                pass
-            raise
-        else:
-            os.close(fd)
-        os.replace(str(temp_path), str(self.ledger_path))
         _fsync_dir(self.ledger_path.parent)
 
     def _lock(self, mode: int):
@@ -206,7 +196,6 @@ class FillReconciler:
         self.processed_fill_store = processed_fill_store
         self.account_fingerprint = account_fingerprint
         self.tx_lock_path = processed_fill_store.ledger_path.with_suffix(".reconcile.lock")
-        self._rollback_context: dict[str, Any] | None = None
 
     def forbid_new_orders(self, ticker: str) -> bool:
         ticker = _text(ticker).upper()
@@ -222,6 +211,7 @@ class FillReconciler:
             "UNCLASSIFIED",
             "UNCLASSIFIED_AFTER_FILLED",
             "CANCELLED_PARTIAL_REMAINS",
+            "FINALIZATION_FAILED",
         }
         return any(
             _text(record.get("ticker")).upper() == ticker
@@ -239,9 +229,13 @@ class FillReconciler:
                 fill_key = build_fill_key(fill)
                 existing_processed = self.processed_fill_store.latest_record_for_fill_key(fill_key)
                 t_event_fill_keys = self._t_event_fill_keys(ticker)
-                if existing_processed is not None and fill_key in t_event_fill_keys:
-                    continue
                 intent = self._match_intent(ticker, fill)
+                if fill_key in t_event_fill_keys:
+                    if intent is not None and existing_processed is None:
+                        self._record_processed(fill, intent["intent_id"], "FINAL")
+                    if intent is not None and intent.get("status") in {"SUBMITTED", "PARTIAL"}:
+                        self.intent_store.transition_status(intent["intent_id"], "FILLED")
+                    continue
                 if existing_processed is not None and intent is None:
                     continue
                 if (
@@ -300,21 +294,13 @@ class FillReconciler:
                     continue
 
                 event = self._build_t_event(intent, fill, accumulated_qty, accumulated_amount)
-                snapshots = self._snapshot_ledgers()
-                self._rollback_context = {
-                    "intent_id": intent["intent_id"],
-                    "fill_key": event["fill_key"],
-                    "event_id": event["event_id"],
-                }
                 try:
                     self.trade_state_store.append_event(event)
                     self._record_processed(fill, intent["intent_id"], "FINAL")
                     self.intent_store.transition_status(intent["intent_id"], "FILLED")
                 except Exception as exc:
-                    self._restore_ledgers(snapshots)
+                    self._record_finalization_failed(fill, intent["intent_id"], exc)
                     raise FillReconciliationError("atomic fill finalization failed; retry required") from exc
-                finally:
-                    self._rollback_context = None
                 result["new_fill_count"] += 1
             result["partial_open"] = self.forbid_new_orders(ticker)
             if result["partial_open"]:
@@ -340,74 +326,6 @@ class FillReconciler:
                 continue
             candidates.append(intent)
         return candidates[0] if len(candidates) == 1 else None
-
-    def _snapshot_ledgers(self) -> dict[Path, bytes | None]:
-        paths = [
-            Path(self.intent_store.ledger_path),
-            Path(self.trade_state_store.events_path),
-            Path(self.processed_fill_store.ledger_path),
-        ]
-        return {path: path.read_bytes() if path.exists() else None for path in paths}
-
-    def _restore_ledgers(self, snapshots: Mapping[Path, bytes | None]) -> None:
-        for path, content in snapshots.items():
-            current = path.read_bytes() if path.exists() else None
-            rollback_content = self._rollback_content_for_path(path, content, current)
-            if rollback_content == current:
-                continue
-            content = rollback_content
-            if content is None:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-                continue
-            path.parent.mkdir(parents=True, exist_ok=True)
-            temp_path = path.with_name(f".{path.name}.rollback.{os.getpid()}")
-            fd = os.open(str(temp_path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
-            try:
-                os.write(fd, content)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            os.replace(str(temp_path), str(path))
-            _fsync_dir(path.parent)
-
-    def _rollback_content_for_path(self, path: Path, snapshot: bytes | None, current: bytes | None) -> bytes | None:
-        context = self._rollback_context or {}
-        if current is None:
-            return snapshot
-        snapshot_bytes = snapshot or b""
-        if not current.startswith(snapshot_bytes):
-            # Unknown concurrent rewrite: fail closed without clobbering newer content.
-            return current
-        suffix = current[len(snapshot_bytes):]
-        if not suffix:
-            return snapshot
-        preserved: list[bytes] = []
-        for raw_line in suffix.splitlines(keepends=True):
-            if not raw_line.strip():
-                preserved.append(raw_line)
-                continue
-            if not raw_line.endswith(b"\n"):
-                return current
-            try:
-                record = json.loads(raw_line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                return current
-            if self._is_transaction_record(path, record, context):
-                continue
-            preserved.append(raw_line)
-        return snapshot_bytes + b"".join(preserved)
-
-    def _is_transaction_record(self, path: Path, record: Mapping[str, Any], context: Mapping[str, Any]) -> bool:
-        if path == Path(self.trade_state_store.events_path):
-            return record.get("event_id") == context.get("event_id") or record.get("fill_key") == context.get("fill_key")
-        if path == Path(self.processed_fill_store.ledger_path):
-            return record.get("fill_key") == context.get("fill_key")
-        if path == Path(self.intent_store.ledger_path):
-            return record.get("intent_id") == context.get("intent_id") and record.get("status") == "FILLED"
-        return False
 
     def _fill_within_intent(self, intent: Mapping[str, Any], fill: Mapping[str, Any]) -> bool:
         if intent.get("side") != fill.get("side"):
@@ -490,6 +408,12 @@ class FillReconciler:
             "classification": classification,
             "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         })
+
+    def _record_finalization_failed(self, fill: Mapping[str, Any], intent_id: str, exc: Exception) -> None:
+        try:
+            self._record_processed(fill, intent_id, "FINALIZATION_FAILED")
+        except Exception:
+            pass
 
 
 def _latest_by_intent(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
