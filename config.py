@@ -2,10 +2,10 @@
 # FILE: config.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 3중 딥다이브 교차 검증 통과 완료.
-# 🚨 MODIFIED: [인스턴스 락 영구 소각] self._io_lock 및 self._locks_mutex를 시스템 전역에서 영구 파기.
+# 🚨 MODIFIED: [인스턴스 락 영구 정리] self._io_lock 및 self._locks_mutex를 시스템 전역에서 영구 파기.
 # 🚨 MODIFIED: [전역 파일 뮤텍스 100% 결속] GlobalThrottle.get_file_lock()을 이식하여 파일별 100% 독립적인 Mutex Lock 획득 보장 (Lost Update 원천 차단).
 # 🚨 MODIFIED: [리버스 자본 격리 아키텍처 팩트 결속] 다중 종목 예수금 충돌 대참사를 막기 위해 KIS 예수금 참조를 파기하고 오직 장부 체결 대금 기반의 apply_reverse_daily_settlement() 엔진 결속 완료.
-# 🚨 MODIFIED: [데드코드 소각] 무용지물이던 낡은 scale_dynamic_t() 영구 소각 완료.
+# 🚨 MODIFIED: [데드코드 정리] 무용지물이던 낡은 scale_dynamic_t() 영구 정리 완료.
 # ==========================================================
 
 import json
@@ -24,7 +24,7 @@ try:
 except ImportError:
     VERSION_HISTORY = ["V14.x [-] 버전 기록 파일(version_history.py)을 찾을 수 없습니다."]
 
-VWAP_PROFILES = {
+SLICE_PROFILES = {
     "SOXL": {
         "15:27": 0.010835, "15:28": 0.020940, "15:29": 0.031300, "15:30": 0.042240, "15:31": 0.053363,
         "15:32": 0.065060, "15:33": 0.077099, "15:34": 0.089780, "15:35": 0.102895, "15:36": 0.116806,
@@ -68,17 +68,17 @@ class ConfigManager:
             "PROCESSED_FILLS": "data/processed_fills_SOXL.jsonl",
             "VOLATILITY_MULTIPLIER_CFG": "data/volatility_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
-            "AVWAP_HYBRID_CFG": "data/avwap_hybrid.json",
-            "AVWAP_SORTIE_CFG": "data/avwap_sortie.json",
-            "MANUAL_VWAP_CFG": "data/manual_vwap_config.json",
+            "AUX_HYBRID_CFG": "data/aux_hybrid.json",
+            "AUX_SORTIE_CFG": "data/aux_sortie.json",
+            "MANUAL_SLICE_CFG": "data/manual_slice_config.json",
             "FEE_CFG": "data/fee_config.json", 
             "MASTER_SWITCH": "data/master_switch.json",
             "VOLATILITY_BUY_LOCKED": "data/volatility_buy_locked.json",
             "VOLATILITY_SELL_LOCKED": "data/volatility_sell_locked.json",
-            "AVWAP_GAP_THRESH_CFG": "data/avwap_gap_thresh.json",
-            "AVWAP_ANCHOR_CFG": "data/avwap_anchor.json",
-            "AVWAP_BUDGET_CFG": "data/avwap_budget.json",         
-            "AVWAP_OVERNIGHT_CFG": "data/avwap_overnight.json"      
+            "AUX_GAP_THRESH_CFG": "data/aux_gap_thresh.json",
+            "AUX_ANCHOR_CFG": "data/aux_anchor.json",
+            "AUX_BUDGET_CFG": "data/aux_budget.json",         
+            "AUX_OVERNIGHT_CFG": "data/aux_overnight.json"      
         }
         
         self.DEFAULT_SEED = {"SOXL": 6720.0, "TQQQ": 6720.0}
@@ -141,11 +141,11 @@ class ConfigManager:
         except Exception:
             return 0.0
 
-    def get_vwap_profile(self, ticker: str) -> dict:
+    def get_slice_profile(self, ticker: str) -> dict:
         target_ticker = str(ticker).upper() if ticker else ""
-        if target_ticker not in VWAP_PROFILES:
+        if target_ticker not in SLICE_PROFILES:
             return {}
-        return VWAP_PROFILES[target_ticker]
+        return SLICE_PROFILES[target_ticker]
 
     def _atomic_update_locks(self, update_fn):
         lock_file_path = self.FILES["LOCKS"]
@@ -244,15 +244,15 @@ class ConfigManager:
                 try: os.remove(temp_path)
                 except OSError: pass
 
-    def get_avwap_gap_threshold(self, ticker):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_GAP_THRESH_CFG"]):
-            return self._safe_float(self._load_json(self.FILES["AVWAP_GAP_THRESH_CFG"], {}).get(ticker, -2.0))
+    def get_aux_gap_threshold(self, ticker):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_GAP_THRESH_CFG"]):
+            return self._safe_float(self._load_json(self.FILES["AUX_GAP_THRESH_CFG"], {}).get(ticker, -2.0))
 
-    def set_avwap_gap_threshold(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_GAP_THRESH_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_GAP_THRESH_CFG"], {})
+    def set_aux_gap_threshold(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_GAP_THRESH_CFG"]):
+            d = self._load_json(self.FILES["AUX_GAP_THRESH_CFG"], {})
             d[ticker] = self._safe_float(v)
-            self._save_json(self.FILES["AVWAP_GAP_THRESH_CFG"], d)
+            self._save_json(self.FILES["AUX_GAP_THRESH_CFG"], d)
 
     def get_last_split_date(self, ticker):
         with GlobalThrottle.get_file_lock(self.FILES["SPLIT_HISTORY"]):
@@ -915,34 +915,34 @@ class ConfigManager:
              self._save_json(self.FILES["UPWARD_VOLATILITY"], d)
 
     def get_aux_hybrid_mode(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
-            return bool(self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {}).get(ticker, False))
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_HYBRID_CFG"]):
+            return bool(self._load_json(self.FILES["AUX_HYBRID_CFG"], {}).get(ticker, False))
     
     def set_aux_hybrid_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_HYBRID_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_HYBRID_CFG"], {})
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_HYBRID_CFG"]):
+            d = self._load_json(self.FILES["AUX_HYBRID_CFG"], {})
             d[ticker] = bool(v)
-            self._save_json(self.FILES["AVWAP_HYBRID_CFG"], d)
+            self._save_json(self.FILES["AUX_HYBRID_CFG"], d)
 
-    def get_avwap_sortie_mode(self, ticker):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_SORTIE_CFG"]):
-            return str(self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {}).get(ticker, "SINGLE"))
+    def get_aux_sortie_mode(self, ticker):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_SORTIE_CFG"]):
+            return str(self._load_json(self.FILES["AUX_SORTIE_CFG"], {}).get(ticker, "SINGLE"))
         
-    def set_avwap_sortie_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_SORTIE_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_SORTIE_CFG"], {})
+    def set_aux_sortie_mode(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_SORTIE_CFG"]):
+            d = self._load_json(self.FILES["AUX_SORTIE_CFG"], {})
             d[ticker] = str(v)
-            self._save_json(self.FILES["AVWAP_SORTIE_CFG"], d)
+            self._save_json(self.FILES["AUX_SORTIE_CFG"], d)
 
     def get_manual_slice_mode(self, ticker): 
-        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
-            return bool(self._load_json(self.FILES["MANUAL_VWAP_CFG"], {}).get(ticker, False))
+        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_SLICE_CFG"]):
+            return bool(self._load_json(self.FILES["MANUAL_SLICE_CFG"], {}).get(ticker, False))
         
     def set_manual_slice_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_VWAP_CFG"]):
-            d = self._load_json(self.FILES["MANUAL_VWAP_CFG"], {})
+        with GlobalThrottle.get_file_lock(self.FILES["MANUAL_SLICE_CFG"]):
+            d = self._load_json(self.FILES["MANUAL_SLICE_CFG"], {})
             d[ticker] = bool(v)
-            self._save_json(self.FILES["MANUAL_VWAP_CFG"], d)
+            self._save_json(self.FILES["MANUAL_SLICE_CFG"], d)
 
     def get_master_switch(self, ticker): 
         with GlobalThrottle.get_file_lock(self.FILES["MASTER_SWITCH"]):
@@ -1004,32 +1004,32 @@ class ConfigManager:
         with GlobalThrottle.get_file_lock(self.FILES["CHAT_ID"]):
             self._save_file(self.FILES["CHAT_ID"], v)
 
-    def get_avwap_anchor_date(self, ticker):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_ANCHOR_CFG"]):
-            return str(self._load_json(self.FILES["AVWAP_ANCHOR_CFG"], {}).get(ticker, "AUTO"))
+    def get_aux_anchor_date(self, ticker):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_ANCHOR_CFG"]):
+            return str(self._load_json(self.FILES["AUX_ANCHOR_CFG"], {}).get(ticker, "AUTO"))
 
-    def set_avwap_anchor_date(self, ticker, date_str):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_ANCHOR_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_ANCHOR_CFG"], {})
+    def set_aux_anchor_date(self, ticker, date_str):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_ANCHOR_CFG"]):
+            d = self._load_json(self.FILES["AUX_ANCHOR_CFG"], {})
             d[ticker] = str(date_str)
-            self._save_json(self.FILES["AVWAP_ANCHOR_CFG"], d)
+            self._save_json(self.FILES["AUX_ANCHOR_CFG"], d)
             
-    def get_avwap_budget(self, ticker):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_BUDGET_CFG"]):
-            return self._safe_float(self._load_json(self.FILES["AVWAP_BUDGET_CFG"], {}).get(ticker, 10000.0))
+    def get_aux_budget(self, ticker):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_BUDGET_CFG"]):
+            return self._safe_float(self._load_json(self.FILES["AUX_BUDGET_CFG"], {}).get(ticker, 10000.0))
 
-    def set_avwap_budget(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_BUDGET_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_BUDGET_CFG"], {})
+    def set_aux_budget(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_BUDGET_CFG"]):
+            d = self._load_json(self.FILES["AUX_BUDGET_CFG"], {})
             d[ticker] = self._safe_float(v)
-            self._save_json(self.FILES["AVWAP_BUDGET_CFG"], d)
+            self._save_json(self.FILES["AUX_BUDGET_CFG"], d)
             
-    def get_avwap_overnight_mode(self, ticker):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_OVERNIGHT_CFG"]):
-            return bool(self._load_json(self.FILES["AVWAP_OVERNIGHT_CFG"], {}).get(ticker, False))
+    def get_aux_overnight_mode(self, ticker):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_OVERNIGHT_CFG"]):
+            return bool(self._load_json(self.FILES["AUX_OVERNIGHT_CFG"], {}).get(ticker, False))
         
-    def set_avwap_overnight_mode(self, ticker, v):
-        with GlobalThrottle.get_file_lock(self.FILES["AVWAP_OVERNIGHT_CFG"]):
-            d = self._load_json(self.FILES["AVWAP_OVERNIGHT_CFG"], {})
+    def set_aux_overnight_mode(self, ticker, v):
+        with GlobalThrottle.get_file_lock(self.FILES["AUX_OVERNIGHT_CFG"]):
+            d = self._load_json(self.FILES["AUX_OVERNIGHT_CFG"], {})
             d[ticker] = bool(v)
-            self._save_json(self.FILES["AVWAP_OVERNIGHT_CFG"], d)
+            self._save_json(self.FILES["AUX_OVERNIGHT_CFG"], d)

@@ -6,7 +6,7 @@
 # 🚨 2. JSON 파일 병렬 I/O 충돌 방어용 File Mutex (경쟁 조건 차단)
 # 🚨 MODIFIED: [데드락 원천 차단] 동일 스레드 내 중복 락 획득 시 발생하는 교착 상태(Deadlock)를 방어하기 위해 threading.Lock()을 threading.RLock()으로 전면 교체 완료.
 # 🚨 MODIFIED: [Lost Update 궁극 방어] 파일 경로 정규화 패러독스 및 defaultdict 락 발급 경합 조건 완벽 수술 완료.
-# 🚨 MODIFIED: [ThreadPool 고갈 패러독스 궁극 수술] 락(Lock)을 쥔 상태에서 time.sleep()을 실행하여 백그라운드 스레드풀 전체를 마비시키던 맹독성 병목을 원천 소각하고, '미래 슬롯 예약(Non-blocking Token Bucket)' 방식으로 재설계하여 100% 병렬 비동기 대기를 락온 완료.
+# 🚨 MODIFIED: [ThreadPool 고갈 패러독스 궁극 수술] 락(Lock)을 쥔 상태에서 time.sleep()을 실행하여 백그라운드 스레드풀 전체를 마비시키던 맹독성 병목을 원천 정리하고, '미래 슬롯 예약(Non-blocking Token Bucket)' 방식으로 재설계하여 100% 병렬 비동기 대기를 락온 완료.
 # ==========================================================
 import os
 import time
@@ -24,7 +24,7 @@ class GlobalThrottle:
     _min_api_interval = 0.055 
     
     # 🚨 파일 I/O 충돌 방지용 경로별 독립 Lock
-    # 🚨 MODIFIED: [딕셔너리 경합 원천 차단] defaultdict 소각 및 순수 dict 락온
+    # 🚨 MODIFIED: [딕셔너리 경합 원천 차단] defaultdict 정리 및 순수 dict 락온
     _file_locks = {}
 
     def __new__(cls):

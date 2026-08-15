@@ -1,10 +1,10 @@
 # ==========================================================
 # FILE: scheduler_core.py
 # ==========================================================
-# 🚨 MODIFIED: [제1헌법 철저 준수] is_market_open 내부 달력 API(mcal) 스캔 전 파편화된 time.sleep(0.06)을 영구 소각하고, GlobalThrottle.wait_api_sync() 중앙 통제소 락온 완료.
+# 🚨 MODIFIED: [제1헌법 철저 준수] is_market_open 내부 달력 API(mcal) 스캔 전 파편화된 time.sleep(0.06)을 영구 정리하고, GlobalThrottle.wait_api_sync() 중앙 통제소 락온 완료.
 # 🚨 MODIFIED: [Lost Update 궁극 방어] scheduled_auto_sync 내부 _check_and_set_lock에서 sync_lock.json 생성 및 갱신 시 GlobalThrottle.get_file_lock() 100% 팩트 래핑 완료.
-# 🚨 MODIFIED: [본진 졸업 마비 패러독스 수술] 암살자가 오버나이트를 수행하여 계좌에 물량이 남아있더라도, `process_realtime_graduation`에서 KIS 잔고에서 암살자 장부(`AssassinLedger`) 수량을 차감하여 본진 물량만을 정확히 추출, 0주 새출발 졸업망이 정상 가동되도록 팩트 락온. 단, 음수가 발생할 경우 큐 장부를 교차 검증하여 조기 졸업을 안전하게 차단(Bypass).
-# 🚨 NEW: [Thundering Herd 영구 소각] 스케줄 동시 기상 시 달력 API(mcal) 무한 호출로 인한 60초 병목(Skipped) 붕괴를 원천 차단하기 위해 `_MCAL_CACHE` 전역 인메모리 캐싱 파이프라인 100% 결속.
+# 🚨 MODIFIED: [본진 졸업 마비 패러독스 수술] 보조전략가 오버나이트를 수행하여 계좌에 물량이 남아있더라도, `process_realtime_graduation`에서 KIS 잔고에서 보조전략 장부(`AssassinLedger`) 수량을 차감하여 본진 물량만을 정확히 추출, 0주 새출발 졸업망이 정상 가동되도록 팩트 락온. 단, 음수가 발생할 경우 큐 장부를 교차 검증하여 조기 졸업을 안전하게 차단(Bypass).
+# 🚨 NEW: [Thundering Herd 영구 정리] 스케줄 동시 기상 시 달력 API(mcal) 무한 호출로 인한 60초 병목(Skipped) 붕괴를 원천 차단하기 위해 `_MCAL_CACHE` 전역 인메모리 캐싱 파이프라인 100% 결속.
 # ==========================================================
 import logging
 import datetime
@@ -229,7 +229,7 @@ def perform_self_cleaning():
 async def scheduled_self_cleaning(context):
     try:
         await asyncio.wait_for(asyncio.to_thread(perform_self_cleaning), timeout=60.0)
-        logging.info("🧹 [시스템 자정 작업 완료] 7일 초과 낡은 로그/스냅샷 및 임시 파일 GC(소각) 완료")
+        logging.info("🧹 [시스템 자정 작업 완료] 7일 초과 낡은 로그/스냅샷 및 임시 파일 GC(정리) 완료")
     except Exception as e:
         logging.error(f"🚨 [Self-Cleaning] 가비지 컬렉션(GC) 에러: {e}")
 
@@ -432,7 +432,7 @@ async def process_realtime_graduation(ticker, cfg, broker, legacy_lot_book, chat
             a_data = await async_retry(a_ledger.get_ledger, ticker, default=[])
             a_qty = sum(int(_safe_float(l.get('qty'))) for l in (a_data or []))
         except Exception as e:
-            logging.error(f"🚨 [{ticker}] 조기 졸업 스캔 중 암살자 장부 로드 에러: {e}")
+            logging.error(f"🚨 [{ticker}] 조기 졸업 스캔 중 보조전략 장부 로드 에러: {e}")
             
         main_qty = max(0, kis_qty - a_qty)
         
@@ -555,8 +555,8 @@ _EVENT_TYPE_LABELS = {
     "FULL_BUY": "별값매수",
     "HALF": "분할매수",
     "HALF_BUY": "분할매수",
-    "BONUS": "줍줍매수",
-    "BONUS_BUY": "줍줍매수",
+    "BONUS": "보너스매수",
+    "BONUS_BUY": "보너스매수",
     "QUARTER": "쿼터매도",
     "QUARTER_SELL": "쿼터매도",
     "TARGET_FULL": "목표익절",

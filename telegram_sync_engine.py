@@ -3,11 +3,11 @@
 # ==========================================================
 # 🚨 MODIFIED: [단일 지층 팽창 자가 치유 방해 맹독성 Bypass 궁극 수술] V4.0 큐 장부 동기화 및 메인 장부 교정 로직이 `if target_execs:` (당일 체결 내역 존재 시) 블록 내부에 갇혀 있어, 당일 매매가 없는 날에는 팽창된 지층이 절대 쪼개지지 않던 치명적 버그를 원천 차단. 해당 로직들을 `if` 블록 외부로 들여쓰기 전진 배치(Un-indent)하여 365일 100% 무결성 동기화가 강제되도록 팩트 락온.
 # 🚨 MODIFIED: [제1헌법 철저 준수] _get_last_trade_date 내부 달력 API(mcal) 스캔 시 GlobalThrottle.wait_api_sync()를 강제 주입하여 썬더링 허드 완벽 차단.
-# 🚨 MODIFIED: [Event Loop 마비 궁극 수술] get_exact_prev_close 내부에 잔존하던 맹독성 time.sleep(0.06)을 영구 소각하고 GlobalThrottle.wait_api_sync() 중앙 통제 락온 완료.
-# 🚨 MODIFIED: [자전거래/암살자 찌꺼기 맹독성 유입 궁극 방어] 16:05 EST 정산 시 KIS 실원장(target_execs)의 모든 당일 체결 내역을 맹목적으로 무한 편입하던 로직 전면 소각.
+# 🚨 MODIFIED: [Event Loop 마비 궁극 수술] get_exact_prev_close 내부에 잔존하던 맹독성 time.sleep(0.06)을 영구 정리하고 GlobalThrottle.wait_api_sync() 중앙 통제 락온 완료.
+# 🚨 MODIFIED: [자전거래/보조전략 찌꺼기 맹독성 유입 궁극 방어] 16:05 EST 정산 시 KIS 실원장(target_execs)의 모든 당일 체결 내역을 맹목적으로 무한 편입하던 로직 전면 정리.
 # 🚨 MODIFIED: [통신 장애 핀셋 추적망 결속] process_auto_sync 내부에서 broker API 호출 실패 시 정확한 실패 구간(Endpoint)과 사유를 문자열로 반환하여 상위 라우터가 진단할 수 있도록 팩트 락온.
-# 🚨 NEW: [스냅샷 디커플링 해소 (Nuke & Regenerate) 아키텍처 팩트 결속] 잔고 오차 교정, 수동 조작, 큐 병합 등 장부에 단 1주라도 변동이 감지되면 `snapshot_needs_regen` 트리거를 발동시켜, 16:00 EST 타임락을 강제 개방(Override)하고 오염된 낡은 스냅샷(daily_snapshot)을 물리적으로 영구 소각(Nuke)한 뒤 최신 수량 기반의 팩트 지시서로 즉각 재생성(Regenerate)하도록 100% 시스템 교정 완료.
-# 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 16:05 EST 정산 시 한투(KIS)에서 수신한 체결 원장 데이터(`execs_raw`) 중, 암살자 캐시에 기록된 `history_odnos`에 속하는 주문은 100% 투명 인간(Ghosting) 취급하여 도려냄으로써, 암살자의 타점 오염 및 유령 졸업(Ghost Graduation)을 원천 봉쇄.
+# 🚨 NEW: [스냅샷 디커플링 해소 (Reset & Regenerate) 아키텍처 팩트 결속] 잔고 오차 교정, 수동 조작, 큐 병합 등 장부에 단 1주라도 변동이 감지되면 `snapshot_needs_regen` 트리거를 발동시켜, 16:00 EST 타임락을 강제 개방(Override)하고 오염된 낡은 스냅샷(daily_snapshot)을 물리적으로 영구 정리(Reset)한 뒤 최신 수량 기반의 팩트 지시서로 즉각 재생성(Regenerate)하도록 100% 시스템 교정 완료.
+# 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 16:05 EST 정산 시 한투(KIS)에서 수신한 체결 원장 데이터(`execs_raw`) 중, 보조전략 캐시에 기록된 `history_odnos`에 속하는 주문은 100% 투명 인간(Ghosting) 취급하여 도려냄으로써, 보조전략의 타점 오염 및 유령 졸업(Ghost Graduation)을 원천 봉쇄.
 # ==========================================================
 
 import logging
@@ -145,12 +145,12 @@ class TelegramSyncEngine:
                         a_ledger = await asyncio.wait_for(asyncio.to_thread(AssassinLedger), timeout=5.0)
                         await self._retry_api(a_ledger.apply_stock_split, ticker, split_ratio, timeout=10.0)
                     except Exception as e:
-                        logging.error(f"🚨 암살자 장부 액면분할 팩트 적용 실패: {e}")
+                        logging.error(f"🚨 보조전략 장부 액면분할 팩트 적용 실패: {e}")
                     
                     await self._retry_api(self.cfg.set_last_split_date, ticker, split_date, timeout=5.0)
                     
                     split_type = "액면분할" if split_ratio > 1.0 else "액면병합(역분할)"
-                    await self._safe_send(context, chat_id, f"✂️ <b>[{html.escape(str(ticker))}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {html.escape(str(split_date))})\n▫️ 봇이 기존 V14 장부, V4.0 큐 장부, 암살자 장부, AVWAP 상태 캐시의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
+                    await self._safe_send(context, chat_id, f"✂️ <b>[{html.escape(str(ticker))}] 야후 파이낸스 {split_type} 자동 감지!</b>\n▫️ 감지된 비율: <b>{split_ratio}배</b> (발생일: {html.escape(str(split_date))})\n▫️ 봇이 기존 V14 장부, V4.0 큐 장부, 보조전략 장부, AUX 상태 캐시의 수량과 평단가를 100% 무인 자동 소급 조정 완료했습니다.", parse_mode='HTML')
              
                 def _get_last_trade_date(target_est):
                     GlobalThrottle.wait_api_sync()
@@ -194,19 +194,19 @@ class TelegramSyncEngine:
                     a_data_check = await self._retry_api(a_ledger.get_ledger, ticker, default=[])
                     a_qty_for_check = sum(int(self._safe_float(item.get("qty"))) for item in (a_data_check or []))
                 except Exception as e:
-                    logging.error(f"🚨 암살자 장부 수량 스캔 에러: {e}")
+                    logging.error(f"🚨 보조전략 장부 수량 스캔 에러: {e}")
                 
                 max_check_qty = max(max_check_qty, a_qty_for_check)
 
-                # 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 암살자 캐시에 기록된 주문번호 추출 (Ghosting 필터 용도)
-                aslice_state_file = f"data/aux_trade_state_{ticker}.json"
+                # 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 보조전략 캐시에 기록된 주문번호 추출 (Ghosting 필터 용도)
+                aux_state_file = f"data/aux_trade_state_{ticker}.json"
                 history_odnos = []
-                with GlobalThrottle.get_file_lock(aslice_state_file):
+                with GlobalThrottle.get_file_lock(aux_state_file):
                     try:
-                        with open(aslice_state_file, 'r', encoding='utf-8') as f:
-                            avwap_data = json.load(f)
-                            if isinstance(avwap_data, dict) and avwap_data.get('date') == target_ledger_str:
-                                history_odnos = avwap_data.get('history_odnos', [])
+                        with open(aux_state_file, 'r', encoding='utf-8') as f:
+                            aux_data = json.load(f)
+                            if isinstance(aux_data, dict) and aux_data.get('date') == target_ledger_str:
+                                history_odnos = aux_data.get('history_odnos', [])
                     except Exception:
                         pass
                         
@@ -219,7 +219,7 @@ class TelegramSyncEngine:
                     for ex in execs_raw:
                         if not isinstance(ex, dict): continue
                         
-                        # 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 암살자 찌꺼기(Ghost) 100% 소각 배제
+                        # 🚨 MODIFIED: [체결 원장 디커플링 붕괴 수술] 보조전략 찌꺼기(Ghost) 100% 정리 배제
                         ex_odno = str(ex.get('odno', ''))
                         if ex_odno and ex_odno in history_odnos:
                             continue
@@ -309,7 +309,7 @@ class TelegramSyncEngine:
                 price_diff = abs(actual_avg - avg_price)
 
                 # 🚨 MODIFIED: [신규 원장 append-only] 신규 원장은 append-only라 재구성/보정/졸업이 원천 불필요.
-                # legacy 재구성·보정·졸업 차단(blocked) 분기를 전면 소각하고, diff/price_diff는 관찰(로그)만 남겨
+                # legacy 재구성·보정·졸업 차단(blocked) 분기를 전면 정리하고, diff/price_diff는 관찰(로그)만 남겨
                 # 정상 경로(신규 원장 append)로 그대로 흐르게 한다. (KIS 확정 체결은 위에서 이미 append 완료)
                 if diff != 0:
                     logging.warning(f"⚠️ [{ticker}] KIS/신규원장 수량 차이 {diff}주 (KIS {actual_qty} vs 원장 {ledger_qty}) — append-only 원장이므로 재구성 없이 관찰만 합니다.")
@@ -320,18 +320,18 @@ class TelegramSyncEngine:
 
                 # 🚨 유령 잔고 방어 (fail-closed) 유지: KIS 0주 + 당일 매도체결 0건 + 신규원장 0주 초과 시 강제 차단
                 if actual_qty == 0 and sold_today_v14 == 0 and ledger_qty > 0:
-                    await self._safe_send(context, chat_id, f"🚨 <b>[{html.escape(str(ticker))} 유령 잔고 방어 가동]</b>\nKIS 실잔고가 0주로 조회되었으나, 당일 매도 체결 내역이 0건입니다. 통신 오류(Ghost Balance)일 가능성이 매우 높아 장부 강제 소각(자동 졸업)을 차단합니다.\n▫️ HTS 등을 통해 수동으로 100% 전량 매도한 상태라면 <code>/reset</code> 명령어를 사용하여 봇을 초기화하십시오.", parse_mode='HTML')
+                    await self._safe_send(context, chat_id, f"🚨 <b>[{html.escape(str(ticker))} 유령 잔고 방어 가동]</b>\nKIS 실잔고가 0주로 조회되었으나, 당일 매도 체결 내역이 0건입니다. 통신 오류(Ghost Balance)일 가능성이 매우 높아 장부 강제 정리(자동 졸업)을 차단합니다.\n▫️ HTS 등을 통해 수동으로 100% 전량 매도한 상태라면 <code>/reset</code> 명령어를 사용하여 봇을 초기화하십시오.", parse_mode='HTML')
                     return "유령 잔고(Ghost Balance) 강제 차단 - 매도 체결 없이 KIS 잔고 0주 리턴됨"
                 if actual_qty == 0 and sold_today_v14 > 0:
                     logging.info(f"ℹ️ [{ticker}] KIS 0주 + 당일 매도 체결 {sold_today_v14}건 확인 — append-only 원장이 이미 반영하므로 정상 흐름.")
 
                 is_after_market = now_est.time() >= datetime.time(16, 0)
                 
-                # 🚨 MODIFIED: [스냅샷 디커플링 해소 수술] 장부나 큐에 단 1주라도 변동이 생기면 낡은 스냅샷 소각 및 즉시 팩트 재생성 가동
+                # 🚨 MODIFIED: [스냅샷 디커플링 해소 수술] 장부나 큐에 단 1주라도 변동이 생기면 낡은 스냅샷 정리 및 즉시 팩트 재생성 가동
                 if is_after_market or snapshot_needs_regen:
                     if snapshot_needs_regen:
-                        logging.info(f"🔄 [{ticker}] 장부/큐 오차 교정 감지! 낡은 스냅샷(Snapshot) 및 캐시를 전면 소각(Nuke)하고 재생성(Regenerate)합니다.")
-                        def _nuke_old_files():
+                        logging.info(f"🔄 [{ticker}] 장부/큐 오차 교정 감지! 낡은 스냅샷(Snapshot) 및 캐시를 전면 정리(Reset)하고 재생성(Regenerate)합니다.")
+                        def _reset_old_files():
                             for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
@@ -340,7 +340,7 @@ class TelegramSyncEngine:
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
                                     except OSError: pass
-                        await asyncio.wait_for(asyncio.to_thread(_nuke_old_files), timeout=10.0)
+                        await asyncio.wait_for(asyncio.to_thread(_reset_old_files), timeout=10.0)
 
                     try:
                         curr_p_val = await self._retry_api(self.broker.get_current_price, ticker, timeout=10.0)
@@ -413,7 +413,7 @@ class TelegramSyncEngine:
                         if is_after_market:
                             logging.info(f"📸 [{ticker}] 16:05 EST 확정 정산 완료 후 명일(D+1) 대비 스냅샷 박제(Forward-Lock) 성공.")
                         else:
-                            logging.info(f"📸 [{ticker}] 장부 교정 감지! 낡은 스냅샷 소각 및 실시간 팩트 지시서 재생성(Regenerate) 성공.")
+                            logging.info(f"📸 [{ticker}] 장부 교정 감지! 낡은 스냅샷 정리 및 실시간 팩트 지시서 재생성(Regenerate) 성공.")
                     except Exception as e:
                         logging.error(f"🚨 [{ticker}] 스냅샷 팩트 박제 실패: {e}")
 

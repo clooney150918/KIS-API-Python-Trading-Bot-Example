@@ -2,13 +2,13 @@
 # FILE: callback_config_handler.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 46대 엣지 케이스 완벽 결속 교차 검증 완료
-# 🚨 MODIFIED: [암살자 부활 패러독스 궁극 방어] 수동 삼위일체 소각(/reset) 시 암살자의 상태 파일(aux_trade_state)을 물리적 삭제하는 맹독성 로직을 영구 소각. 대신 시간대별 동적 `shutdown` 주입을 통해 프리장에만 락을 걸고 정규장/애프터장은 스케줄러가 자율 판별하도록 100% 원천 봉쇄 및 팩트 교정 완료.
+# 🚨 MODIFIED: [보조전략 부활 패러독스 궁극 방어] 수동 통합상태 정리(/reset) 시 보조전략의 상태 파일(aux_trade_state)을 물리적 삭제하는 맹독성 로직을 영구 정리. 대신 시간대별 동적 `shutdown` 주입을 통해 프리장에만 락을 걸고 정규장/애프터장은 스케줄러가 자율 판별하도록 100% 원천 봉쇄 및 팩트 교정 완료.
 # 🚨 MODIFIED: [LOC 전용 UI 정리] 삭제된 보조 엔진 설정/초기화 콜백 표면 제거 완료.
 # 🚨 MODIFIED: [Case 38 UI 렌더링 높이 붕괴 패러독스 차단] 버튼 클릭 시 1줄짜리 텍스트("업데이트 중...")로 중간 갱신하여 기존 화면을 증발시키는 행위를 전면 금지. 로딩은 query.answer() 팝업으로 대체하고 최종 결과로 단 1회 제자리 갱신(In-place Edit) 락온.
-# 🚨 MODIFIED: [Case 08, 16 헌법 사수] os.path.exists 소각, EAFP 디렉토리 생성 및 원자적 쓰기(Atomic Write) 강제 주입 완료.
+# 🚨 MODIFIED: [Case 08, 16 헌법 사수] os.path.exists 정리, EAFP 디렉토리 생성 및 원자적 쓰기(Atomic Write) 강제 주입 완료.
 # 🚨 MODIFIED: [제1헌법 철저 준수] 파일 I/O 연산 및 텔레그램 통신 전역에 `asyncio.wait_for` 타임아웃 족쇄 100% 강제 래핑 완료 (Deadlock 원천 차단).
 # 🚨 MODIFIED: [Event Loop 교착 수술] AssassinLedger 및 SystemUpdater 인스턴스화 시 발생하는 __init__ 내부의 동기 I/O(파일 체크/생성) 블로킹을 막기 위해 100% 백그라운드 스레드(to_thread) 샌드박스로 래핑 락온.
-# 🚨 MODIFIED: [스냅샷 유령화 붕괴 궁극 수술] RESET:LOCK 내부 `_clear_stale_snapshot_lock()` 실행 시 V4.0 뿐만 아니라 V14, V14VWAP 스냅샷 파일까지 순회하며 100% 영구 소각하도록 팩트 교정 완료.
+# 🚨 MODIFIED: [스냅샷 유령화 붕괴 궁극 수술] RESET:LOCK 내부 `_clear_stale_snapshot_lock()` 실행 시 V4.0 뿐만 아니라 V14, V14SLICE 스냅샷 파일까지 순회하며 100% 영구 정리하도록 팩트 교정 완료.
 # ==========================================================
 import logging
 import datetime
@@ -160,7 +160,7 @@ class CallbackConfigHandler:
                     await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.clear_lots, ticker), timeout=10.0)
                     await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.sync_with_account, ticker, 0, 0.0), timeout=10.0)
 
-                def _nuke_assassin_data():
+                def _reset_assassin_data():
                     try:
                         from assassin_ledger import AssassinLedger
                         a_ledger = AssassinLedger()
@@ -216,7 +216,7 @@ class CallbackConfigHandler:
                         except Exception as e:
                             logging.error(f"🚨 [{ticker}] 보조 상태 셧다운 주입 에러: {e}")
 
-                await asyncio.wait_for(asyncio.to_thread(_nuke_assassin_data), timeout=10.0)
+                await asyncio.wait_for(asyncio.to_thread(_reset_assassin_data), timeout=10.0)
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.reset_lock_for_ticker, ticker), timeout=10.0)
 
                 prev_c = 0.0

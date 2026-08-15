@@ -2,7 +2,7 @@
 # FILE: kis_order_engine.py
 # ==========================================================
 # 🚨 MODIFIED: [파사드 패턴 3단계] 주문 전송, 취소, 미체결 및 원장 제어 도메인 분리
-# 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 time.sleep(0.06) 땜질 코드를 전면 삭제하고, 내부 _api_request 의 GlobalThrottle 중앙 통제로 100% 위임하여 이벤트 루프 교착 상태 완벽 방어.
+# 🚨 MODIFIED: [Thundering Herd 영구 정리] 파편화된 time.sleep(0.06) 땜질 코드를 전면 삭제하고, 내부 _api_request 의 GlobalThrottle 중앙 통제로 100% 위임하여 이벤트 루프 교착 상태 완벽 방어.
 # 🚨 MODIFIED: [선형 상속 락온] MarketDataProvider를 상속하여 API 클라이언트와 시세 연산 기능까지 풀 패키지 상속
 # 🚨 MODIFIED: [Case 18] 로컬 예약 스냅샷 전면 폐기 및 KIS 원장 직접 연동(get_reservation_orders) 기반 취소 집행 유지
 # 🚨 MODIFIED: [TypeError 붕괴 궁극 수술] KIS 서버에서 msg1이 None으로 반환될 때 발생하는 문자열 매칭(in) 즉사 버그 완벽 차단
@@ -411,7 +411,7 @@ class KisOrderEngine(MarketDataProvider):
         for excg in target_excgs:
             fk200, nk200 = "", ""
             for attempt in range(20): 
-                # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 sleep 소각 (GlobalThrottle 위임)
+                # 🚨 MODIFIED: [Thundering Herd 영구 정리] 파편화된 sleep 정리 (GlobalThrottle 위임)
                 params_hold = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg, "TR_CRCY_CD": "USD", "CTX_AREA_FK200": fk200, "CTX_AREA_NK200": nk200}
                 headers = self._get_header("TTTS3012R")
           
@@ -449,7 +449,7 @@ class KisOrderEngine(MarketDataProvider):
                             if ticker not in holdings: 
                                 holdings[ticker] = {'qty': qty, 'ord_psbl_qty': ord_psbl_qty, 'avg': avg}
                             else:
-                                # 🚨 MODIFIED: [Case 03] 유령 중복 합산 누적 무시 (영구 소각)
+                                # 🚨 MODIFIED: [Case 03] 유령 중복 합산 누적 무시 (영구 정리)
                                 continue 
 
                     tr_cont = res_hold.headers.get('tr_cont', '') if hasattr(res_hold, 'headers') else ''
@@ -470,7 +470,7 @@ class KisOrderEngine(MarketDataProvider):
         fk200, nk200 = "", ""
      
         for attempt in range(10):
-            # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 sleep 소각 (GlobalThrottle 위임)
+            # 🚨 MODIFIED: [Thundering Herd 영구 정리] 파편화된 sleep 정리 (GlobalThrottle 위임)
             params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "SORT_SQN": "DS", "CTX_AREA_FK200": fk200, "CTX_AREA_NK200": nk200}
             headers = self._get_header("TTTS3018R")
             
@@ -505,7 +505,7 @@ class KisOrderEngine(MarketDataProvider):
         fk200, nk200 = "", ""
         
         for attempt in range(15):
-            # 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 sleep 소각 (GlobalThrottle 위임)
+            # 🚨 MODIFIED: [Thundering Herd 영구 정리] 파편화된 sleep 정리 (GlobalThrottle 위임)
             params = {
                 "CANO": self.cano,
                 "ACNT_PRDT_CD": self.acnt_prdt_cd,
@@ -559,7 +559,7 @@ class KisOrderEngine(MarketDataProvider):
             elif side == "SELL": target_orders = [o for o in orders if o.get('sll_buy_dvsn_cd') == '01']
             if not target_orders: return True
             for o in target_orders: 
-                # 🚨 MODIFIED: 파편화된 sleep 소각
+                # 🚨 MODIFIED: 파편화된 sleep 정리
                 self.cancel_order(ticker, o.get('odno'))
      
             # 🚨 MODIFIED: [이벤트 루프 교착 방어] 5.0초의 긴 대기 시간을 1.0초로 단축하여 상위 스케줄러 TimeoutError 원천 봉쇄
@@ -578,7 +578,7 @@ class KisOrderEngine(MarketDataProvider):
         if not orders: return 0
         target_orders = [o for o in orders if o.get('sll_buy_dvsn_cd') == sll_buy_cd and str(o.get('ord_dvsn_cd') or o.get('ord_dvsn') or '') == target_ord_dvsn]
         for o in target_orders: 
-            # 🚨 MODIFIED: 파편화된 sleep 소각
+            # 🚨 MODIFIED: 파편화된 sleep 정리
             self.cancel_order(ticker, o.get('odno'))
             time.sleep(0.3)
         return len(target_orders)
@@ -605,7 +605,7 @@ class KisOrderEngine(MarketDataProvider):
                 for tp in safe_targets:
                     if o_price > 0 and abs(o_price - tp) < 0.005: target_orders.append(o); break
         for o in target_orders: 
-            # 🚨 MODIFIED: 파편화된 sleep 소각
+            # 🚨 MODIFIED: 파편화된 sleep 정리
             self.cancel_order(ticker, o.get('odno'))
             time.sleep(0.3)
         return len(target_orders)
@@ -704,7 +704,7 @@ class KisOrderEngine(MarketDataProvider):
         }
 
     def cancel_order(self, ticker, order_id):
-        # 🚨 MODIFIED: 파편화된 sleep 소각
+        # 🚨 MODIFIED: 파편화된 sleep 정리
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": "0", "OVRS_ORD_UNPR": "0", "ORD_SVR_DVSN_CD": "0"}
         # 🚨 MODIFIED: [Case 30 팩트 교정] 취소 주문 API 응답 객체 반환 배선 강제 이식
@@ -748,7 +748,7 @@ class KisOrderEngine(MarketDataProvider):
         if order_type not in self._DAYTIME_ORDER_TYPES:
             return self._unsupported_order_type_result(ticker, side, order_type)
 
-        # 🚨 MODIFIED: 파편화된 sleep 소각
+        # 🚨 MODIFIED: 파편화된 sleep 정리
         # 🚨 MODIFIED: [최종 무결성 수술] 수동 주문 시 Float 수량이 주입되어 KIS 서버에서 리젝되는 현상을 막기 위해 int 강제 형변환 쉴드 주입
         try: order_qty = int(self._safe_float(qty))
         except (TypeError, ValueError):
@@ -786,7 +786,7 @@ class KisOrderEngine(MarketDataProvider):
         return {'rt_cd': str(res.get('rt_cd') or '999'), 'msg1': safe_msg, 'odno': str(out.get('ODNO') or '')}
 
     def cancel_daytime_order(self, ticker, order_id, qty="100", price="0"):
-        # 🚨 MODIFIED: 파편화된 sleep 소각
+        # 🚨 MODIFIED: 파편화된 sleep 정리
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
     
         # 🚨 MODIFIED: [최종 무결성 수술] Float 문자열 방어
@@ -833,7 +833,7 @@ class KisOrderEngine(MarketDataProvider):
         if order_type not in self._RESERVATION_ORDER_TYPES.get(side, frozenset()):
             return self._unsupported_order_type_result(ticker, side, order_type)
 
-        # 🚨 MODIFIED: 파편화된 sleep 소각
+        # 🚨 MODIFIED: 파편화된 sleep 정리
         # 🚨 MODIFIED: [Insight 14] String-Float 맹독성 쉴드 래핑
         try: order_qty = int(self._safe_float(qty))
         except (TypeError, ValueError):
@@ -881,7 +881,7 @@ class KisOrderEngine(MarketDataProvider):
         return {'rt_cd': rt_cd, 'msg1': msg1, 'odno': odno}
 
     def cancel_reservation_order(self, order_date, order_id):
-        # 🚨 MODIFIED: 파편화된 sleep 소각
+        # 🚨 MODIFIED: 파편화된 sleep 정리
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "RSVN_ORD_RCIT_DT": order_date, "OVRS_RSVN_ODNO": order_id}
         return self._call_api("TTTT3017U", "/uapi/overseas-stock/v1/trading/order-resv-ccnl", "POST", body=body)
 
@@ -924,7 +924,7 @@ class KisOrderEngine(MarketDataProvider):
         fk200, nk200 = "", ""
        
         for attempt in range(10): 
-            # 🚨 MODIFIED: 파편화된 sleep 소각
+            # 🚨 MODIFIED: 파편화된 sleep 정리
             # 🚨 MODIFIED: 갱신된 연속 조회 토큰(fk200, nk200)을 params에 정밀 주입하여 유령 루프 붕괴 차단
             params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "PDNO": ticker, "ORD_STRT_DT": start_date, "ORD_END_DT": end_date, "SLL_BUY_DVSN": "00", "CCLD_NCCS_DVSN": "00", "OVRS_EXCG_CD": excg_cd, "SORT_SQN": "DS", "CTX_AREA_FK200": fk200, "CTX_AREA_NK200": nk200}
             headers = self._get_header("TTTS3035R")
@@ -977,7 +977,7 @@ class KisOrderEngine(MarketDataProvider):
         ledger_records, est, target_date, loop = [], ZoneInfo('America/New_York'), datetime.datetime.now(ZoneInfo('America/New_York')), 0
      
         while curr_qty > 0 and loop < 365:
-            # 🚨 MODIFIED: 파편화된 sleep 소각 (get_execution_history에서 API 호출 시 자동 지연됨)
+            # 🚨 MODIFIED: 파편화된 sleep 정리 (get_execution_history에서 API 호출 시 자동 지연됨)
             if target_date.weekday() < 5: loop += 1
             date_str = target_date.strftime('%Y%m%d')
             

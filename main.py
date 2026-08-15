@@ -3,11 +3,11 @@
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 40대 엣지 케이스 완벽 결속 교차 검증 완료.
 # 🚨 MODIFIED: [Event Loop 교착 수술] post_init 내부 commands_handler 및 콜백 하위 도메인 락온 전파 누락 맹점 원천 봉쇄.
-# 🚨 MODIFIED: [15:59 MOC 덤핑 락온] 암살자 제로-오버나이트 강제 청산을 위한 15:59 EST 전용 크론 스케줄 유지.
-# 🚨 MODIFIED: [16:05 확정 정산망 단일화] 암살자 물량 보유 시 스킵하던 로직을 폐기하고, 15:59 덤핑 완료 후 무조건 당일 100% 정산되도록 졸업 스캔망 단일화.
+# 🚨 MODIFIED: [15:59 MOC 덤핑 락온] 보조전략 제로-오버나이트 강제 청산을 위한 15:59 EST 전용 크론 스케줄 유지.
+# 🚨 MODIFIED: [16:05 확정 정산망 단일화] 보조전략 물량 보유 시 스킵하던 로직을 폐기하고, 15:59 덤핑 완료 후 무조건 당일 100% 정산되도록 졸업 스캔망 단일화.
 # 🚨 MODIFIED: [로깅 증발 원천 차단] 로깅 설정을 최상단(환경 변수 스캔 전)으로 전진 배치하여 헤드리스 구동 시 발생하는 부트스트랩 로그 증발 완벽 차단.
 # 🚨 MODIFIED: [제1헌법 철저 준수] get_active_tickers 호출부 등 모든 동기 I/O 구간에 asyncio.wait_for 족쇄 완벽 래핑 (이벤트 루프 교착 원천 봉쇄).
-# 🚨 MODIFIED: [Case 34 전역 GC 락온] 디스크 용량 고갈 붕괴 방어를 위해 `TimedRotatingFileHandler` 이식 및 7일 초과 로그 자동 영구 소각 배선 유지.
+# 🚨 MODIFIED: [Case 34 전역 GC 락온] 디스크 용량 고갈 붕괴 방어를 위해 `TimedRotatingFileHandler` 이식 및 7일 초과 로그 자동 영구 정리 배선 유지.
 # 🚨 MODIFIED: [V73.15 타임라인 디커플링] 17:05 KST V4.0 선제 타격 및 V4.0 스냅샷 분리 락온.
 # 🚨 MODIFIED: [맹점 4 수술] 서머타임 래핑 타임 패러독스 차단 및 KST 네이티브 위임 락온.
 # 🚨 MODIFIED: [Case 26] 텔레그램 파서 붕괴 방어용 html 모듈 결속.
@@ -61,7 +61,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', 
     level=logging.INFO,
     handlers=[
-        # 🚨 MODIFIED: [Case 34] 로그명 단일화 및 TimedRotatingFileHandler 주입 (7일치 백업 유지, 이전 영구 소각)
+        # 🚨 MODIFIED: [Case 34] 로그명 단일화 및 TimedRotatingFileHandler 주입 (7일치 백업 유지, 이전 영구 정리)
         TimedRotatingFileHandler(log_filename, when="midnight", interval=1, backupCount=7, encoding='utf-8'),
         logging.StreamHandler()
     ]
@@ -82,7 +82,7 @@ CANO = os.getenv("CANO")
 ACNT_PRDT_CD = os.getenv("ACNT_PRDT_CD", "01")
 
 if not all([TELEGRAM_TOKEN, APP_KEY, APP_SECRET, CANO, ADMIN_CHAT_ID]):
-    # 🚨 MODIFIED: [로깅 증발 방어] print 데드코드 소각 및 logging.critical 락온
+    # 🚨 MODIFIED: [로깅 증발 방어] print 데드코드 정리 및 logging.critical 락온
     logging.critical("❌ [치명적 오류] .env 파일에 봇 구동 필수 키가 누락되었습니다. 봇을 종료합니다.")
     os._exit(1)
 

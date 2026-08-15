@@ -16,7 +16,7 @@ class InfiniteStrategy:
         self.v4 = V4Strategy(config)
         self.v_rev_plugin = _StubPlugin()
         self.aux_strategy_plugin = _StubPlugin()
-        self.v14_vwap_plugin = _StubPlugin()
+        self.v14_slice_plugin = _StubPlugin()
 
     def _halt_plan(self, ticker, reason):
         trade_date = self.v4._get_logical_date_str() if getattr(self, "v4", None) else ""
@@ -61,9 +61,9 @@ class InfiniteStrategy:
             **kwargs,
         )
 
-    def load_aslice_state(self, *a, **kw): return {}
-    def save_aslice_state(self, *a, **kw): pass
-    def fetch_avwap_macro(self, *a, **kw): return None
-    def get_avwap_decision(self, *a, **kw): return {}
+    def load_aux_state(self, *a, **kw): return {}
+    def save_aux_state(self, *a, **kw): pass
+    def fetch_aux_macro(self, *a, **kw): return None
+    def get_aux_decision(self, *a, **kw): return {}
     def check_volatility_condition(self, *a, **kw):
-        return {"action": "HOLD", "reason": "V4.0 — 스나이퍼 제거됨", "limit_price": 0.0, "qty": 0}
+        return {"action": "HOLD", "reason": "V4.0 — 변동성 제거됨", "limit_price": 0.0, "qty": 0}

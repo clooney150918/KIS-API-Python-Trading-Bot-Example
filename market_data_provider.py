@@ -1,9 +1,9 @@
 # ==========================================================
 # FILE: market_data_provider.py
 # ==========================================================
-# 🚨 MODIFIED: [제1헌법 철저 준수] get_1min_candles_df 내의 data/avwap_cache.json 조작을 GlobalThrottle.get_file_lock으로 100% 파일 뮤텍스 래핑 완료 (Dirty Read 원천 봉쇄).
+# 🚨 MODIFIED: [제1헌법 철저 준수] get_1min_candles_df 내의 data/aux_cache.json 조작을 GlobalThrottle.get_file_lock으로 100% 파일 뮤텍스 래핑 완료 (Dirty Read 원천 봉쇄).
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 41대 엣지 케이스 완벽 결속 교차 검증 완료.
-# 🚨 MODIFIED: [Thundering Herd 영구 소각] yfinance 등 모든 외부 통신 지연(time.sleep)을 제거하고 `GlobalThrottle.wait_api_sync()` 중앙 통제소로 100% 위임 락온.
+# 🚨 MODIFIED: [Thundering Herd 영구 정리] yfinance 등 모든 외부 통신 지연(time.sleep)을 제거하고 `GlobalThrottle.wait_api_sync()` 중앙 통제소로 100% 위임 락온.
 # 🚨 MODIFIED: [스냅샷 오염 전이 절대 방어] YF 1d 캔들 롤오버 지연 맹점을 파기하고 1m 기반 D-1 공식 종가 핀셋 추출 락온.
 # 🚨 MODIFIED: [프리장 데이터 공백 패러독스 방어] YF 1d 롤오버 지연 버그 원천 차단을 위해 period="1d" -> "5d" 상향 락온.
 # 🚨 VERIFIED: [Case 35 절대 방어망 결속] 내부 ffill 주입으로 결측치(NaN) 런타임 에러 차단 무결성 100% 확보.
@@ -74,8 +74,8 @@ def _flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
 class MarketDataProvider(KisApiClient):
     
     # 🚨 MODIFIED: [Case 33] 3단 지수 백오프 이식
-    def get_daily_vwap_info(self, ticker):
-        """ 기초자산의 정규장 거래 내역 기반 일자별 순수 VWAP 계산 """
+    def get_daily_slice_info(self, ticker):
+        """ 기초자산의 정규장 거래 내역 기반 일자별 순수 SLICE 계산 """
         for attempt in range(3):
             try:
                 GlobalThrottle.wait_api_sync() # 🚨 MODIFIED: 중앙 통제소 락온
@@ -106,17 +106,17 @@ class MarketDataProvider(KisApiClient):
                 daily_stats = regular_market.groupby('Date').agg(Total_Vol_Price=('Vol_x_Price', 'sum'), Total_Vol=('Volume', 'sum'))
   
                 # 🚨 MODIFIED: [Case 05] 결측치 방어용 0.0 강제 형변환
-                daily_stats['VWAP'] = np.where(daily_stats['Total_Vol'] > 0, daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'], np.nan)
-                daily_stats = daily_stats.dropna(subset=['VWAP'])
+                daily_stats['SLICE'] = np.where(daily_stats['Total_Vol'] > 0, daily_stats['Total_Vol_Price'] / daily_stats['Total_Vol'], np.nan)
+                daily_stats = daily_stats.dropna(subset=['SLICE'])
     
                 if len(daily_stats) >= 2:
-                    return round(self._safe_float(daily_stats['VWAP'].iloc[-2]), 4), round(self._safe_float(daily_stats['VWAP'].iloc[-1]), 4)
+                    return round(self._safe_float(daily_stats['SLICE'].iloc[-2]), 4), round(self._safe_float(daily_stats['SLICE'].iloc[-1]), 4)
                 elif len(daily_stats) == 1:
-                    return 0.0, round(self._safe_float(daily_stats['VWAP'].iloc[-1]), 4)
+                    return 0.0, round(self._safe_float(daily_stats['SLICE'].iloc[-1]), 4)
                 return 0.0, 0.0
             except Exception as e:
                 if attempt == 2:
-                    logging.error(f"⚠️ [Broker] 일별 VWAP 파싱 실패 ({ticker}): {e}")
+                    logging.error(f"⚠️ [Broker] 일별 SLICE 파싱 실패 ({ticker}): {e}")
                     return 0.0, 0.0
                 time.sleep(1.0 * (2 ** attempt))
         return 0.0, 0.0
@@ -156,12 +156,12 @@ class MarketDataProvider(KisApiClient):
                 cum_vol = regular_market['Volume'].cumsum()
                 
                 safe_cum_vol = np.where(cum_vol == 0, 1.0, cum_vol)
-                vwap_array = np.where(cum_vol > 0, cum_vol_price / safe_cum_vol, np.nan)
+                slice_array = np.where(cum_vol > 0, cum_vol_price / safe_cum_vol, np.nan)
           
-                vwap_series = pd.Series(vwap_array, index=cum_vol.index).ffill() 
+                slice_series = pd.Series(slice_array, index=cum_vol.index).ffill() 
           
-                current_vwap = self._safe_float(vwap_series.iloc[-1]) if not vwap_series.empty else 0.0
-                if pd.isna(current_vwap) or current_vwap == 0.0: current_vwap = 0.0
+                current_slice = self._safe_float(slice_series.iloc[-1]) if not slice_series.empty else 0.0
+                if pd.isna(current_slice) or current_slice == 0.0: current_slice = 0.0
  
                 resampled = regular_market.resample('5min', label='left', closed='left').agg({'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last', 'Volume': 'sum'}).dropna()
  
@@ -181,7 +181,7 @@ class MarketDataProvider(KisApiClient):
                     'volume': self._safe_float(last_candle['Volume']), 
                     'vol_ma10': self._safe_float(last_candle.get('Vol_MA10', last_candle['Volume'])),
                     'vol_ma20': self._safe_float(last_candle.get('Vol_MA20', last_candle['Volume'])),
-                    'vwap': self._safe_float(current_vwap)
+                    'slice': self._safe_float(current_slice)
                 }
             except Exception as e:
                 logging.debug(f"⚠️ [Broker] 실시간 5분봉 조회 실패 (시도 {attempt+1}/3): {e}")
@@ -272,7 +272,7 @@ class MarketDataProvider(KisApiClient):
             try:
                 GlobalThrottle.wait_api_sync() # 🚨 MODIFIED: 중앙 통제소 락온
                 stock = yf.Ticker(ticker)
-                # 🚨 MODIFIED: interval="1d" 의존성 소각 및 interval="1m", period="5d" 로 교체
+                # 🚨 MODIFIED: interval="1d" 의존성 정리 및 interval="1m", period="5d" 로 교체
                 hist = stock.history(period="5d", interval="1m", prepost=True, timeout=5)
               
                 if not hist.empty:
@@ -434,7 +434,7 @@ class MarketDataProvider(KisApiClient):
                         time_low_raw = df_today.loc[time_low_idx, 'time_est'] if not pd.isna(time_low_idx) else ""
                         time_low_str = str(time_low_raw.iloc[0] if isinstance(time_low_raw, pd.Series) else time_low_raw)
             
-                        cache_file = "data/avwap_cache.json"
+                        cache_file = "data/aux_cache.json"
         
                         # 🚨 MODIFIED: [제1헌법] File Mutex 100% 팩트 래핑으로 더티 리드(Dirty Read) 및 동시성 붕괴 원천 차단
                         with GlobalThrottle.get_file_lock(cache_file):
@@ -587,7 +587,7 @@ class MarketDataProvider(KisApiClient):
                 hist['Prev_Close'] = hist['Close'].shift(1)
                 hist = hist.dropna(subset=['High', 'Low', 'Close']).copy()
 
-                # 🚨 MODIFIED: [벡터화 강제 헌법 준수] apply(lambda) 묵시적 루프 영구 소각 및 100% 벡터화 연산 팩트 교정
+                # 🚨 MODIFIED: [벡터화 강제 헌법 준수] apply(lambda) 묵시적 루프 영구 정리 및 100% 벡터화 연산 팩트 교정
                 tr1 = hist['High'] - hist['Low']
                 tr2 = (hist['High'] - hist['Prev_Close']).abs()
                 tr3 = (hist['Low'] - hist['Prev_Close']).abs()
@@ -670,7 +670,7 @@ class MarketDataProvider(KisApiClient):
     
         return 0.0
 
-    # 🚨 MODIFIED: [초단기 당일 앵커드 VWAP 롤오버] 다중 기점을 영구 소각하고, '당일 프리장 개장(04:00 EST)'을 절대 앵커로 100% 팩트 락온합니다.
+    # 🚨 MODIFIED: [초단기 당일 앵커드 SLICE 롤오버] 다중 기점을 영구 정리하고, '당일 프리장 개장(04:00 EST)'을 절대 앵커로 100% 팩트 락온합니다.
     def get_auto_anchor_date(self, ticker):
         """ 🚨 [초단기 당일 앵커링 엔진] 프리장 개장(04:00 EST) 기점 락온 """
         est = ZoneInfo('America/New_York')
@@ -687,8 +687,8 @@ class MarketDataProvider(KisApiClient):
         
         return anchor_date, "당일 프리장 개장 (04:00 EST)"
 
-    # 🚨 MODIFIED: [초단기 당일 누적 VWAP 엔진] 기점 거리에 따른 동적 해상도를 소각하고, 1m 해상도와 prepost=True(프리장 포함)로 100% 팩트 락온.
-    def get_anchored_vwap(self, ticker, anchor_date):
+    # 🚨 MODIFIED: [초단기 당일 누적 SLICE 엔진] 기점 거리에 따른 동적 해상도를 정리하고, 1m 해상도와 prepost=True(프리장 포함)로 100% 팩트 락온.
+    def get_anchored_slice(self, ticker, anchor_date):
         for attempt in range(3):
             try:
                 GlobalThrottle.wait_api_sync() # 🚨 MODIFIED: 중앙 통제소 락온
@@ -734,19 +734,19 @@ class MarketDataProvider(KisApiClient):
                 # 🚨 NEW: [프리장 Zero-Volume 붕괴 패러독스 방어] 거래량 0일 때 즉사하는 맹점을 막기 위한 TWAP 벡터화 연산 락온
                 df['TWAP'] = df['Typical_Price'].expanding().mean()
                 
-                # 🚨 NEW: [벡터화 강제 헌법 준수] For 루프 전면 소각 및 순수 벡터화 연산 락온
+                # 🚨 NEW: [벡터화 강제 헌법 준수] For 루프 전면 정리 및 순수 벡터화 연산 락온
                 df['Cum_Vol_Price'] = df['Vol_x_Price'].cumsum()
                 df['Cum_Volume'] = df['Volume'].astype(float).cumsum()
                 
                 # 🚨 MODIFIED: [결측치 강제 롤오버 방어] 누적 거래량이 0일 때 0.0 대신 TWAP으로 우회(Fallback)하여 관제탑 UI 마비 원천 차단
-                df['AVWAP'] = np.where(df['Cum_Volume'] > 0, df['Cum_Vol_Price'] / df['Cum_Volume'], df['TWAP'])
+                df['AUX'] = np.where(df['Cum_Volume'] > 0, df['Cum_Vol_Price'] / df['Cum_Volume'], df['TWAP'])
                 
-                latest_avwap = self._safe_float(df['AVWAP'].iloc[-1])
+                latest_aux = self._safe_float(df['AUX'].iloc[-1])
             
-                return round(latest_avwap, 2)
+                return round(latest_aux, 2)
               
             except Exception as e:
-                logging.debug(f"⚠️ [Broker] 당일 앵커드 VWAP 파싱 실패 ({ticker}): {e}")
+                logging.debug(f"⚠️ [Broker] 당일 앵커드 SLICE 파싱 실패 ({ticker}): {e}")
                 if attempt == 2: return 0.0
                 time.sleep(1.0 * (2 ** attempt))
         return 0.0

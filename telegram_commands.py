@@ -2,9 +2,9 @@
 # FILE: telegram_commands.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 48대 엣지 케이스 완벽 결속 교차 검증 완료.
-# 🚨 MODIFIED: [제1헌법 철저 준수] 달력 API(mcal) 스캔 전 파편화된 호출망을 소각하고, GlobalThrottle.wait_api_sync()를 강제 주입하여 썬더링 허드 완벽 차단.
+# 🚨 MODIFIED: [제1헌법 철저 준수] 달력 API(mcal) 스캔 전 파편화된 호출망을 정리하고, GlobalThrottle.wait_api_sync()를 강제 주입하여 썬더링 허드 완벽 차단.
 # 🚨 MODIFIED: [원인 추적 시스템 락온] /record 명령어 실행 시 KIS 서버 통신 장애의 정확한 원인(Endpoint 및 Timeout 등)을 텔레그램 UI로 직접 표출하도록 에러 파싱 로직 전면 팩트 교정 완료.
-# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 조작 시 낡은 스냅샷과 slice_state 캐시를 소각하여 잔존 지시서에 의한 중복 매매를 차단.
+# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 조작 시 낡은 스냅샷과 slice_state 캐시를 정리하여 잔존 지시서에 의한 중복 매매를 차단.
 # ==========================================================
 import logging
 import datetime
@@ -324,8 +324,8 @@ class TelegramCommands:
             is_volatility_active_time = True
 
         for t in sorted_tickers:
-            is_avwap_active = False
-            avwap_status_txt = "OFF"
+            is_aux_active = False
+            aux_status_txt = "OFF"
             
             h = holdings.get(t) if isinstance(holdings.get(t), dict) else {'qty':0, 'avg':0}
             
@@ -433,32 +433,32 @@ class TelegramCommands:
             
             v_rev_q_qty, v_rev_q_lots = 0, 0
 
-            is_avwap_hybrid_on = await self._retry_api(getattr(self.cfg, 'get_aux_hybrid_mode', lambda x: False), t, default=False)
+            is_aux_hybrid_on = await self._retry_api(getattr(self.cfg, 'get_aux_hybrid_mode', lambda x: False), t, default=False)
 
-            if is_avwap_hybrid_on:
-                is_avwap_active = True
-                avwap_status_txt = "👀 관측 중"
-                avwap_base_ticker = 'SOXX' if t == 'SOXL' else ('QQQ' if t == 'TQQQ' else t)
-                avwap_ctx = await self._retry_api(self.strategy.aux_strategy_plugin.fetch_macro_context, avwap_base_ticker)
+            if is_aux_hybrid_on:
+                is_aux_active = True
+                aux_status_txt = "👀 관측 중"
+                aux_base_ticker = 'SOXX' if t == 'SOXL' else ('QQQ' if t == 'TQQQ' else t)
+                aux_ctx = await self._retry_api(self.strategy.aux_strategy_plugin.fetch_macro_context, aux_base_ticker)
       
                 if status_code in ["PRE", "REG"]:
-                    df_1min_base = await self._retry_api(self.broker.get_1min_candles_df, avwap_base_ticker)
-                    base_curr_p = self._safe_float(await self._retry_api(self.broker.get_current_price, avwap_base_ticker))
+                    df_1min_base = await self._retry_api(self.broker.get_1min_candles_df, aux_base_ticker)
+                    base_curr_p = self._safe_float(await self._retry_api(self.broker.get_current_price, aux_base_ticker))
                    
                     if hasattr(self.strategy, 'aux_strategy_plugin'):
                         decision = await self._retry_api(
                             self.strategy.aux_strategy_plugin.get_decision,
-                            base_ticker=avwap_base_ticker, exec_ticker=t,
+                            base_ticker=aux_base_ticker, exec_ticker=t,
                             base_curr_p=base_curr_p, exec_curr_p=curr,
-                            df_1min_base=df_1min_base, avwap_qty=0, avwap_alloc_cash=0.0, 
-                            now_est=now_est, aslice_state={"strikes": 0, "cooldown_active": False},
-                            context_data=avwap_ctx, is_simulation=True,
+                            df_1min_base=df_1min_base, aux_qty=0, aux_alloc_cash=0.0, 
+                            now_est=now_est, aux_state={"strikes": 0, "cooldown_active": False},
+                            context_data=aux_ctx, is_simulation=True,
                             amp5=self._safe_float(getattr(dynamic_pct_obj, 'base_amp', 0.0)) if hasattr(dynamic_pct_obj, 'base_amp') else 0.0,
                             prev_close=safe_prev_close, ma_5day=ma_5day, sortie_mode="SINGLE"
                         ) or {}
                     
                         if decision:
-                            avwap_status_txt = f"👁️ 관측 중: {decision.get('reason', '타점 계산중')}"
+                            aux_status_txt = f"👁️ 관측 중: {decision.get('reason', '타점 계산중')}"
 
             upward_volatility_mode_on = await self._retry_api(self.cfg.get_upward_volatility_mode, t, default=False)
             target_val = await self._retry_api(self.cfg.get_target_profit, t, default=10.0)

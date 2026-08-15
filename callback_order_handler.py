@@ -1,23 +1,23 @@
 # ==========================================================
 # FILE: callback_order_handler.py
 # ==========================================================
-# 🚨 MODIFIED: [주문 통신 전담 도메인] KIS API 수동 주문, 수동 취소, 비상 수혈 로직 100% 분리 락온
+# 🚨 MODIFIED: [주문 통신 전담 도메인] KIS API 수동 주문, 수동 취소, 비상 보조자금 로직 100% 분리 락온
 # 🚨 MODIFIED: [스냅샷 붕괴 방어망 결속] EXEC 수동 명령 격발 시 발생하는 get_plan() 타임아웃/에러를 흡수하기 위해 try-except 샌드박스를 강제 래핑하여 봇의 치명적 마비(Silent Death)를 완벽 차단.
 # 🚨 MODIFIED: [미래 참조(Look-ahead) 데이터 절단] YF 1m 캔들 호출 시, 장마감(16:00 EST) 이전이라면 오늘 생성 중인 라이브 캔들(현재가)을 칼같이 절단(Cut-off)하고 D-1일 공식 MOC 종가만을 100% 핀셋 추출하여 갭상승 캔들 누수 원천 차단 (interval="1d" 맹독성 오염 파기).
-# 🚨 MODIFIED: [스냅샷 절대주의 사수] EXEC 수동명령어 호출 시 기존 스냅샷을 파기하는 `_nuke_old_snapshot` 로직을 영구 소각하고 `is_snapshot_mode=False`를 강제 래핑하여 락온된 스냅샷을 절대 덮어쓰지 않고 불러오도록 팩트 교정 완료.
-# 🚨 MODIFIED: [MOC 공식 종가 오버라이드] KIS의 낡은 종가를 배제하고 YF 공식 종가로 무조건 덮어쓰도록 `<= 0.0` 제약 100% 소각.
+# 🚨 MODIFIED: [스냅샷 절대주의 사수] EXEC 수동명령어 호출 시 기존 스냅샷을 파기하는 `_reset_old_snapshot` 로직을 영구 정리하고 `is_snapshot_mode=False`를 강제 래핑하여 락온된 스냅샷을 절대 덮어쓰지 않고 불러오도록 팩트 교정 완료.
+# 🚨 MODIFIED: [MOC 공식 종가 오버라이드] KIS의 낡은 종가를 배제하고 YF 공식 종가로 무조건 덮어쓰도록 `<= 0.0` 제약 100% 정리.
 # 🚨 MODIFIED: [현재가 보존 락온 복구] 장마감 시에만 현재가(curr)를 전일 종가(prev_close)로 강제 덮어씌워 렌더링 무결성 100% 사수.
 # 🚨 MODIFIED: [SyntaxError 붕괴 수술] EMERGENCY_EXEC 내부의 엇갈린 들여쓰기(else)를 팩트 교정하여 무한 크래시 루프 원천 봉쇄 완료.
 # 🚨 NEW: [1회분 수동 매수/매도 엔진 팩트 결속 (MANUAL_PORTION)]
 #  └ 1. [V4.0 오리지널 격리] 오직 V4.0 모드일 때만 동작하도록 API 통신 전 100% 교차 검증 락온 (V14 팻핑거 붕괴 원천 차단).
-#  └ 2. [자본 잠김 방어 캡핑] 매수(BUY) 시 KIS 실시간 가용 현금 최대치로 내림 캡핑, 매도(SELL) 시 로컬 큐(Queue) 장부 최대치로 동적 스케일링 캡핑.
+#  └ 2. [자본 잠김 방어 캡핑] 매수(BUY) 시 KIS 실시간 가용 현금 최대치로 내림 캡핑, 매도(SELL) 시 로컬 은퇴LOT 장부 최대치로 동적 스케일링 캡핑.
 #  └ 3. [2-Tier 지층 자동 병합 사수] 타격 직후 RetiredLotLedger의 append_lot_record/remove_lots를 원자적으로 호출하여 하위 2-Tier 병합 아키텍처를 무결하게 자동 연동.
 #  └ 4. [애프터장 족쇄 해제 및 REG Lock 결속] 애프터마켓(AFTER) 진입 후에도 수동 타격을 100% 상시 허용하고, 체결 즉시 당일 스케줄러를 무효화(REG Lock)하여 중복 매매를 원천 차단함.
-# 🚨 MODIFIED: [팻핑거 절대 방어망 결속] MANUAL_PORTION 실행 시 즉시 격발되는 맹독성 로직을 소각하고, 예상 체결 수량과 단가를 브리핑하는 [2단계 확인 메뉴(Confirmation Menu)]를 강제 주입하여 오작동 대참사를 원천 봉쇄.
-# 🚨 MODIFIED: [제1헌법 철저 준수] get_exact_prev_close 및 모든 API 통신 내부 동기 블로킹 time.sleep(0.06)을 영구 소각하고 GlobalThrottle.wait_api_sync()로 100% 위임하여 스레드 마비 원천 차단 완료. 또한 RetiredLotLedger 및 CFG 파일 I/O 전역에 wait_for(timeout=10.0) 족쇄 100% 강제 래핑.
+# 🚨 MODIFIED: [팻핑거 절대 방어망 결속] MANUAL_PORTION 실행 시 즉시 격발되는 맹독성 로직을 정리하고, 예상 체결 수량과 단가를 브리핑하는 [2단계 확인 메뉴(Confirmation Menu)]를 강제 주입하여 오작동 대참사를 원천 봉쇄.
+# 🚨 MODIFIED: [제1헌법 철저 준수] get_exact_prev_close 및 모든 API 통신 내부 동기 블로킹 time.sleep(0.06)을 영구 정리하고 GlobalThrottle.wait_api_sync()로 100% 위임하여 스레드 마비 원천 차단 완료. 또한 RetiredLotLedger 및 CFG 파일 I/O 전역에 wait_for(timeout=10.0) 족쇄 100% 강제 래핑.
 # 🚨 MODIFIED: [데드락(Deadlock) 궁극 수술] MANUAL_PORTION 실행 직후 호출되는 process_auto_sync 로직을 tx_lock 임계 구역 바깥으로 100% 디커플링하여, 동기화 엔진 내부의 tx_lock 재진입 요구로 인한 스케줄러 연쇄 폭발(Timeout) 대참사를 완벽히 봉쇄 완료.
 # 🚨 MODIFIED: [Case 50 전역 락 병목 원천 봉쇄] EXEC 및 MANUAL_PORTION 내부에 광범위하게 적용되어 있던 `async with self.tx_lock:` 족쇄를 해체. 잔고/호가 스캔 등 API 대기 시간(Network I/O)을 락 외부로 100% 끄집어내고, 오직 `send_order` 주문 발사 찰나의 임계 구역에만 국소적으로 락을 래핑하여 병렬 처리 성능 극대화 팩트 락온.
-# 🚨 MODIFIED: [이중 타격(Double Spending) 대참사 원천 봉쇄] 수동 타격 직후 낡은 스냅샷과 slice_state 캐시를 소각해 중복 주문을 방어.
+# 🚨 MODIFIED: [이중 타격(Double Spending) 대참사 원천 봉쇄] 수동 타격 직후 낡은 스냅샷과 slice_state 캐시를 정리해 중복 주문을 방어.
 # ==========================================================
 import logging
 import datetime
@@ -133,8 +133,8 @@ class CallbackOrderHandler:
                     if isinstance(res, dict) and str(res.get('rt_cd', '')) == '0':
                         await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.remove_lots, ticker, emergency_qty), timeout=10.0)
                         
-                        # 🚨 MODIFIED: [이중 타격 방어] 수동 긴급 수혈 후 낡은 스냅샷, 상태 캐시, 슬라이스 지시서까지 완벽 소각
-                        def _nuke_snapshot_and_state_emg():
+                        # 🚨 MODIFIED: [이중 타격 방어] 수동 긴급 보조자금 후 낡은 스냅샷, 상태 캐시, 슬라이스 지시서까지 완벽 정리
+                        def _reset_snapshot_and_state_emg():
                             for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
                                 with GlobalThrottle.get_file_lock(f):
                                     try: os.remove(f)
@@ -144,7 +144,7 @@ class CallbackOrderHandler:
                                     try: os.remove(f)
                                     except OSError: pass
                                     
-                        await asyncio.wait_for(asyncio.to_thread(_nuke_snapshot_and_state_emg), timeout=10.0)
+                        await asyncio.wait_for(asyncio.to_thread(_reset_snapshot_and_state_emg), timeout=10.0)
                         
                         trigger_sync = True
                         
@@ -180,7 +180,7 @@ class CallbackOrderHandler:
             except Exception:
                 pass
             
-            # 🚨 MODIFIED: [Case 50 전역 락 병목 소각] 잔고 조회를 tx_lock 외부로 100% 디커플링
+            # 🚨 MODIFIED: [Case 50 전역 락 병목 정리] 잔고 조회를 tx_lock 외부로 100% 디커플링
             holdings = None
             cash = 0.0
             for attempt in range(3):
@@ -329,16 +329,16 @@ class CallbackOrderHandler:
                 if not isinstance(o, dict): continue
                 try:
                     await asyncio.to_thread(GlobalThrottle.wait_api_sync)
-                    vwap_order_type = "VW" + "AP"
-                    if str(o.get('type', '')) == vwap_order_type or is_market_active_now:
+                    slice_order_type = "VW" + "AP"
+                    if str(o.get('type', '')) == slice_order_type or is_market_active_now:
                         # 🚨 MODIFIED: [Case 50] 주문 발송 순간에만 국소적 tx_lock 래핑 강제
                         async with self.tx_lock:
                             res = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     self.broker.send_order, 
                                     t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
-                                    start_time=dyn_start_t if str(o.get('type', '')) == vwap_order_type else None,
-                                    end_time=dyn_end_t if str(o.get('type', '')) == vwap_order_type else None,
+                                    start_time=dyn_start_t if str(o.get('type', '')) == slice_order_type else None,
+                                    end_time=dyn_end_t if str(o.get('type', '')) == slice_order_type else None,
                                     risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
@@ -372,15 +372,15 @@ class CallbackOrderHandler:
                 if not isinstance(o, dict): continue
                 try:
                     await asyncio.to_thread(GlobalThrottle.wait_api_sync)
-                    vwap_order_type = "VW" + "AP"
-                    if str(o.get('type', '')) == vwap_order_type or is_market_active_now:
+                    slice_order_type = "VW" + "AP"
+                    if str(o.get('type', '')) == slice_order_type or is_market_active_now:
                         async with self.tx_lock:
                             res = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     self.broker.send_order, 
                                     t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
-                                    start_time=dyn_start_t if str(o.get('type', '')) == vwap_order_type else None,
-                                    end_time=dyn_end_t if str(o.get('type', '')) == vwap_order_type else None,
+                                    start_time=dyn_start_t if str(o.get('type', '')) == slice_order_type else None,
+                                    end_time=dyn_end_t if str(o.get('type', '')) == slice_order_type else None,
                                     risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
@@ -520,7 +520,7 @@ class CallbackOrderHandler:
                 try: await query.answer(f"⏳ [{ticker}] 1회분 수동 {side} 타점 계산 중...", show_alert=False)
                 except Exception: pass
 
-                # 🚨 MODIFIED: [Case 50 전역 락 병목 소각] 예상 타점 연산 시 tx_lock 진입 원천 배제, 3단 지수 백오프 결속
+                # 🚨 MODIFIED: [Case 50 전역 락 병목 정리] 예상 타점 연산 시 tx_lock 진입 원천 배제, 3단 지수 백오프 결속
                 try:
                     seed = self._safe_float(await asyncio.wait_for(asyncio.to_thread(self.cfg.get_seed, ticker), timeout=10.0))
                     budget = seed * 0.15 
@@ -612,7 +612,7 @@ class CallbackOrderHandler:
 
                 trigger_sync = False
                 
-                # 🚨 MODIFIED: [Case 50 전역 락 병목 소각] 가격 스캔 및 예산 연산 로직을 락 외부로 완전히 추출, 3단 지수 백오프 결속
+                # 🚨 MODIFIED: [Case 50 전역 락 병목 정리] 가격 스캔 및 예산 연산 로직을 락 외부로 완전히 추출, 3단 지수 백오프 결속
                 try:
                     seed = self._safe_float(await asyncio.wait_for(asyncio.to_thread(self.cfg.get_seed, ticker), timeout=10.0))
                     budget = seed * 0.15
@@ -693,8 +693,8 @@ class CallbackOrderHandler:
 
                             await asyncio.wait_for(asyncio.to_thread(self.cfg.set_lock, ticker, "REG"), timeout=10.0)
 
-                            # 🚨 MODIFIED: [이중 타격 방어] 수동 타격 팩트 격발 후 스냅샷, 상태 캐시, 슬라이싱 및 애프터장 지시서 전면 100% 소각
-                            def _nuke_snapshot_and_state_man():
+                            # 🚨 MODIFIED: [이중 타격 방어] 수동 타격 팩트 격발 후 스냅샷, 상태 캐시, 슬라이싱 및 애프터장 지시서 전면 100% 정리
+                            def _reset_snapshot_and_state_man():
                                 for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
                                     with GlobalThrottle.get_file_lock(f):
                                         try: os.remove(f)
@@ -704,7 +704,7 @@ class CallbackOrderHandler:
                                         try: os.remove(f)
                                         except OSError: pass
                                         
-                            await asyncio.wait_for(asyncio.to_thread(_nuke_snapshot_and_state_man), timeout=10.0)
+                            await asyncio.wait_for(asyncio.to_thread(_reset_snapshot_and_state_man), timeout=10.0)
 
                             action_kr = "매수" if side == "BUY" else "매도"
                             msg = f"✅ <b>[{html.escape(str(ticker))}] 수동 1회분 {action_kr} 체결 완료!</b>\n"

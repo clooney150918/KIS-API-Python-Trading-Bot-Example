@@ -8,7 +8,7 @@
 # 🚨 NEW: [라우팅 에일리어스(Alias) 락온] TelegramStates 등 외부 모듈에서 controller.cmd_* 로 호출하는 하위 호환성 붕괴를 막기 위해 __init__ 내부에 16대 명령어 에일리어스를 원자적 매핑 완료.
 # 🚨 MODIFIED: [로깅 증발 원천 차단] _is_admin 내부의 print() 데드코드를 logging.warning으로 팩트 교정 완료.
 # 🚨 MODIFIED: [초기화 런타임 붕괴 수술] _is_admin 내부 config 파일 I/O 대기 중 TimeoutError 발생 시 라우터가 즉사하는 현상을 막기 위해 try-except 샌드박스 강제 주입.
-# 🚨 MODIFIED: [제2헌법 데드코드 궁극 소각] 비즈니스 로직 이관으로 인해 더 이상 사용되지 않는 유령 임포트(datetime, ZoneInfo) 및 텍스트 핸들러 내부의 유령 변수(state, chat_id) 100% 영구 소각 완료.
+# 🚨 MODIFIED: [제2헌법 데드코드 궁극 정리] 비즈니스 로직 이관으로 인해 더 이상 사용되지 않는 유령 임포트(datetime, ZoneInfo) 및 텍스트 핸들러 내부의 유령 변수(state, chat_id) 100% 영구 정리 완료.
 # ==========================================================
 
 import logging
@@ -81,7 +81,7 @@ class TelegramController:
                 self.admin_id = None
              
         if self.admin_id is None or self.admin_id <= 0:
-            # 🚨 MODIFIED: [로깅 증발 방어] print 데드코드 소각 및 표준 로깅 래핑
+            # 🚨 MODIFIED: [로깅 증발 방어] print 데드코드 정리 및 표준 로깅 래핑
             logging.warning("⚠️ [보안 경고] ADMIN_CHAT_ID가 설정되지 않아 알 수 없는 사용자의 접근을 차단했습니다.")
             return False
             

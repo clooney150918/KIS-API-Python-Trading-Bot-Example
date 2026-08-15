@@ -2,15 +2,15 @@
 # FILE: telegram_callbacks.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 3중 딥다이브 교차 검증(Async I/O 족쇄, State Mismatch 방어, 파서 붕괴 사수) 100% 통과 완료.
-# 🚨 MODIFIED: [암살자 팻핑거 뇌관 영구 소각] 관제탑에서 진입률/익절률을 변경하는 INPUT:AVWAP_ENTRANCE 및 AVWAP_EXIT 콜백 라우팅이 제거되었으므로, 해당 서브 도메인 연결을 시스템 무결성 차원에서 진공 압축.
+# 🚨 MODIFIED: [보조전략 팻핑거 뇌관 영구 정리] 관제탑에서 진입률/익절률을 변경하는 INPUT:AUX_ENTRANCE 및 AUX_EXIT 콜백 라우팅이 제거되었으므로, 해당 서브 도메인 연결을 시스템 무결성 차원에서 진공 압축.
 # 🚨 MODIFIED: [도메인 주도 라우팅] 2,000라인 이상의 God Object를 5개의 도메인 핸들러로 완벽히 분리 유지.
 # 🚨 MODIFIED: [제1헌법 준수] 하위 핸들러 호출 시 이벤트 루프 블로킹이 발생하지 않도록 100% 비동기 체인 락온.
 # 🚨 MODIFIED: [결합도 최소화] 의존성 주입(Dependency Injection)을 통해 각 도메인 핸들러가 필요한 코어 엔진만 참조하도록 캡슐화.
 # 🚨 MODIFIED: [Case 26 절대 헌법 준수] 텔레그램 HTML 파서 붕괴(Silent Death) 방어를 위한 html.escape 쉴드 전역 강제 주입.
 # 🚨 MODIFIED: [NoneType 궁극 방어] 텔레그램 서버 노이즈로 query.data가 None으로 유입 시 발생하는 AttributeError 즉사 버그 원천 봉쇄.
 # 🚨 MODIFIED: [Case 38 무한 로딩 패러독스 차단] 알 수 없는 라우팅(else) 및 예외(except) 발생 시 텔레그램 클라이언트의 버튼 로딩 스피너가 영원히 도는 현상을 막기 위한 query.answer() 샌드박스 100% 강제 락온.
-# 🚨 MODIFIED: [통신 데드락 붕괴 영구 소각] 에러 알림 전송(query.answer, send_message) 시 텔레그램 서버 지연으로 인한 이벤트 루프 마비(Deadlock)를 원천 차단하기 위한 asyncio.wait_for 족쇄 전면 결속.
-# 🚨 MODIFIED: [Thundering Herd 영구 소각] 라우팅 엔진 내부에 잔존하던 불필요한 sleep 및 동기 I/O 찌꺼기 100% 영구 소각.
+# 🚨 MODIFIED: [통신 데드락 붕괴 영구 정리] 에러 알림 전송(query.answer, send_message) 시 텔레그램 서버 지연으로 인한 이벤트 루프 마비(Deadlock)를 원천 차단하기 위한 asyncio.wait_for 족쇄 전면 결속.
+# 🚨 MODIFIED: [Thundering Herd 영구 정리] 라우팅 엔진 내부에 잔존하던 불필요한 sleep 및 동기 I/O 찌꺼기 100% 영구 정리.
 # 🚨 NEW: [MANUAL_PORTION 라우팅 위임] 1회분 수동 매수/매도 액션(MANUAL_PORTION)을 Order Handler 도메인으로 100% 팩트 배선 결속.
 # ==========================================================
 import html

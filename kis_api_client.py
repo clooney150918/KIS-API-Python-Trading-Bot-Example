@@ -2,16 +2,16 @@
 # FILE: kis_api_client.py
 # ==========================================================
 # 🚨 MODIFIED: [파사드 패턴 1단계] KIS API 순수 통신 및 토큰 제어 도메인 분리
-# 🚨 MODIFIED: [Thundering Herd 붕괴 궁극 수술] 파편화된 time.sleep(0.06) 땜질 코드를 전면 소각하고, GlobalThrottle.wait_api_sync() 기반 100% 중앙 집중형 TPS 방어망 결속.
+# 🚨 MODIFIED: [Thundering Herd 붕괴 궁극 수술] 파편화된 time.sleep(0.06) 땜질 코드를 전면 정리하고, GlobalThrottle.wait_api_sync() 기반 100% 중앙 집중형 TPS 방어망 결속.
 # 🚨 MODIFIED: [Lost Update 궁극 방어] 토큰 파일 읽기/쓰기 시 GlobalThrottle.get_file_lock() 기반 파일 뮤텍스 100% 팩트 래핑.
-# 🚨 MODIFIED: [Case 08] TOCTOU 레이스 컨디션을 유발하는 os.path.exists 영구 소각 및 EAFP 패턴 락온
+# 🚨 MODIFIED: [Case 08] TOCTOU 레이스 컨디션을 유발하는 os.path.exists 영구 정리 및 EAFP 패턴 락온
 # 🚨 MODIFIED: [Case 16] 원자적 쓰기(Atomic Write) 강제 및 tempfile 스코프 전진 배치
 # 🚨 MODIFIED: [Insight 14 & 25] NaN, Infinity 및 String-Comma 맹독성 데이터 정밀 필터링 절대 쉴드 내재화
-# 🚨 MODIFIED: [제3헌법 준수] 토큰 만료 연산 시 잔존하던 KST 혼용 뇌관 전면 소각 및 EST 타임라인 100% 통합
+# 🚨 MODIFIED: [제3헌법 준수] 토큰 만료 연산 시 잔존하던 KST 혼용 뇌관 전면 정리 및 EST 타임라인 100% 통합
 # 🚨 MODIFIED: [AttributeError 궁극 수술] 서버 응답(msg1, msg_cd) NoneType 유입 시 .lower() 붕괴 원천 차단
-# 🚨 MODIFIED: [로깅 증발 방어] 헤드리스(Headless) 환경에서 증발하는 print() 데드코드 전면 소각 및 logging 체계 100% 락온
+# 🚨 MODIFIED: [로깅 증발 방어] 헤드리스(Headless) 환경에서 증발하는 print() 데드코드 전면 정리 및 logging 체계 100% 락온
 # 🚨 NEW: [토큰 데드락 궁극 수술] 정기점검 후 KIS 서버의 비표준 Reject(점검, 권한, 등록되지 등)에 대응하기 위한 맹독성 에러 키워드 스펙트럼 확장 결속.
-# 🚨 NEW: [연속 Reject 컷오프] 3회 연속 API 거절(rt_cd != 0) 시 무조건 토큰을 영구 소각하는 Fail-Safe 방어망 전면 이식 완료.
+# 🚨 NEW: [연속 Reject 컷오프] 3회 연속 API 거절(rt_cd != 0) 시 무조건 토큰을 영구 정리하는 Fail-Safe 방어망 전면 이식 완료.
 # ==========================================================
 
 import requests
@@ -104,10 +104,10 @@ class KisApiClient:
         return max(0.01, math.ceil(round(self._safe_float(value) * 100, 4)) / 100.0)
 
     def _get_access_token(self, force=False):
-        # 🚨 [제3헌법 절대 락온] KST 혼용 파이프라인 전면 소각 및 EST 100% 매핑
+        # 🚨 [제3헌법 절대 락온] KST 혼용 파이프라인 전면 정리 및 EST 100% 매핑
         est = ZoneInfo('America/New_York')
         
-        # 🚨 [Case 08] os.path.exists 소각 및 EAFP 패턴으로 TOCTOU 레이스 컨디션 차단
+        # 🚨 [Case 08] os.path.exists 정리 및 EAFP 패턴으로 TOCTOU 레이스 컨디션 차단
         if not force:
             try:
                 # 🚨 NEW: 파일 I/O Mutex 락온
@@ -135,7 +135,7 @@ class KisApiClient:
         # 🚨 [Case 33] 3단 지수 백오프 토큰 발급 이식
         for attempt in range(3):
             try:
-                # 🚨 MODIFIED: 파편화된 sleep 무식 방어망 소각 및 중앙 통제소 락온
+                # 🚨 MODIFIED: 파편화된 sleep 무식 방어망 정리 및 중앙 통제소 락온
                 GlobalThrottle.wait_api_sync()
                 
                 res = requests.post(url, headers={"content-type": "application/json"}, data=json.dumps(body), timeout=10)
@@ -357,7 +357,7 @@ class KisApiClient:
         for attempt in range(3):
             try:
                 for prdt_type in ["512", "513", "529"]:
-                    # 🚨 MODIFIED: 루프 내 파편화된 sleep 소각 및 중앙 통제소 락온
+                    # 🚨 MODIFIED: 루프 내 파편화된 sleep 정리 및 중앙 통제소 락온
                     GlobalThrottle.wait_api_sync()
                     params = {"PRDT_TYPE_CD": prdt_type, "PDNO": ticker}
                     res = self._call_api("CTPF1702R", "/uapi/overseas-price/v1/quotations/search-info", "GET", params=params)

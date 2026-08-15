@@ -3,9 +3,9 @@
 # ==========================================================
 # 🚨 MODIFIED: [Lost Update 궁극 방어] 파일 경로 기반 독립 Mutex Lock 100% 팩트 결속
 # 🚨 MODIFIED: [상태 원자적 제어 도메인 분리] 스케줄러 내부에 혼재하던 파일 I/O 로직을 전담
-# 🚨 MODIFIED: [제2헌법 단일 책임 및 중복 소각] 읽기/원자적 쓰기 절차를 헬퍼로 100% 진공 압축
+# 🚨 MODIFIED: [제2헌법 단일 책임 및 중복 정리] 읽기/원자적 쓰기 절차를 헬퍼로 100% 진공 압축
 # 🚨 MODIFIED: [제4헌법 절대 사수] tempfile 생성 ➔ flush ➔ fsync ➔ os.replace 기반 100% 원자적 쓰기 강제
-# 🚨 MODIFIED: [Case 08, 16] os.path.exists 소각 및 EAFP 패턴 / 스코프 전진 배치 적용
+# 🚨 MODIFIED: [Case 08, 16] os.path.exists 정리 및 EAFP 패턴 / 스코프 전진 배치 적용
 # ==========================================================
 
 import os
@@ -58,9 +58,9 @@ def _atomic_write_json_sync(filepath, data):
             logging.error(f"🚨 상태 파일 원자적 쓰기 실패 ({filepath}): {e}")
             raise e
 
-def read_aslice_state_sync(ticker, date_str):
+def read_aux_state_sync(ticker, date_str):
     """ 
-    🚨 [Case 39 방어] 암살자 자본 잠김(Capital Lock-up) 스캔 헬퍼
+    🚨 [Case 39 방어] 보조전략 자본 잠김(Capital Lock-up) 스캔 헬퍼
     - 순수 동기 함수이므로 호출부에서 반드시 asyncio.to_thread 래핑 강제
     """
     state_file = f"data/aux_trade_state_{ticker}.json"
@@ -70,7 +70,7 @@ def save_aftermarket_state_sync(ticker, date_str, slice_info):
     if not isinstance(slice_info, dict):
         return
 
-    state_file = f"data/vwap_aftermarket_state_{ticker}.json"
+    state_file = f"data/slice_aftermarket_state_{ticker}.json"
     data = _read_json_safe_sync(state_file, date_str)
     if not data:
         data = {"date": date_str, "orders": []}
@@ -86,7 +86,7 @@ def save_slice_state_sync(ticker, date_str, slice_info):
     if not isinstance(slice_info, dict):
         return
 
-    state_file = f"data/vwap_slice_state_{ticker}.json"
+    state_file = f"data/slice_state_{ticker}.json"
     data = _read_json_safe_sync(state_file, date_str)
     if not data:
         data = {"date": date_str, "orders": []}

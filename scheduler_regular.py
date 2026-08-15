@@ -2,10 +2,10 @@
 # FILE: scheduler_regular.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 38대 엣지 케이스 완벽 결속 교차 검증 완료.
-# 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 await asyncio.sleep(0.06) 땜질을 무려 24개소에서 전면 삭제.
+# 🚨 MODIFIED: [Thundering Herd 영구 정리] 파편화된 await asyncio.sleep(0.06) 땜질을 무려 24개소에서 전면 삭제.
 # 🚨 MODIFIED: [중앙 통제소 위임] 모든 API 지연을 GlobalThrottle(중앙 통제소)로 100% 위임하여 비동기 이벤트 루프 마비 및 교착 상태 완벽 방어.
-# 🚨 MODIFIED: [예약 주문 증발(Ghost Order) 궁극 수술] V14 LOC 장전 시 하드코딩되어 있던 `is_market_active_now = False`를 영구 소각. 현재 시간(EST)을 동적으로 판별하여 프리장 개장 후(서머타임 04:05 EST)에는 실시간 본주문(`send_order`)을, 개장 전(윈터타임 03:05 EST)에는 예약 주문(`send_reservation_order`)을 격발하도록 팩트 락온 완료.
-# 🚨 MODIFIED: [자본 잠김 맹독성 컷오프 파기] 암살자 물량 보유 여부만으로 무조건 본진 타격을 지연 이관하던 오류를 영구 소각하고, 실질적 예산(safe_alloc_cash)이 목표 예산(15%)의 90% 미만일 때만 자본 잠김으로 판별하도록 팩트 교정 완료.
+# 🚨 MODIFIED: [예약 주문 증발(Ghost Order) 궁극 수술] V14 LOC 장전 시 하드코딩되어 있던 `is_market_active_now = False`를 영구 정리. 현재 시간(EST)을 동적으로 판별하여 프리장 개장 후(서머타임 04:05 EST)에는 실시간 본주문(`send_order`)을, 개장 전(윈터타임 03:05 EST)에는 예약 주문(`send_reservation_order`)을 격발하도록 팩트 락온 완료.
+# 🚨 MODIFIED: [자본 잠김 맹독성 컷오프 파기] 보조전략 물량 보유 여부만으로 무조건 본진 타격을 지연 이관하던 오류를 영구 정리하고, 실질적 예산(safe_alloc_cash)이 목표 예산(15%)의 90% 미만일 때만 자본 잠김으로 판별하도록 팩트 교정 완료.
 # ==========================================================
 import logging
 import datetime

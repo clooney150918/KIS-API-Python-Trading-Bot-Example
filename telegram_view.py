@@ -2,13 +2,13 @@
 # FILE: telegram_view.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 43대 엣지 케이스 완벽 결속 교차 검증 완료.
-# 🚨 MODIFIED: [UI 직관성 궁극 교정] 암살자 장부 0주 대기 상태 렌더링 시 'OFF' 표출을 'STANDBY (타점 감시 중 / 0주)'로 100% 팩트 교체하여 엔진 가동 상태(ON)와의 논리적 오해 원천 차단.
-# 🚨 MODIFIED: [Phase 4 암살자 장부 상시 렌더링 락온] `create_ledger_dashboard` 메서드 호출 시 암살자 데이터가 0주라도 무조건 "OFF (대기 중 / 0주)"를 표출하여 사용자 팩트 검증을 보조.
-# 🚨 MODIFIED: [Phase 4 암살자 지정 예산 렌더링] /settlement 호출 시 표출되는 설정 화면에 사용자가 지정한 '암살자 예산'과 '오버나이트 모드'를 100% 팩트로 표출.
-# 🚨 MODIFIED: [Phase 4 인라인 버튼 결속] 암살자 설정 메뉴(SETTLEMENT)에 "🔫 암살자 1회 주문 예산" 및 "🌙 오버나이트 토글" 버튼 주입 완료.
+# 🚨 MODIFIED: [UI 직관성 궁극 교정] 보조전략 장부 0주 대기 상태 렌더링 시 'OFF' 표출을 'STANDBY (타점 감시 중 / 0주)'로 100% 팩트 교체하여 엔진 가동 상태(ON)와의 논리적 오해 원천 차단.
+# 🚨 MODIFIED: [Phase 4 보조전략 장부 상시 렌더링 락온] `create_ledger_dashboard` 메서드 호출 시 보조전략 데이터가 0주라도 무조건 "OFF (대기 중 / 0주)"를 표출하여 사용자 팩트 검증을 보조.
+# 🚨 MODIFIED: [Phase 4 보조전략 지정 예산 렌더링] /settlement 호출 시 표출되는 설정 화면에 사용자가 지정한 '보조전략 예산'과 '오버나이트 모드'를 100% 팩트로 표출.
+# 🚨 MODIFIED: [Phase 4 인라인 버튼 결속] 보조전략 설정 메뉴(SETTLEMENT)에 "🔫 보조전략 1회 주문 예산" 및 "🌙 오버나이트 토글" 버튼 주입 완료.
 # 🚨 MODIFIED: [Float 정밀도 붕괴 원천 차단] 뷰어 클래스 내에 `_safe_float` 래퍼를 전격 이식하여 파편화된 인라인 캐스팅을 통합하고 NaN/Inf 맹독성 붕괴 원천 차단.
 # 🚨 MODIFIED: [Case 16 위반 교정] 이미지 렌더링(create_profit_image) 시 원자적 쓰기 실패에 따른 UnboundLocalError 연쇄 붕괴를 막기 위한 temp_path 스코프 최상단 전진 배치.
-# 🚨 MODIFIED: [V4.0 LOC 전용 수동 제어망 결속] 통합 지시서(create_sync_report) 렌더링 시 V4.0 및 VWAP 모드를 배제하고 오직 V4.0 LOC 모드에만 수동 전송/취소 버튼이 스위칭 렌더링되도록 팩트 락온.
+# 🚨 MODIFIED: [V4.0 LOC 전용 수동 제어망 결속] 통합 지시서(create_sync_report) 렌더링 시 V4.0 및 SLICE 모드를 배제하고 오직 V4.0 LOC 모드에만 수동 전송/취소 버튼이 스위칭 렌더링되도록 팩트 락온.
 # 🚨 NEW: [V4.0 전용 수동 제어망 결속] 통합지시서에 V4.0 모드 전용 '1회분 수동매수/수동매도' 버튼 주입 완료. 오리지널(V4.0) 모드에서는 철저히 격리(Bypass)됨.
 # 🚨 MODIFIED: [LOC 전용 UI 정리] 삭제된 보조 엔진으로 연결되던 메뉴/버튼 표면 제거 완료.
 # ==========================================================
@@ -782,7 +782,7 @@ class TelegramView:
     def get_lots_action_confirm_menu(self, *a, **kw):
         return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
-    def get_avwap_reset_confirm_menu(self, *a, **kw):
+    def get_aux_reset_confirm_menu(self, *a, **kw):
         return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
     def get_vrev_mode_selection_menu(self, *a, **kw):

@@ -1,7 +1,7 @@
 # ==========================================================
 # FILE: order_executor.py
 # ==========================================================
-# 🚨 MODIFIED: [Thundering Herd 영구 소각] 파편화된 await asyncio.sleep(0.06) 땜질 전면 삭제.
+# 🚨 MODIFIED: [Thundering Herd 영구 정리] 파편화된 await asyncio.sleep(0.06) 땜질 전면 삭제.
 # 🚨 MODIFIED: [중앙 통제소 위임] 모든 API 지연을 GlobalThrottle(중앙 통제소)로 100% 위임하여 이벤트 루프 교착 상태 완벽 방어.
 # 🚨 MODIFIED: [자본 잠김 패러독스 파기] 자본 잠김(is_capital_locked) 시 매수(BUY) 주문만 애프터장으로 지연 이관하고, 매도(SELL) 주문은 100% 정상적으로 정규장 슬라이싱/지정가 타격을 강행하도록 매도 탈출망 디커플링 결속 완료.
 # ==========================================================
@@ -376,16 +376,16 @@ async def execute_order_list(broker, ticker, orders_list, successful_orders_cach
             res = {}
 
             try:
-                # 🚨 MODIFIED: [매도 탈출망 확보] 자본이 잠기더라도 매도(SELL) 주문은 애프터장으로 날리지 않고 정규장 엔진(VWAP 등)으로 정상 인계
+                # 🚨 MODIFIED: [매도 탈출망 확보] 자본이 잠기더라도 매도(SELL) 주문은 애프터장으로 날리지 않고 정규장 엔진(SLICE 등)으로 정상 인계
                 if is_capital_locked and o_side == 'BUY':
                     slice_info = {"ticker": ticker, "side": o_side, "total_qty": o_qty, "filled_qty": 0, "target_price": o_price, "desc": o_desc, "status": "PENDING"}
                     await asyncio.wait_for(asyncio.to_thread(save_aftermarket_state_sync, ticker, today_str, slice_info), timeout=10.0)
                     res = {'rt_cd': '0', 'msg1': '애프터장 매수 지연 이관 완료', 'odno': f'AFTERMARKET_{id(o)}'}
 
-                elif o_type == 'VWAP':
+                elif o_type == 'SLICE':
                     slice_info = {"ticker": ticker, "side": o_side, "total_qty": o_qty, "filled_qty": 0, "target_price": o_price, "desc": o_desc, "status": "PENDING"}
                     await asyncio.wait_for(asyncio.to_thread(save_slice_state_sync, ticker, today_str, slice_info), timeout=10.0)
-                    res = {'rt_cd': '0', 'msg1': '로컬 자체 VWAP 엔진 위임 완료', 'odno': f'LOCAL_VWAP_{id(o)}'}
+                    res = {'rt_cd': '0', 'msg1': '로컬 자체 SLICE 엔진 위임 완료', 'odno': f'LOCAL_SLICE_{id(o)}'}
 
                 else:
                     kwargs = {}

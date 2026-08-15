@@ -21,12 +21,12 @@ TARGET_FILES = [
     "order_executor.py",
     "state_io_manager.py",
     "scheduler_volatility.py",
-    "scheduler_vwap.py",
+    "scheduler_slice.py",
     "global_throttle.py",
     "strategy.py",
     "strategy_reversion.py",
     "strategy_v14.py",
-    "telegram_avwap_console.py",
+    "telegram_aux_console.py",
     "telegram_bot.py",
     "telegram_callbacks.py",
     "telegram_states.py",
@@ -37,7 +37,7 @@ TARGET_FILES = [
     "volatility_engine.py",
     "callback_queue_handler.py",
     "callback_order_handler.py",
-    "callback_avwap_handler.py",
+    "callback_aux_handler.py",
     "callback_config_handler.py",
     "assassin_ledger.py"
 ]

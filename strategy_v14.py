@@ -2,7 +2,7 @@
 # FILE: strategy_v14.py
 # ==========================================================
 # 🚨 MODIFIED: [Lost Update 궁극 방어] 스냅샷 파일 I/O 전역에 GlobalThrottle.get_file_lock()을 100% 팩트 래핑 완료.
-# 🚨 MODIFIED: [TypeError 런타임 붕괴 방어] datetime.time 충돌 소각 및 정수 연산 락온 유지.
+# 🚨 MODIFIED: [TypeError 런타임 붕괴 방어] datetime.time 충돌 정리 및 정수 연산 락온 유지.
 # 🚨 NEW: [0주 스냅샷 오염 팩트 자가치유(Self-Healing) 결속] 통신 지연으로 YF 종가가 훼손되어 스냅샷 타점이 0.0 등으로 오염될 경우, 로드 시 공식 종가(prev_c) 기반으로 타점($)과 수량(Q)을 원자적으로 재계산하여 덮어쓰는(Self-Healing) 방어망 100% 락온 (Case 46 방어 강화).
 # 🚨 MODIFIED: [리버스 자본 격리 아키텍처 결속] 스냅샷 생성 모드(is_snapshot_mode=True)일 때만 cfg.apply_reverse_daily_settlement(ticker)를 호출하여 1일 1회 원자적 장부 정산이 실행되도록 팩트 락온.
 # ==========================================================
@@ -432,7 +432,7 @@ class V4Strategy:
                         price=normal_plan.star_buy_price, qty=normal_plan.star_buy_quantity,
                         desc="공식별값매수",
                     ))
-                # 줍줍(하단 LOC): 별값매수 제외 5x1주, 가격 = 하루매수금/(별값수량+k)
+                # 보너스(하단 LOC): 별값매수 제외 5x1주, 가격 = 하루매수금/(별값수량+k)
                 if normal_plan.star_buy_quantity > 0 and normal_plan.one_buy_budget > 0:
                     _jj_base = int(normal_plan.star_buy_quantity)
                     for _k in range(1, 6):
@@ -441,7 +441,7 @@ class V4Strategy:
                             ticker=target, trade_date=trade_date, t_revision=t_revision,
                             event_type="BONUS", side="BUY", order_type="LOC",
                             price=float(_jj_price), qty=1,
-                            desc="공식줍줍",
+                            desc="공식보너스",
                         ))
                 if normal_plan.quarter_sell_quantity > 0:
                     orders.append(self._official_order(

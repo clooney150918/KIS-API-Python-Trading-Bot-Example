@@ -2,12 +2,12 @@
 # FILE: telegram_states.py
 # ==========================================================
 # 🚨 VERIFIED: [최종 무결점 판정] 5대 헌법 및 48대 엣지 케이스 완벽 결속 교차 검증 완료.
-# 🚨 MODIFIED: [Lost Update 궁극 방어] 파일 물리 삭제 및 덮어쓰기 로직(_clear_stale_snapshot_lock, _process_reset_files, _nuke_assassin_data) 전역에 GlobalThrottle.get_file_lock()을 100% 팩트 래핑 완료.
-# 🚨 MODIFIED: [중복 매도 패러독스 궁극 수술] RESET:LOCK (잠금 해제) 격발 시, 스냅샷 파일뿐만 아니라 봇이 쥐고 있던 '당일 체결 기억(slice_state)' 캐시 파일까지 와일드카드(Glob)로 100% 영구 소각하여 0주 졸업 및 이중 매도 락온(Ghost Selling Block) 맹점을 원천 봉쇄.
+# 🚨 MODIFIED: [Lost Update 궁극 방어] 파일 물리 삭제 및 덮어쓰기 로직(_clear_stale_snapshot_lock, _process_reset_files, _reset_assassin_data) 전역에 GlobalThrottle.get_file_lock()을 100% 팩트 래핑 완료.
+# 🚨 MODIFIED: [중복 매도 패러독스 궁극 수술] RESET:LOCK (잠금 해제) 격발 시, 스냅샷 파일뿐만 아니라 봇이 쥐고 있던 '당일 체결 기억(slice_state)' 캐시 파일까지 와일드카드(Glob)로 100% 영구 정리하여 0주 졸업 및 이중 매도 락온(Ghost Selling Block) 맹점을 원천 봉쇄.
 # 🚨 MODIFIED: [LOC 전용 UI 정리] 삭제된 보조 UI 상태 입력 경로 제거 완료.
-# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 상태 변경 시 낡은 스냅샷과 slice_state 캐시를 소각하여 중복 주문을 차단.
+# 🚨 MODIFIED: [이중 타격 방어 팩트 확장] 수동 상태 변경 시 낡은 스냅샷과 slice_state 캐시를 정리하여 중복 주문을 차단.
 # 🚨 RESTORED: [유실 코드 100% 팩트 복구] _handle_callback_reset 및 _handle_callback_confirm 메서드를 원상 복구하고 파일 뮤텍스를 강제 주입하여 무결성 사수.
-# 🚨 MODIFIED: [시간대별 동적 셧다운 락온] _nuke_assassin_data 내부에서 무지성 shutdown=True 주입을 영구 소각하고, 프리장(04:00~09:29 EST)에만 락을 거는 동적 방어망 100% 팩트 교정 완료.
+# 🚨 MODIFIED: [시간대별 동적 셧다운 락온] _reset_assassin_data 내부에서 무지성 shutdown=True 주입을 영구 정리하고, 프리장(04:00~09:29 EST)에만 락을 거는 동적 방어망 100% 팩트 교정 완료.
 # ==========================================================
 
 import logging
@@ -126,8 +126,8 @@ class TelegramStates:
                     try: await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.edit_lot, ticker, target_date, qty, price), timeout=10.0)
                     except Exception as e: logging.error(f"🚨 지층 수정 파일 I/O 에러: {e}")
                 
-                # 🚨 MODIFIED: [이중 타격 방어] 낡은 스냅샷(Snapshot), 캐시, 슬라이스/애프터장 지시서 전면 영구 소각 (State Mismatch 방어)
-                def _nuke_snapshot_and_state_edit():
+                # 🚨 MODIFIED: [이중 타격 방어] 낡은 스냅샷(Snapshot), 캐시, 슬라이스/애프터장 지시서 전면 영구 정리 (State Mismatch 방어)
+                def _reset_snapshot_and_state_edit():
                     for f in glob.glob(f"data/daily_snapshot_*_{ticker}.json"):
                         with GlobalThrottle.get_file_lock(f):
                             try: os.remove(f)
@@ -137,13 +137,13 @@ class TelegramStates:
                             try: os.remove(f)
                             except OSError: pass
                             
-                await asyncio.wait_for(asyncio.to_thread(_nuke_snapshot_and_state_edit), timeout=10.0)
+                await asyncio.wait_for(asyncio.to_thread(_reset_snapshot_and_state_edit), timeout=10.0)
 
                 del controller.user_states[chat_id]
                 short_date = html.escape(str(target_date[:10]))
                 
                 # 🚨 MODIFIED: [장부 인덱스 뒤집힘 패러독스 원천 차단 및 가이드 팩트 교정] 
-                # 수동 조작 중 KIS 자동 동기화가 난입해 잔고 오차분만큼 최신 지층을 강제 팝(Pop)해버리는 맹독성 로직 전면 소각
+                # 수동 조작 중 KIS 자동 동기화가 난입해 잔고 오차분만큼 최신 지층을 강제 팝(Pop)해버리는 맹독성 로직 전면 정리
                 # 가이드 텍스트의 /sync 오기입을 /record 로 100% 교체 락온
                 try: await asyncio.wait_for(update.effective_message.reply_text(f"✅ <b>[{safe_ticker}] 지층 정밀 수정 완료!</b>\n▫️ {short_date} | {qty}주 | ${price:.2f}\n\n⚠️ <b>[안전 격리 모드]</b>\n수동 다단계 조작 중 시스템 간섭을 막기 위해 <b>자동 동기화가 일시 차단</b>되었습니다.\n삭제 등 남은 수동 작업을 모두 마친 후, 반드시 <code>/record</code>를 눌러 KIS 실원장과 팩트 동기화하십시오.", parse_mode='HTML'), timeout=10.0)
                 except Exception: pass
@@ -323,7 +323,7 @@ class TelegramStates:
                 try:
                     est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
                     today_str = est_now.strftime("%Y-%m-%d")
-                    for snap_prefix in ["V14", "V14VWAP"]:
+                    for snap_prefix in ["V14", "V14SLICE"]:
                         snap_file = f"data/daily_snapshot_{snap_prefix}_{today_str}_{ticker}.json"
                         # 🚨 MODIFIED: 파일 뮤텍스 결속
                         with GlobalThrottle.get_file_lock(snap_file):
@@ -343,7 +343,7 @@ class TelegramStates:
     async def _handle_callback_confirm(self, query, ticker, context):
         if not ticker: return
         
-        try: await asyncio.wait_for(query.answer("🔥 삼위일체 소각 진행 중...", show_alert=False), timeout=5.0)
+        try: await asyncio.wait_for(query.answer("🔥 통합상태 정리 진행 중...", show_alert=False), timeout=5.0)
         except Exception: pass
         
         await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
@@ -354,15 +354,15 @@ class TelegramStates:
             await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.clear_lots, ticker), timeout=10.0)
             await asyncio.wait_for(asyncio.to_thread(self.legacy_lot_book.sync_with_account, ticker, 0, 0.0), timeout=10.0)
 
-        def _nuke_assassin_data():
+        def _reset_assassin_data():
             try:
                 from assassin_ledger import AssassinLedger
                 a_ledger = AssassinLedger()
                 a_ledger.clear_ledger(ticker)
             except Exception as e:
-                logging.error(f"🚨 [{ticker}] 암살자 장부 강제 소각 중 에러: {e}")
+                logging.error(f"🚨 [{ticker}] 보조전략 장부 강제 정리 중 에러: {e}")
             
-            # 🚨 MODIFIED: [암살자 부활 패러독스 궁극 방어] 파일 물리 삭제 제거 및 시간대별 동적 셧다운 주입
+            # 🚨 MODIFIED: [보조전략 부활 패러독스 궁극 방어] 파일 물리 삭제 제거 및 시간대별 동적 셧다운 주입
             state_file = f"data/aux_trade_state_{ticker}.json"
             # 🚨 MODIFIED: 파일 뮤텍스 결속
             with GlobalThrottle.get_file_lock(state_file):
@@ -411,9 +411,9 @@ class TelegramStates:
                             except OSError: pass
                         raise inner_e
                 except Exception as e:
-                    logging.error(f"🚨 [{ticker}] 암살자 상태 셧다운 주입 에러: {e}")
+                    logging.error(f"🚨 [{ticker}] 보조전략 상태 셧다운 주입 에러: {e}")
 
-        await asyncio.wait_for(asyncio.to_thread(_nuke_assassin_data), timeout=10.0)
+        await asyncio.wait_for(asyncio.to_thread(_reset_assassin_data), timeout=10.0)
         await asyncio.wait_for(asyncio.to_thread(self.cfg.reset_lock_for_ticker, ticker), timeout=10.0)
 
         prev_c = 0.0
@@ -424,7 +424,7 @@ class TelegramStates:
                 prev_c = self._safe_float(prev_c_val)
                 break
             except Exception as e:
-                if attempt == 2: logging.error(f"🚨 수동 소각 후 전일 종가 스캔 에러: {e}")
+                if attempt == 2: logging.error(f"🚨 수동 정리 후 전일 종가 스캔 에러: {e}")
                 else: await asyncio.sleep(1.0 * (2 ** attempt))
         
         if prev_c > 0:
@@ -468,7 +468,7 @@ class TelegramStates:
                 logging.error(f"🚨 0주 강제 스냅샷 오버라이드 에러: {e}")
 
         try:
-            await asyncio.wait_for(query.edit_message_text(f"✅ <b>[{html.escape(str(ticker))}] 삼위일체 소각(Nuke) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 큐(Queue) 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 암살자의 재진입(부활)이 전면 차단되었으며, 매매 잠금 해제 및 디커플링 타점 스냅샷 덮어쓰기가 완벽히 집행되었습니다.", parse_mode='HTML'), timeout=10.0)
+            await asyncio.wait_for(query.edit_message_text(f"✅ <b>[{html.escape(str(ticker))}] 통합상태 정리(Reset) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 은퇴LOT 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 보조전략의 재진입(부활)이 전면 차단되었으며, 매매 잠금 해제 및 디커플링 타점 스냅샷 덮어쓰기가 완벽히 집행되었습니다.", parse_mode='HTML'), timeout=10.0)
         except telegram.error.BadRequest as e:
             if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
         except Exception: pass
