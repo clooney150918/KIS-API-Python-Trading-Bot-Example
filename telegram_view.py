@@ -453,7 +453,7 @@ class TelegramView:
                 warning_reason = order_status_warning.get('reason') or 'order intent ledger unavailable'
                 body_msg += f"⛔ <b>HALT 주문 상태 원장:</b> {html.escape(str(warning_reason))}\n"
 
-            body_msg += f"💰 보유   <b>{fact_qty}주 · 평단 ${safe_avg:.2f} · 잔금 ${kis_cash:,.0f}</b>\n"
+            body_msg += f"💰 보유   <b>{fact_qty}주 · 평단 ${safe_avg:.2f} · 현재가 ${safe_curr:.2f} · 잔금 ${kis_cash:,.0f}</b>\n"
             sign = "+" if safe_profit_amt >= 0 else "-"
             icon = "🔺" if safe_profit_amt >= 0 else "🔻"
             body_msg += f"{icon} 수익   <b>{sign}{abs(safe_profit_pct):.1f}% ({sign}${abs(safe_profit_amt):,.0f})</b>\n\n"
