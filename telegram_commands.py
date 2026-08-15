@@ -57,32 +57,10 @@ class TelegramCommands:
 
     def _build_local_ledger_summary_for_sync(self, ticker):
         try:
-            from pathlib import Path
-
-            configured = getattr(self.cfg, "FILES", {}).get("LEDGER") if hasattr(self.cfg, "FILES") else None
-            if configured and not Path(str(configured)).exists():
-                raise FileNotFoundError(f"local/manual ledger unavailable: {configured}")
-            ledger_rows = self.cfg.get_ledger() if hasattr(self.cfg, "get_ledger") else []
-            if not isinstance(ledger_rows, list):
-                raise ValueError("local/manual ledger corrupt: expected JSON array")
-            if hasattr(self.cfg, "calculate_holdings"):
-                qty, avg, invested, sold = self.cfg.calculate_holdings(ticker, ledger_rows)
+            if hasattr(self.cfg, "calculate_holdings_from_official_ledger"):
+                qty, avg, invested, sold = self.cfg.calculate_holdings_from_official_ledger(ticker)
             else:
-                ticker_rows = [r for r in ledger_rows if isinstance(r, dict) and r.get("ticker") == ticker]
-                qty = sum(
-                    int(self._safe_float(r.get("qty", 0))) * (1 if r.get("side") == "BUY" else -1)
-                    for r in ticker_rows
-                )
-                buy_amount = sum(
-                    self._safe_float(r.get("price", 0.0)) * int(self._safe_float(r.get("qty", 0)))
-                    for r in ticker_rows if r.get("side") == "BUY"
-                )
-                buy_qty = sum(
-                    int(self._safe_float(r.get("qty", 0)))
-                    for r in ticker_rows if r.get("side") == "BUY"
-                )
-                avg = (buy_amount / buy_qty) if buy_qty > 0 else 0.0
-                invested, sold = buy_amount, 0.0
+                raise ValueError("official ledger (calculate_holdings_from_official_ledger) unavailable")
             return {
                 "qty": max(0, int(self._safe_float(qty))),
                 "avg": self._safe_float(avg),
@@ -90,8 +68,8 @@ class TelegramCommands:
                 "sold": self._safe_float(sold),
             }
         except Exception as e:
-            reason = f"local/manual ledger unavailable or corrupt: {e}"
-            logging.warning(f"⚠️ [{ticker}] 로컬 장부 비교값 로드 실패: {e}")
+            reason = f"official ledger unavailable or corrupt: {e}"
+            logging.warning(f"⚠️ [{ticker}] 신규 원장(실제 체결가) 비교값 로드 실패: {e}")
             return {"unavailable": True, "error": reason}
 
     def _build_kis_local_discrepancy_for_sync(self, official_balance, local_ledger):
