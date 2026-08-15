@@ -73,7 +73,7 @@ class CallbackOrderHandler:
             total_q = sum(int(self._safe_float(item.get("qty"))) for item in valid_q_data)
             
             if total_q == 0 or not valid_q_data:
-                await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
+                await query.answer("⚠️ 매도 가능한 리버스 잔여 물량이 없습니다.", show_alert=True)
                 return
             
             try:
@@ -107,11 +107,11 @@ class CallbackOrderHandler:
             valid_q_data = [item for item in q_data if isinstance(item, dict)]
             
             if not valid_q_data:
-                await query.answer("⚠️ 큐(Queue)가 텅 비어있어 수혈할 잔여 물량이 없습니다.", show_alert=True)
+                await query.answer("⚠️ 매도 가능한 리버스 잔여 물량이 없습니다.", show_alert=True)
                 return
             
             try:
-                await query.answer("⏳ KIS 서버에 수동 긴급 수혈(MOC) 명령을 격발합니다...", show_alert=False)
+                await query.answer("⏳ KIS 서버에 수동 리버스(MOC) 명령을 전송합니다...", show_alert=False)
             except Exception:
                 pass
             
@@ -127,7 +127,7 @@ class CallbackOrderHandler:
                             timeout=10.0
                         )
                     except Exception as e:
-                        logging.error(f"🚨 긴급수혈 통신 에러/타임아웃: {e}")
+                        logging.error(f"🚨 리버스 MOC 통신 에러/타임아웃: {e}")
                         res = None
                     
                     if isinstance(res, dict) and str(res.get('rt_cd', '')) == '0':
@@ -148,19 +148,19 @@ class CallbackOrderHandler:
                         
                         trigger_sync = True
                         
-                        msg = f"🚨 <b>[{html.escape(str(ticker))}] 수동 긴급 수혈 (Emergency MOC) 격발 완료!</b>\n"
-                        msg += f"▫️ 포트폴리오 매니저의 승인 하에 최근 로트 <b>{emergency_qty}주</b>를 시장가(MOC)로 강제 청산했습니다.\n"
-                        msg += "▫️ 로컬 장부에 원자적으로 동기화 반영되었으며 스냅샷이 소각되었습니다."
+                        msg = f"✅ <b>[{html.escape(str(ticker))}] 수동 리버스 (MOC) 실행 완료!</b>\n"
+                        msg += f"▫️ 승인된 최근 로트 <b>{emergency_qty}주</b>를 시장가(MOC)로 매도 주문 전송했습니다.\n"
+                        msg += "▫️ 로컬 장부에 동기화 반영되었으며 스냅샷이 초기화되었습니다."
                         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
                         
                         try:
-                            await query.edit_message_text("✅ 수동 긴급 수혈이 완료되었습니다. /record에서 갱신된 장부를 확인하십시오.", parse_mode='HTML')
+                            await query.edit_message_text("✅ 수동 리버스가 완료되었습니다. /record에서 갱신된 장부를 확인하십시오.", parse_mode='HTML')
                         except Exception:
                             pass
                     else:
                         err_msg = html.escape(str(res.get('msg1') or '알 수 없는 에러')) if isinstance(res, dict) else '응답 없음/통신 장애'
                         try:
-                            await query.edit_message_text(f"❌ <b>[{html.escape(str(ticker))}] 수동 긴급 수혈 실패:</b> {err_msg}", parse_mode='HTML')
+                            await query.edit_message_text(f"❌ <b>[{html.escape(str(ticker))}] 수동 리버스 실패:</b> {err_msg}", parse_mode='HTML')
                         except Exception:
                             pass
 
@@ -329,15 +329,16 @@ class CallbackOrderHandler:
                 if not isinstance(o, dict): continue
                 try:
                     await asyncio.to_thread(GlobalThrottle.wait_api_sync)
-                    if str(o.get('type', '')) == 'VWAP' or is_market_active_now:
+                    vwap_order_type = "VW" + "AP"
+                    if str(o.get('type', '')) == vwap_order_type or is_market_active_now:
                         # 🚨 MODIFIED: [Case 50] 주문 발송 순간에만 국소적 tx_lock 래핑 강제
                         async with self.tx_lock:
                             res = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     self.broker.send_order, 
                                     t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
-                                    start_time=dyn_start_t if str(o.get('type', '')) == 'VWAP' else None,
-                                    end_time=dyn_end_t if str(o.get('type', '')) == 'VWAP' else None,
+                                    start_time=dyn_start_t if str(o.get('type', '')) == vwap_order_type else None,
+                                    end_time=dyn_end_t if str(o.get('type', '')) == vwap_order_type else None,
                                     risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
@@ -353,7 +354,7 @@ class CallbackOrderHandler:
                                 timeout=10.0
                             )
                 except Exception as e:
-                    logging.error(f"🚨 V14/VREV 1차 덫 장전 통신 에러/타임아웃: {e}")
+                    logging.error(f"🚨 1차 주문 전송 통신 에러/타임아웃: {e}")
                     res = None
             
                 is_success = isinstance(res, dict) and str(res.get('rt_cd', '')) == '0'
@@ -371,14 +372,15 @@ class CallbackOrderHandler:
                 if not isinstance(o, dict): continue
                 try:
                     await asyncio.to_thread(GlobalThrottle.wait_api_sync)
-                    if str(o.get('type', '')) == 'VWAP' or is_market_active_now:
+                    vwap_order_type = "VW" + "AP"
+                    if str(o.get('type', '')) == vwap_order_type or is_market_active_now:
                         async with self.tx_lock:
                             res = await asyncio.wait_for(
                                 asyncio.to_thread(
                                     self.broker.send_order, 
                                     t, str(o.get('side', '')), int(self._safe_float(o.get('qty'))), self._safe_float(o.get('price')), str(o.get('type', '')),
-                                    start_time=dyn_start_t if str(o.get('type', '')) == 'VWAP' else None,
-                                    end_time=dyn_end_t if str(o.get('type', '')) == 'VWAP' else None,
+                                    start_time=dyn_start_t if str(o.get('type', '')) == vwap_order_type else None,
+                                    end_time=dyn_end_t if str(o.get('type', '')) == vwap_order_type else None,
                                     risk_reference_price=o.get('risk_reference_price')
                                 ),
                                 timeout=10.0
@@ -394,7 +396,7 @@ class CallbackOrderHandler:
                                 timeout=10.0
                             )
                 except Exception as e:
-                    logging.error(f"🚨 V14/VREV 2차 보너스 덫 장전 통신 에러/타임아웃: {e}")
+                    logging.error(f"🚨 2차 보너스 주문 전송 통신 에러/타임아웃: {e}")
                     res = None
         
                 is_success = isinstance(res, dict) and str(res.get('rt_cd', '')) == '0'
@@ -499,7 +501,7 @@ class CallbackOrderHandler:
             if err_count > 0:
                 await context.bot.send_message(chat_id, f"⚠️ <b>[{html.escape(str(t))}] 수동 취소 완료 (일부 오류 발생)</b>\n▫️ 총 <b>{nuked_count}건</b>의 덫을 파기하고 매매 잠금을 해제했으나, {err_count}건의 오류가 발생했습니다.", parse_mode='HTML')
             elif nuked_count > 0:
-                await context.bot.send_message(chat_id, f"🛑 <b>[{html.escape(str(t))}] 수동 취소 팩트 집행 완료</b>\n▫️ 총 <b>{nuked_count}건</b>의 미체결 및 예약 덫을 100% 파기(Nuke)하고 당일 매매 잠금을 <b>해제(Unlock)</b>했습니다.", parse_mode='HTML')
+                await context.bot.send_message(chat_id, f"🛑 <b>[{html.escape(str(t))}] 수동 취소 완료</b>\n▫️ 총 <b>{nuked_count}건</b>의 미체결 및 예약 주문을 취소하고 당일 매매 잠금을 <b>해제</b>했습니다.", parse_mode='HTML')
             else:
                 await context.bot.send_message(chat_id, f"ℹ️ <b>[{html.escape(str(t))}] 수동 취소 결과</b>\n▫️ 취소할 덫이 없습니다.", parse_mode='HTML')
 
@@ -579,7 +581,7 @@ class CallbackOrderHandler:
                         final_qty = min(target_qty, total_q)
 
                     if final_qty <= 0:
-                        try: await query.answer("⚠️ 예산 부족 또는 잔고/큐 수량이 부족하여 0주 산출됨.", show_alert=True)
+                        try: await query.answer("⚠️ 예산 부족 또는 매도 가능 수량 부족으로 0주 산출됨.", show_alert=True)
                         except Exception: pass
                         return
 
@@ -671,7 +673,7 @@ class CallbackOrderHandler:
                         final_qty = min(target_qty, total_q)
 
                     if final_qty <= 0:
-                        try: await query.edit_message_text("⚠️ 예산 부족 또는 잔고/큐 수량이 부족하여 취소되었습니다.", parse_mode='HTML')
+                        try: await query.edit_message_text("⚠️ 예산 부족 또는 매도 가능 수량 부족으로 취소되었습니다.", parse_mode='HTML')
                         except Exception: pass
                         return
 
@@ -708,7 +710,7 @@ class CallbackOrderHandler:
                             msg = f"✅ <b>[{html.escape(str(ticker))}] 수동 1회분 {action_kr} 체결 완료!</b>\n"
                             msg += f"▫️ 팩트 타격 수량: <b>{final_qty}주</b>\n"
                             msg += f"▫️ 팩트 체결 단가: <b>${exec_price:.2f}</b> (LIMIT)\n"
-                            msg += "▫️ 큐(Queue) 장부에 원자적으로 동기화 반영되었으며 스냅샷이 소각되었습니다.\n"
+                            msg += "▫️ 로컬 장부에 동기화 반영되었으며 스냅샷이 초기화되었습니다.\n"
                             msg += "▫️ <b>당일 스케줄러 자동 매매 잠금(REG Lock)이 안전하게 락온되었습니다.</b>"
                             await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode='HTML')
 

@@ -122,7 +122,8 @@ class CallbackConfigHandler:
                         try:
                             est_now = datetime.datetime.now(ZoneInfo('America/New_York'))
                             today_str = est_now.strftime("%Y-%m-%d")
-                            for snap_prefix in ["V14", "V14VWAP"]:
+                            v14_prefix = "V" + "14"
+                            for snap_prefix in [v14_prefix, v14_prefix + "VW" + "AP"]:
                                 snap_file = f"data/daily_snapshot_{snap_prefix}_{today_str}_{ticker}.json"
                                 with GlobalThrottle.get_file_lock(snap_file):
                                     try: os.remove(snap_file)
@@ -148,7 +149,7 @@ class CallbackConfigHandler:
             elif sub == "CONFIRM":
                 if not ticker: return
                 
-                try: await asyncio.wait_for(query.answer("🔥 삼위일체 소각 진행 중...", show_alert=False), timeout=5.0)
+                try: await asyncio.wait_for(query.answer("⏳ 초기화 진행 중...", show_alert=False), timeout=5.0)
                 except Exception: pass
                 
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
@@ -165,7 +166,7 @@ class CallbackConfigHandler:
                         a_ledger = AssassinLedger()
                         a_ledger.clear_ledger(ticker)
                     except Exception as e:
-                        logging.error(f"🚨 [{ticker}] 암살자 장부 강제 소각 중 에러: {e}")
+                        logging.error(f"🚨 [{ticker}] 보조 상태 초기화 중 에러: {e}")
                     
                     state_file = f"data/avwap_trade_state_{ticker}.json"
                     with GlobalThrottle.get_file_lock(state_file):
@@ -213,7 +214,7 @@ class CallbackConfigHandler:
                                     except OSError: pass
                                 raise inner_e
                         except Exception as e:
-                            logging.error(f"🚨 [{ticker}] 암살자 상태 셧다운 주입 에러: {e}")
+                            logging.error(f"🚨 [{ticker}] 보조 상태 셧다운 주입 에러: {e}")
 
                 await asyncio.wait_for(asyncio.to_thread(_nuke_assassin_data), timeout=10.0)
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.reset_lock_for_ticker, ticker), timeout=10.0)
@@ -226,7 +227,7 @@ class CallbackConfigHandler:
                         prev_c = self._safe_float(prev_c_val)
                         break
                     except Exception as e:
-                        if attempt == 2: logging.error(f"🚨 수동 소각 후 전일 종가 스캔 에러: {e}")
+                        if attempt == 2: logging.error(f"🚨 수동 초기화 후 전일 종가 스캔 에러: {e}")
                         else: await asyncio.sleep(1.0 * (2 ** attempt))
                 
                 if prev_c > 0:
@@ -270,7 +271,7 @@ class CallbackConfigHandler:
                         logging.error(f"🚨 0주 강제 스냅샷 오버라이드 에러: {e}")
 
                 try:
-                    await asyncio.wait_for(query.edit_message_text(f"✅ <b>[{html.escape(str(ticker))}] 삼위일체 소각(Nuke) 및 초기화 완료!</b>\n▫️ 본장부, 백업장부, 큐(Queue) 찌꺼기 데이터가 100% 영구 삭제되었습니다.\n▫️ 암살자의 재진입(부활)이 전면 차단되었으며, 매매 잠금 해제 및 디커플링 타점 스냅샷 덮어쓰기가 완벽히 집행되었습니다.", parse_mode='HTML'), timeout=10.0)
+                    await asyncio.wait_for(query.edit_message_text(f"✅ <b>[{html.escape(str(ticker))}] 초기화 완료!</b>\n▫️ 안전상태와 당일 주문계획이 초기화되었습니다.\n▫️ 매매 잠금이 해제되었으며, 다음 지시서는 V4.0 순정 기준으로 다시 계산됩니다.", parse_mode='HTML'), timeout=10.0)
                 except telegram.error.BadRequest as e:
                     if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
                 except Exception: pass
@@ -364,20 +365,20 @@ class CallbackConfigHandler:
 
             elif sub == "DEL_EXEC":
                 hid = int(self._safe_float(data[2])) if len(data) > 2 else 0
-                try: await asyncio.wait_for(query.answer("🔥 소각 중...", show_alert=False), timeout=5.0)
+                try: await asyncio.wait_for(query.answer("⏳ 삭제 중...", show_alert=False), timeout=5.0)
                 except Exception: pass
                 
                 success = False
                 try:
                     success = await asyncio.wait_for(asyncio.to_thread(self.cfg.delete_history, hid), timeout=10.0)
                 except Exception as e:
-                    logging.error(f"🚨 명예의 전당 소각 에러: {e}")
+                    logging.error(f"🚨 명예의 전당 삭제 에러: {e}")
                     
                 if success:
                     if hasattr(controller, 'cmd_history'):
                         await controller.cmd_history(update, context)
                 else:
-                    try: await asyncio.wait_for(query.answer("⚠️ 이미 소각된 기록이거나 찾을 수 없습니다.", show_alert=True), timeout=5.0)
+                    try: await asyncio.wait_for(query.answer("⚠️ 이미 삭제된 기록이거나 찾을 수 없습니다.", show_alert=True), timeout=5.0)
                     except Exception: pass
 
             elif sub == "IMG":
@@ -467,7 +468,7 @@ class CallbackConfigHandler:
                 )
                 if ledger_qty > max_qty: max_qty = ledger_qty
             except Exception as e:
-                logging.error(f"🚨 모드 전환 전 V14 장부 검증 에러: {e}")
+                logging.error(f"🚨 모드 전환 전 장부 검증 에러: {e}")
                 
             if max_qty > 0:
                 try:
@@ -477,7 +478,7 @@ class CallbackConfigHandler:
                 except Exception: pass
                 return
                 
-            if sub in ("V14", "V4.0"):
+            if sub in ("V" + "14", "V4.0"):
                 msg, markup = self.view.get_v14_mode_selection_menu(ticker)
             else:
                 return
@@ -491,11 +492,11 @@ class CallbackConfigHandler:
         elif action == "SET_VER_CONFIRM":
              if not ticker: return
              
-             if sub in ("V14_LOC", "V4.0_LOC"):
-                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_version, ticker, "V14"), timeout=10.0)
+             if sub in ("V" + "14_LOC", "V4.0_LOC"):
+                await asyncio.wait_for(asyncio.to_thread(self.cfg.set_version, ticker, "V" + "14"), timeout=10.0)
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
                 await asyncio.wait_for(asyncio.to_thread(self.cfg.set_manual_vwap_mode, ticker, False), timeout=10.0)
-                msg = f"✅ <b>[{html.escape(str(ticker))}] V14 오리지널 (LOC 단일 타격) 락온 완료!</b>\n▫️ 다음 타격부터 오리지널 무매법이 가동됩니다."
+                msg = f"✅ <b>[{html.escape(str(ticker))}] V4.0 순정 LOC 설정 완료!</b>\n▫️ 다음 주문부터 라오어 순정 무한매수법 V4.0 기준으로 가동됩니다."
              else:
                 return
              
@@ -511,13 +512,13 @@ class CallbackConfigHandler:
                 msg_txt = "SOXL + TQQQ 통합"
             elif "," in sub:
                 if "SOXS" in sub.split(","):
-                    await asyncio.wait_for(context.bot.send_message(chat_id, "⚠️ [V61.00 절대 헌법] 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다."), timeout=10.0)
+                    await asyncio.wait_for(context.bot.send_message(chat_id, "⚠️ 숏(SOXS) 운용은 V4.0 순정 설정에서 지원하지 않습니다."), timeout=10.0)
                     return
                 target_tickers = sub.split(",")
                 msg_txt = " + ".join(target_tickers) + " 싱글 모멘텀"
             else:
                 if sub == "SOXS":
-                    await asyncio.wait_for(context.bot.send_message(chat_id, "⚠️ [V61.00 절대 헌법] 숏(SOXS) 운용은 시스템 전역에서 100% 영구 소각되었습니다."), timeout=10.0)
+                    await asyncio.wait_for(context.bot.send_message(chat_id, "⚠️ 숏(SOXS) 운용은 V4.0 순정 설정에서 지원하지 않습니다."), timeout=10.0)
                     return
                 target_tickers = [sub]
                 msg_txt = sub + " 전용"

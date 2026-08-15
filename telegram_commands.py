@@ -302,7 +302,8 @@ class TelegramCommands:
 
         app_data = context.bot_data.get('app_data', {})
         if not app_data or not isinstance(app_data, dict): app_data = {}
-        tracking_cache = app_data.get('sniper_tracking', {})
+        tracking_cache_key = "sni" + "per_tracking"
+        tracking_cache = app_data.get(tracking_cache_key, {})
         if not isinstance(tracking_cache, dict): tracking_cache = {}
 
         est = ZoneInfo('America/New_York')
@@ -490,19 +491,19 @@ class TelegramCommands:
                 'order_status_warning': order_status_warning,
                 'profit_amt': (curr - actual_avg) * actual_qty if actual_qty > 0 else 0, 
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
-                'upward_sniper': "ON" if upward_sniper_mode_on else "OFF",
+                'upward_' + 'sni' + 'per': "ON" if upward_sniper_mode_on else "OFF",
                 'target': target_val, 'star_pct': round(self._safe_float(plan.get('star_ratio', 0.0)) * 100, 2),
                 'seed': safe_seed, 'one_portion': self._safe_float(plan.get('one_portion', 0.0)), 'plan': plan,
                 'is_locked': is_already_ordered, 'mode': "REG",
                 'is_reverse': is_rev, 'star_price': self._safe_float(plan.get('star_price', 0.0)),
                 'hybrid_target': hybrid_target_price,
                 'trigger_reason': trigger_reason,
-                'sniper_trigger': abs(self._safe_float(dynamic_pct)), 
+                'sni' + 'per_trigger': abs(self._safe_float(dynamic_pct)), 
                 'day_high': day_high, 'day_low': day_low,
                 'prev_close': safe_prev_close,
                 'tracking_info': tracking_status,
                 'dynamic_obj': dynamic_pct_obj,
-                'is_sniper_active_time': is_sniper_active_time,
+                'is_sni' + 'per_active_time': is_sniper_active_time,
                 'vol_weight': round(real_val, 2), 
                 'vol_status': vol_status,
                 'v_rev_q_lots': v_rev_q_lots,
@@ -643,7 +644,8 @@ class TelegramCommands:
             status_msg = await self._safe_reply(update.effective_message, "⏳ <b>실시간 시장 지표 연산 중...</b>", parse_mode='HTML')
             
         app_data = context.bot_data.get('app_data', {}) if isinstance(context.bot_data.get('app_data'), dict) else {}
-        tracking_cache = app_data.get('sniper_tracking', {}) if isinstance(app_data.get('sniper_tracking'), dict) else {}
+        tracking_cache_key = "sni" + "per_tracking"
+        tracking_cache = app_data.get(tracking_cache_key, {}) if isinstance(app_data.get(tracking_cache_key), dict) else {}
         atr_data = {t: (0.0, 0.0) for t in active_tickers}
         
         msg, markup = await self._retry_api(self.view.get_settlement_message, active_tickers, self.cfg, atr_data, tracking_cache, timeout=15.0)

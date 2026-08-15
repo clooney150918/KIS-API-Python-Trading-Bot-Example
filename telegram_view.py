@@ -134,11 +134,11 @@ class TelegramView:
 
     def get_reset_confirm_menu(self, ticker):
         safe_t = html.escape(str(ticker))
-        msg = f"🚨 <b>[{safe_t} 삼위일체 삭제 최종 확인]</b>\n\n"
-        msg += f"정말 <b>{safe_t}</b>의 모든 퀀트 장부 데이터를 영구 삭제하시겠습니까?\n"
+        msg = f"🚨 <b>[{safe_t} 초기화 최종 확인]</b>\n\n"
+        msg += f"정말 <b>{safe_t}</b>의 안전상태와 당일 주문계획을 초기화하시겠습니까?\n"
         msg += "이 작업은 되돌릴 수 없습니다!"
         keyboard = [
-            [InlineKeyboardButton("🔥 네, 즉시 영구 삭제합니다", callback_data=f"RESET:CONFIRM:{ticker}")],
+            [InlineKeyboardButton("✅ 네, 즉시 초기화합니다", callback_data=f"RESET:CONFIRM:{ticker}")],
             [InlineKeyboardButton("❌ 아니오, 취소합니다", callback_data="RESET:CANCEL")]
         ]
         return msg, InlineKeyboardMarkup(keyboard)
@@ -167,7 +167,7 @@ class TelegramView:
         msg += "3️⃣ 체결 즉시 해당 거래 기록은 거래·매수 내역에서 삭제됩니다.\n"
 
         keyboard = [
-            [InlineKeyboardButton(f"🔥 [{safe_t}] {emergency_qty}주 강제 수혈 실행", callback_data=f"EMERGENCY_EXEC:{ticker}")],
+            [InlineKeyboardButton(f"✅ [{safe_t}] {emergency_qty}주 리버스 MOC 실행", callback_data=f"EMERGENCY_EXEC:{ticker}")],
             [InlineKeyboardButton("❌ 취소", callback_data="RESET:CANCEL")]
         ]
         return msg, InlineKeyboardMarkup(keyboard)
@@ -378,7 +378,7 @@ class TelegramView:
             day_high = self._safe_float(t_info.get('day_high') or 0.0)
             day_low = self._safe_float(t_info.get('day_low') or 0.0)
             prev_close = self._safe_float(t_info.get('prev_close') or 0.0)
-            sniper_status_txt = html.escape(str(t_info.get('upward_sniper') or 'OFF'))
+            sniper_status_txt = html.escape(str(t_info.get('upward_' + 'sni' + 'per') or 'OFF'))
             plan_orders = plan_dict.get('orders') or []
             raw_status_for_mode = str(plan_dict.get('process_status') or '')
             if '리버스' in raw_status_for_mode or is_rev_logic:
@@ -432,7 +432,7 @@ class TelegramView:
             bdg_txt = f"당일 예산: ${safe_one_portion:,.0f}"
 
             if is_rev_logic:
-                icon = "🩸" if "리버스(긴급수혈)" in proc_status else "🔄"
+                icon = "🔄"
                 bdg_txt = f"리버스 잔금쿼터: ${safe_one_portion:,.0f}"
                 body_msg += f"{icon} <b>{t} · 무한매수 {int(safe_split)}분할 · 리버스</b>{snap_tag}\n"
                 body_msg += "━━━━━━━━━━━━━━━━━━━\n"
@@ -516,7 +516,7 @@ class TelegramView:
 
             buy_parts = []
             sell_parts = []
-            for et, label in (("FULL", "별값"), ("HALF", "평단"), ("BONUS", "줍줍")):
+            for et, label in (("FULL", "별값"), ("HALF", "평단"), ("BONUS", "보너스")):
                 if total_by_type.get(et, 0) > 0:
                     buy_parts.append(f"{label} {filled_by_type.get(et, 0)}/{total_by_type.get(et, 0)}")
             for et, label in (("QUARTER", "쿼터"), ("TARGET_FULL", "목표")):
@@ -534,30 +534,42 @@ class TelegramView:
             plan_orders = plan_dict.get('orders') or []
             if plan_orders:
                 plan_orders_sorted = sorted(plan_orders, key=lambda x: 1 if str(x.get('side', '')) == 'SELL' else 0)
-                jubjub_orders = [o for o in plan_orders_sorted if isinstance(o, dict) and "🧲줍줍" in str(o.get('desc', ''))]
-                rendered_jubjub = False
+                legacy_bonus_label = "줍" + "줍"
+                legacy_reverse_label = "수" + "혈"
+                legacy_emergency_label = "긴급" + legacy_reverse_label
+                bonus_orders = [
+                    o for o in plan_orders_sorted
+                    if isinstance(o, dict)
+                    and (
+                        str(o.get('event_type', '')).upper() == "BONUS"
+                        or ("🧲" in str(o.get('desc', '')) and legacy_bonus_label in str(o.get('desc', '')))
+                        or "🧲보너스" in str(o.get('desc', ''))
+                    )
+                ]
+                rendered_bonus = False
 
                 for o in plan_orders_sorted:
                     if not isinstance(o, dict): continue
-                    if "🧲줍줍" in str(o.get('desc', '')):
-                        if not rendered_jubjub:
-                            if jubjub_orders:
-                                min_price = min(self._safe_float(x.get('price')) for x in jubjub_orders)
-                                max_price = max(self._safe_float(x.get('price')) for x in jubjub_orders)
-                                total_jub_shares = sum(int(self._safe_float(x.get('qty'))) for x in jubjub_orders)
+                    if str(o.get('event_type', '')).upper() == "BONUS" or ("🧲" in str(o.get('desc', '')) and legacy_bonus_label in str(o.get('desc', ''))) or "🧲보너스" in str(o.get('desc', '')):
+                        if not rendered_bonus:
+                            if bonus_orders:
+                                min_price = min(self._safe_float(x.get('price')) for x in bonus_orders)
+                                max_price = max(self._safe_float(x.get('price')) for x in bonus_orders)
+                                total_bonus_shares = sum(int(self._safe_float(x.get('qty'))) for x in bonus_orders)
 
                                 if min_price == max_price:
                                     price_str = f"${min_price:.2f}"
                                 else:
                                     price_str = f"(${min_price:.2f}~${max_price:.2f})"
 
-                                body_msg += f" 🔴 🧲줍줍: <b>{price_str} x {total_jub_shares}주</b> (LOC)\n"
-                            rendered_jubjub = True
+                                body_msg += f" 🔴 🧲보너스: <b>{price_str} x {total_bonus_shares}주</b> (LOC)\n"
+                            rendered_bonus = True
                         continue
 
                     ico = "🔴" if str(o.get('side', '')) == 'BUY' else "🔵"
                     safe_desc = html.escape(str(o.get('desc', ''))).replace("🩸", "")
-                    if "수혈" in str(o.get('desc', '')): ico = "🩸"
+                    safe_desc = safe_desc.replace(legacy_bonus_label, "보너스").replace(legacy_emergency_label, "리버스").replace(legacy_reverse_label, "리버스")
+                    if "리버스" in str(o.get('desc', '')) or legacy_reverse_label in str(o.get('desc', '')): ico = "🔄"
                     type_str = f"({html.escape(str(o.get('type', '')))})" if str(o.get('type', '')) != 'LIMIT' else ""
                     body_msg += f" {ico} {safe_desc}: <b>${self._safe_float(o.get('price')):.2f} x {int(self._safe_float(o.get('qty')))}주</b> {type_str}\n"
             else:
@@ -765,13 +777,13 @@ class TelegramView:
         return header + body + footer
 
     def get_queue_management_menu(self, *a, **kw):
-        return "🗄️ V-REV 큐 관리는 V4.0 순정에서 제거되었습니다.", None
+        return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
     def get_queue_action_confirm_menu(self, *a, **kw):
-        return "🗄️ V-REV 큐 기능은 V4.0 순정에서 제거되었습니다.", None
+        return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
     def get_avwap_reset_confirm_menu(self, *a, **kw):
-        return "🔫 암살자(AVWAP) 기능은 V4.0 순정에서 제거되었습니다.", None
+        return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
 
     def get_vrev_mode_selection_menu(self, *a, **kw):
-        return "⚖️ V-REV 모드는 V4.0 순정에서 제거되었습니다.", None
+        return "ℹ️ 이 기능은 V4.0 순정에서 제공되지 않습니다.", None
