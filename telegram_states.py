@@ -348,46 +348,7 @@ class TelegramStates:
         
         await asyncio.wait_for(asyncio.to_thread(self.cfg.set_reverse_state, ticker, False, 0, 0.0), timeout=10.0)
         
-        ledger = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_ledger), timeout=10.0) or []
-        ledger_data = [r for r in ledger if isinstance(r, dict) and str(r.get('ticker')) != str(ticker)]
-        await asyncio.wait_for(asyncio.to_thread(self.cfg._save_json, self.cfg.FILES["LEDGER"], ledger_data), timeout=15.0)
-        
-        def _process_reset_files():
-            backup_file = self.cfg.FILES["LEDGER"].replace(".json", "_backup.json")
-            # 🚨 MODIFIED: 파일 뮤텍스 결속
-            with GlobalThrottle.get_file_lock(backup_file):
-                try:
-                    with open(backup_file, 'r', encoding='utf-8') as f:
-                        b_data = json.load(f)
-                    if not isinstance(b_data, list): b_data = []
-                    b_data = [r for r in b_data if isinstance(r, dict) and str(r.get('ticker')) != str(ticker)]
-                    
-                    dir_name = os.path.dirname(backup_file) or '.'
-                    try: os.makedirs(dir_name, exist_ok=True)
-                    except OSError: pass
-                    
-                    fd = None
-                    tmp_path = None
-                    try:
-                        fd, tmp_path = tempfile.mkstemp(dir=dir_name, text=True)
-                        with os.fdopen(fd, 'w', encoding='utf-8') as f_out:
-                            fd = None
-                            json.dump(b_data, f_out, ensure_ascii=False, indent=4)
-                            f_out.flush()
-                            os.fsync(f_out.fileno())
-                        os.replace(tmp_path, backup_file)
-                        tmp_path = None
-                    except Exception:
-                        if fd is not None:
-                            try: os.close(fd)
-                            except OSError: pass
-                        if tmp_path:
-                            try: os.remove(tmp_path)
-                            except OSError: pass
-                except OSError: pass
-                except Exception: pass
-            
-        await asyncio.wait_for(asyncio.to_thread(_process_reset_files), timeout=10.0)
+        logging.info(f"♻️ [{ticker}] reset confirmed: official append-only ledgers preserved; legacy local ledger mutation skipped.")
     
         if getattr(self, 'queue_ledger', None):
             await asyncio.wait_for(asyncio.to_thread(self.queue_ledger.clear_queue, ticker), timeout=10.0)

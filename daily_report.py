@@ -315,9 +315,9 @@ def _current_price(ticker, broker, snapshot):
 
 def _realized_pnl_from_ledger(config, ticker):
     try:
-        ledger = config.get_ledger() if hasattr(config, "get_ledger") else _read_json(Path("data") / "manual_ledger.json", [])
+        ledger = config.get_official_fills(ticker) if hasattr(config, "get_official_fills") else []
     except Exception:
-        ledger = _read_json(Path("data") / "manual_ledger.json", [])
+        ledger = []
     if not isinstance(ledger, list):
         return 0.0
     lots = []

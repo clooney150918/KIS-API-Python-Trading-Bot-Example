@@ -317,7 +317,7 @@ def test_quarter_sell_fill_appends_t_event_with_seventy_five_percent_t(tmp_path)
 
 
 def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_available(tmp_path):
-    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
     fill = kis_fill(
         odno="ODNO-QSELL",
@@ -349,6 +349,9 @@ def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_availab
     assert event["filled_qty"] == 19
     assert event["t_before"] == "18.32"
     assert event["t_after"] == "13.7400"
+    processed_records = [json.loads(line) for line in processed_path.read_text(encoding="utf-8").splitlines()]
+    assert [record["classification"] for record in processed_records] == ["UNCLASSIFIED", "FINAL"]
+    assert processed_records[-1]["intent_id"] == intent["intent_id"]
 
     duplicate = reconciler.reconcile("SOXL", [fill])
     assert duplicate["new_fill_count"] == 0

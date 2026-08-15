@@ -171,15 +171,6 @@ async def scheduled_force_reset(context):
                         carry_rem_cash = cfg._safe_float(rev_state.get("rem_cash", 0.0))
                         cfg.set_reverse_state(t, False, 0, 0.0, dynamic_t=carry_dynamic_t, rem_cash=carry_rem_cash)
                         cfg.clear_escrow_cash(t)
-                        
-                        ledger_data = cfg.get_ledger()
-                        changed = False
-                        for lr in ledger_data:
-                            if lr.get('ticker') == t and lr.get('is_reverse', False):
-                                lr['is_reverse'] = False
-                                changed = True
-                        if changed:
-                            cfg._save_json(cfg.FILES["LEDGER"], ledger_data)
                             
                         msg_addons += f"\n🌤️ <b>[{t}] 리버스 목표 달성({curr_ret:.2f}%)!</b> 격리 병동 졸업 및 Escrow 해제 완료!"
                     else:

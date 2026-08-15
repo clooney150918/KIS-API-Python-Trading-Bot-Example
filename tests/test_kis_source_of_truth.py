@@ -145,12 +145,6 @@ class _AppendOnlySyncCfg:
     def get_last_split_date(self, ticker):
         return ""
 
-    def get_ledger(self):
-        return [{"ticker": "SOXL", "side": "BUY", "qty": 2, "price": 0.0, "date": "2026-08-12"}]
-
-    def calculate_holdings(self, ticker, rows):
-        return (2, 0.0, 0.0, 0.0)
-
     def calculate_holdings_from_official_ledger(self, ticker):
         return (2, 0.0, 0.0, 0.0)
 
@@ -203,8 +197,18 @@ class _AppendOnlyBroker:
         raise AssertionError("process_auto_sync should prefer get_execution_fills when available")
 
 
-def test_process_auto_sync_appends_official_kis_facts_and_never_calls_legacy_manual_mutators(monkeypatch):
+class _CapturingReconciler:
+    def __init__(self):
+        self.calls = []
+
+    def reconcile(self, ticker, rows):
+        self.calls.append((ticker, list(rows)))
+        return {"new_fill_count": 1, "operator_halt": False, "partial_open": False, "codes": []}
+
+
+def test_process_auto_sync_appends_official_kis_facts_reconciles_and_never_calls_legacy_manual_mutators(monkeypatch):
     cfg = _AppendOnlySyncCfg()
+    reconciler = _CapturingReconciler()
     monkeypatch.setattr(telegram_sync_engine.datetime, "datetime", _FixedDateTime)
     monkeypatch.setattr(
         telegram_sync_engine.mcal,
@@ -221,7 +225,10 @@ def test_process_auto_sync_appends_official_kis_facts_and_never_calls_legacy_man
         tx_lock=asyncio.Lock(),
         sync_locks={},
     )
-    context = SimpleNamespace(bot=SimpleNamespace(send_message=lambda **_kwargs: None))
+    context = SimpleNamespace(
+        bot=SimpleNamespace(send_message=lambda **_kwargs: None),
+        bot_data={"app_data": {"fill_reconciliation_guard": reconciler}},
+    )
 
     result = asyncio.run(engine.process_auto_sync("SOXL", 12345, context))
 
@@ -232,5 +239,7 @@ def test_process_auto_sync_appends_official_kis_facts_and_never_calls_legacy_man
     assert cfg.appended[0]["ticker"] == "SOXL"
     assert cfg.appended[0]["qty"] == 2
     assert cfg.appended[0]["kis_order_no"] == "POST-PROCESS-1"
-
+    assert len(reconciler.calls) == 1
+    assert reconciler.calls[0][0] == "SOXL"
+    assert reconciler.calls[0][1][0]["odno"] == "POST-PROCESS-1"
 

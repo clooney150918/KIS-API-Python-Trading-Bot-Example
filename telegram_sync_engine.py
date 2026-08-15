@@ -57,7 +57,7 @@ class TelegramSyncEngine:
     def sync_official_execution_facts(self, ticker, kis_execution_rows, *, account_fingerprint):
         """Append confirmed KIS facts to the official execution ledger only.
 
-        This deliberately does not mutate/overwrite manual_ledger or legacy history.
+        This deliberately does not mutate/overwrite legacy local JSON or history.
         """
         from fill_reconciler import build_fill_key, normalize_kis_execution
         from ledger_migration import OFFICIAL_FILL_SOURCE
@@ -182,9 +182,7 @@ class TelegramSyncEngine:
                         {"SOXL": {"qty": actual_qty, "avg_price": actual_avg, "last_update": datetime.datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M')}},
                         timeout=5.0)
 
-                full_ledger = await self._retry_api(self.cfg.get_ledger, default=[])
-                recs_for_check = [r for r in (full_ledger or []) if isinstance(r, dict) and r.get('ticker') == ticker]
-                hold_res = await self._retry_api(self.cfg.calculate_holdings, ticker, recs_for_check, default=(0, 0.0, 0.0, 0.0))
+                hold_res = await self._retry_api(self.cfg.calculate_holdings_from_official_ledger, ticker, default=(0, 0.0, 0.0, 0.0))
                 ledger_qty_for_check = hold_res[0] if isinstance(hold_res, tuple) and len(hold_res) > 0 else 0
                 
                 max_check_qty = ledger_qty_for_check
@@ -285,7 +283,7 @@ class TelegramSyncEngine:
                     )
                     appended_count = int(self._safe_float((official_append_result or {}).get("appended_count", 0)))
                     if appended_count > 0:
-                        logging.info(f"🏛️ [{ticker}] KIS 확정 체결 {appended_count}건을 공식 체결 원장에 append했습니다. legacy/manual ledger는 변경하지 않습니다.")
+                        logging.info(f"🏛️ [{ticker}] KIS 확정 체결 {appended_count}건을 공식 체결 원장에 append했습니다. legacy local JSON은 변경하지 않습니다.")
                     app_data = context.bot_data.get('app_data', {}) if hasattr(context, "bot_data") else {}
                     if not isinstance(app_data, dict):
                         app_data = {}
@@ -298,7 +296,7 @@ class TelegramSyncEngine:
                         except Exception as e:
                             logging.error(f"⛔ [{ticker}] 체결→T이벤트 대사 실패: {e}")
 
-                # 🚨 MODIFIED: [신규 원장 기준 정산] legacy manual_ledger.json 기반 계산을 제거하고,
+                # 🚨 MODIFIED: [신규 원장 기준 정산] legacy local JSON 기반 계산을 제거하고,
                 # immutable baseline + append-only execution_ledger에서 qty/avg를 산출한다.
                 new_hold = await self._retry_api(
                     self.cfg.calculate_holdings_from_official_ledger, ticker,
@@ -399,9 +397,7 @@ class TelegramSyncEngine:
                         _, alloc_cash_dict = await asyncio.wait_for(asyncio.to_thread(get_budget_allocation, cash_for_snap, active_tickers_list, self.cfg), timeout=10.0)
                         avail_cash = self._safe_float((alloc_cash_dict or {}).get(ticker, 0.0))
              
-                        full_ledger_final = await self._retry_api(self.cfg.get_ledger, timeout=10.0)
-                        recs_final = [r for r in (full_ledger_final or []) if isinstance(r, dict) and r.get('ticker') == ticker]
-                        hold_res_final = await self._retry_api(self.cfg.calculate_holdings, ticker, recs_final, timeout=10.0)
+                        hold_res_final = await self._retry_api(self.cfg.calculate_holdings_from_official_ledger, ticker, timeout=10.0)
                   
                         final_qty = hold_res_final[0] if isinstance(hold_res_final, tuple) and len(hold_res_final) > 0 else 0
                         final_avg = hold_res_final[1] if isinstance(hold_res_final, tuple) and len(hold_res_final) > 1 else 0.0

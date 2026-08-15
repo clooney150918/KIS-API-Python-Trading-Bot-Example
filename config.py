@@ -48,7 +48,7 @@ class ConfigManager:
         self.FILES = {
             "TOKEN": "data/token.dat",
             "CHAT_ID": "data/chat_id.dat",
-            "LEDGER": "data/manual_ledger.json", 
+            "LEDGER": "data/disabled_legacy_ledger.json",
             "HISTORY": "data/manual_history.json", 
             "SPLIT": "data/split_config.json",
             "TICKER": "data/active_tickers.json",
@@ -264,11 +264,6 @@ class ConfigManager:
             d[ticker] = str(date_str)
             self._save_json(self.FILES["SPLIT_HISTORY"], d)
 
-    def get_ledger(self):
-        with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            raw_data = self._load_json(self.FILES["LEDGER"], [])
-            return [r for r in raw_data if isinstance(r, dict)]
-
     def get_order_locked(self, ticker):
         with GlobalThrottle.get_file_lock(self.FILES["LOCKS"]):
             locks = self._load_json(self.FILES["LOCKS"], {})
@@ -337,7 +332,7 @@ class ConfigManager:
         safe_ratio = self._safe_float(ratio)
         if safe_ratio <= 0: return
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
+            ledger = self._load_json(self.FILES["LEDGER"], [])
             changed = False
             for r in ledger:
                 if r.get('ticker') == ticker:
@@ -361,7 +356,7 @@ class ConfigManager:
 
     def overwrite_incremental_ledger(self, ticker, temp_recs, new_today_records):
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
+            ledger = self._load_json(self.FILES["LEDGER"], [])
             remaining = [r for r in ledger if r.get('ticker') != ticker]
             updated_ticker_recs = list(temp_recs)
             
@@ -398,7 +393,7 @@ class ConfigManager:
 
     def calibrate_avg_price(self, ticker, actual_avg):
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
+            ledger = self._load_json(self.FILES["LEDGER"], [])
             target_recs = [r for r in ledger if r.get('ticker') == ticker]
             if target_recs:
                 for r in target_recs:
@@ -435,7 +430,7 @@ class ConfigManager:
             return 0
             
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
+            ledger = self._load_json(self.FILES["LEDGER"], [])
             changed_count = 0
             
             for r in ledger:
@@ -460,15 +455,16 @@ class ConfigManager:
 
     def clear_ledger_for_ticker(self, ticker):
         with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
+            ledger = self._load_json(self.FILES["LEDGER"], [])
             remaining = [r for r in ledger if r.get('ticker') != ticker]
             self._save_json(self.FILES["LEDGER"], remaining)
             self.set_reverse_state(ticker, False, 0, 0.0, dynamic_t=0.0, rem_cash=0.0, is_day_one=True)
 
     def calculate_holdings(self, ticker, records=None):
-        # 장부 자체의 수량·원가 계산 전용. KIS 실계좌 값은 kis_balance.json에서 별도로 사용한다.
         if records is None:
-            records = self.get_ledger()
+            return self.calculate_holdings_from_official_ledger(ticker)
+
+        # 호환용 순수 계산기. 신규 런타임은 records를 주입하지 않고 official ledger 경로를 사용한다.
         target_recs = [r for r in (records or []) if isinstance(r, dict) and r.get('ticker') == ticker]
         
         total_qty, total_invested, total_sold = 0, 0.0, 0.0     
@@ -509,9 +505,9 @@ class ConfigManager:
         qty = baseline.qty + Σ(execution_ledger KIS_CONFIRMED_FILL 체결 qty 부호)
         avg = 이동평균법 (SELL은 당시 평단으로 원가 차감 → KIS 매입평균과 일치)
 
-        legacy manual_ledger.json 기반 calculate_holdings 원가역산 경로와 달리
+        legacy local JSON 기반 calculate_holdings 원가역산 경로와 달리
         이 메서드는 2026-08-11 승인 baseline과 그 이후 KIS_CONFIRMED_FILL
-        체결만 사용한다. 8/13 BUY 5 같은 체결이 manual_ledger에 누락되어도
+        체결만 사용한다. 8/13 BUY 5 같은 체결이 legacy 로컬 JSON에 누락되어도
         신규 원장에는 정상 반영되어 있으므로 KIS/local 불일치 HALT가 해소된다.
         """
         target = str(ticker).upper()
@@ -576,7 +572,7 @@ class ConfigManager:
     def get_official_fills(self, ticker):
         """/record 거래내역 리스트 전용: 신규 원장(실제 체결가) 기준 각 체결 건.
 
-        legacy manual_ledger.json(price=평단가 오기록) 대신, KIS 확정 체결의 실제
+        legacy local JSON(price=평단가 오기록) 대신, KIS 확정 체결의 실제
         체결가를 execution_ledger_SOXL.jsonl + processed_fills_SOXL.jsonl에서 읽어
         (date, side, qty, price, order_no) 형태로 중복 제거 후 반환한다.
         """
@@ -800,77 +796,8 @@ class ConfigManager:
             return 0.0, 0.0, 0.0
 
     def archive_graduation(self, ticker, end_date, prev_close=0.0):
-        with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-            ledger = self.get_ledger()
-            target_recs = [r for r in ledger if r.get('ticker') == ticker]
-            if not target_recs:
-                return None, 0
-            
-            ledger_qty, avg_price, _, _ = self.calculate_holdings(ticker, target_recs)
-            
-            raw_total_buy = sum(self._safe_float(r.get('price'))*int(self._safe_float(r.get('qty'))) for r in target_recs if r.get('side')=='BUY')
-            raw_total_sell = sum(self._safe_float(r.get('price'))*int(self._safe_float(r.get('qty'))) for r in target_recs if r.get('side')=='SELL')
-
-            if ledger_qty > 0:
-                split = self.get_split_count(ticker)
-                is_reverse = self.get_reverse_state(ticker).get("is_active", False)
-
-                if is_reverse:
-                    divisor = 10 if split <= 20 else 20
-                    loc_qty = math.floor(ledger_qty / divisor)
-                else:
-                    loc_qty = math.ceil(ledger_qty / 4)
-
-                limit_qty = ledger_qty - loc_qty
-                if limit_qty < 0: 
-                    loc_qty = ledger_qty
-                    limit_qty = 0
-
-                target_ratio = self.get_target_profit(ticker) / 100.0
-                target_price = math.ceil(avg_price * (1 + target_ratio) * 100) / 100.0
-                loc_price = self._safe_float(prev_close) if self._safe_float(prev_close) > 0 else avg_price
-
-                new_id = max((int(self._safe_float(r.get('id', 0))) for r in ledger), default=0) + 1
-
-                if loc_qty > 0:
-                    rec_loc = {"id": new_id, "date": end_date, "ticker": ticker, "side": "SELL", "price": loc_price, "qty": loc_qty, "avg_price": avg_price, "exec_id": f"GRAD_LOC_{int(time.time())}", "is_reverse": is_reverse}
-                    ledger.append(rec_loc)
-                    target_recs.append(rec_loc)
-                    new_id += 1
-
-                if limit_qty > 0:
-                    rec_limit = {"id": new_id, "date": end_date, "ticker": ticker, "side": "SELL", "price": target_price, "qty": limit_qty, "avg_price": avg_price, "exec_id": f"GRAD_LMT_{int(time.time())}", "is_reverse": is_reverse}
-                    ledger.append(rec_limit)
-                    target_recs.append(rec_limit)
-
-                self._save_json(self.FILES["LEDGER"], ledger)
-
-            fee_rate = self.get_fee(ticker) / 100.0
-            net_invested = raw_total_buy * (1.0 + fee_rate)
-            net_revenue = raw_total_sell * (1.0 - fee_rate)
-            
-            profit = math.ceil((net_revenue - net_invested) * 100) / 100.0
-            yield_pct = math.ceil(((profit / net_invested * 100) if net_invested > 0 else 0.0) * 100) / 100.0
-            
-            compound_rate = self.get_compound_rate(ticker) / 100.0
-            added_seed = 0
-            if profit > 0 and compound_rate > 0:
-                added_seed = math.floor(profit * compound_rate)
-                current_seed = self.get_seed(ticker)
-                self.set_seed(ticker, current_seed + added_seed)
-
-            with GlobalThrottle.get_file_lock(self.FILES["HISTORY"]):
-                history = self.get_history()
-                new_hist = {
-                    "id": len(history) + 1, "ticker": ticker, "end_date": end_date,
-                    "profit": profit, "yield": yield_pct, "revenue": net_revenue, "invested": net_invested, "trades": target_recs
-                }
-                history.append(new_hist)
-                self._save_json(self.FILES["HISTORY"], history)
-             
-            self.clear_ledger_for_ticker(ticker)
-             
-            return new_hist, added_seed
+        from ledger_migration import LegacyLedgerError
+        raise LegacyLedgerError("synthetic graduation archiving is blocked from the official append-only pipeline")
 
     def get_history(self):
         with GlobalThrottle.get_file_lock(self.FILES["HISTORY"]):

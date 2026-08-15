@@ -373,19 +373,6 @@ async def scheduled_force_reset(context):
                             carry_dynamic_t = _safe_float(rev_state.get("dynamic_t", 0.0))
                             carry_rem_cash = _safe_float(rev_state.get("rem_cash", 0.0))
                             await asyncio.wait_for(asyncio.to_thread(cfg.set_reverse_state, t, False, 0, 0.0, dynamic_t=carry_dynamic_t, rem_cash=carry_rem_cash), timeout=5.0)
-                            
-                            ledger_data = []
-                            try: ledger_data = await asyncio.wait_for(asyncio.to_thread(cfg.get_ledger), timeout=10.0)
-                            except Exception: pass
-                            
-                            changed = False
-                            if isinstance(ledger_data, list):
-                                for lr in ledger_data:
-                                    if isinstance(lr, dict) and lr.get('ticker') == t and lr.get('is_reverse', False):
-                                        lr['is_reverse'] = False
-                                        changed = True
-                                if changed:
-                                    await asyncio.wait_for(asyncio.to_thread(cfg._save_json, cfg.FILES["LEDGER"], ledger_data), timeout=10.0)
                             safe_t = html.escape(str(t))
                             msg_addons += f"\n🌤️ <b>[{safe_t}] 리버스 목표 달성({close_ret:.2f}%)!</b> 격리 병동 졸업 및 일반 모드 복귀 완료!"
                         else:
@@ -451,15 +438,9 @@ async def process_realtime_graduation(ticker, cfg, broker, queue_ledger, chat_id
         
         if main_qty == 0:
             try:
-                ledger = []
-                try: ledger = await asyncio.wait_for(asyncio.to_thread(cfg.get_ledger), timeout=10.0)
-                except Exception: pass
-                
-                target_recs = [r for r in (ledger or []) if isinstance(r, dict) and r.get('ticker') == ticker]
-                
                 ledger_qty, avg_price, invested, sold = 0, 0.0, 0.0, 0.0
                 try:
-                    ledger_qty, avg_price, invested, sold = await asyncio.wait_for(asyncio.to_thread(cfg.calculate_holdings, ticker, target_recs), timeout=10.0)
+                    ledger_qty, avg_price, invested, sold = await asyncio.wait_for(asyncio.to_thread(cfg.calculate_holdings_from_official_ledger, ticker), timeout=10.0)
                 except Exception: pass
                 
                 if ledger_qty > 0:

@@ -126,9 +126,23 @@ class ProcessedFillStore:
         payload = json.dumps(dict(record), ensure_ascii=False, separators=(",", ":")) + "\n"
         with self._lock(fcntl.LOCK_EX):
             records = self._read_unlocked()
-            if any(r.get("fill_key") == record.get("fill_key") for r in records):
+            same_fill_records = [r for r in records if r.get("fill_key") == record.get("fill_key")]
+            latest = same_fill_records[-1] if same_fill_records else None
+            if latest is not None and not self._allows_reclassification(latest, record):
                 return
             self._atomic_append_line(payload)
+
+    @staticmethod
+    def _allows_reclassification(existing: Mapping[str, Any], new_record: Mapping[str, Any]) -> bool:
+        existing_classification = str(existing.get("classification") or "")
+        new_classification = str(new_record.get("classification") or "")
+        if existing_classification == new_classification:
+            return False
+        if existing_classification in {"UNCLASSIFIED", "UNCLASSIFIED_AFTER_FILLED"} and new_classification in {"PARTIAL", "FINAL"}:
+            return True
+        if existing_classification == "PARTIAL" and new_classification == "FINAL":
+            return True
+        return False
 
     def has_fill_key(self, fill_key: str) -> bool:
         return any(r.get("fill_key") == fill_key for r in self.list_records())
