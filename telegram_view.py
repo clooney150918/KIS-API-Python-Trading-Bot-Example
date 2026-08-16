@@ -272,7 +272,10 @@ class TelegramView:
         plan_dict = plan_dict or {}
         reverse_state = reverse_state or {}
         proc_status = str(plan_dict.get('process_status') or '')
-        is_reverse = bool(plan_dict.get('is_reverse')) or bool(reverse_state.get('is_active'))
+        # get_plan이 is_reverse를 명시적으로 반환하면 그것을 신뢰(False도 포함).
+        # plan이 없을 때만 reverse_config.is_active 폴백 사용.
+        _plan_is_reverse = plan_dict.get('is_reverse')
+        is_reverse = bool(_plan_is_reverse) if _plan_is_reverse is not None else bool(reverse_state.get('is_active'))
 
         # 1) HALT 계열: ⛔ 접두 또는 'HALT' 포함 시 사유 그대로 표출
         safety = plan_dict.get('safety') or {}
@@ -381,7 +384,9 @@ class TelegramView:
             volatility_status_txt = html.escape(str(t_info.get('upward_' + 'sni' + 'per') or 'OFF'))
             plan_orders = plan_dict.get('orders') or []
             raw_status_for_mode = str(plan_dict.get('process_status') or '')
-            if '리버스' in raw_status_for_mode or is_rev_logic:
+            if '복귀대기' in raw_status_for_mode:
+                official_mode = '♻️복귀대기'
+            elif '리버스' in raw_status_for_mode or is_rev_logic:
                 official_mode = '리버스'
             elif '전반' in raw_status_for_mode:
                 official_mode = '전반'
@@ -530,6 +535,46 @@ class TelegramView:
                     body_msg += f"  🔵 매도   {' · '.join(sell_parts)}\n"
                 body_msg += "─────────────────────\n"
 
+            # 모드 변경(리버스→일반) 감지 및 표시
+            reverse_sell_events_body = t_info.get('reverse_sell_events') or []
+            reverse_state_body = t_info.get('reverse_state') or {}
+            is_mode_changed = (
+                bool(reverse_state_body.get('is_active'))
+                and not is_rev_logic
+                and bool(reverse_sell_events_body)
+            )
+            if is_mode_changed:
+                try:
+                    day_count_rc = int(self._safe_float(reverse_state_body.get('day_count', 1)))
+                    latest_rsell = max(reverse_sell_events_body, key=lambda e: str(e.get('occurred_at', '')))
+                    rsell_qty = int(self._safe_float(latest_rsell.get('filled_qty', 0)))
+                    rsell_amount = self._safe_float(latest_rsell.get('filled_amount', 0))
+                    rsell_price = round(rsell_amount / rsell_qty, 2) if rsell_qty > 0 else 0.0
+                    fk_parts = str(latest_rsell.get('fill_key', '')).split('|')
+                    if len(fk_parts) >= 2:
+                        try:
+                            rsell_price = float(fk_parts[-1])
+                        except Exception:
+                            pass
+                    mode_after_lbl = "후반전" if '후반' in raw_status_for_mode else ("전반전" if '전반' in raw_status_for_mode else html.escape(str(official_mode)))
+                    after_parts = []
+                    for _o in plan_orders:
+                        if not isinstance(_o, dict):
+                            continue
+                        _et = str(_o.get('event_type', '')).upper()
+                        _qty_o = int(self._safe_float(_o.get('qty', 0)))
+                        if _qty_o > 0:
+                            if _et == 'QUARTER':
+                                after_parts.append(f"쿼터매도 {_qty_o}주")
+                            elif _et == 'TARGET_FULL':
+                                after_parts.append(f"목표매도 {_qty_o}주")
+                    after_summary = " + ".join(after_parts) if after_parts else "일반 주문"
+                    body_msg += f"♻️ 리버스 모드 → 🌕 일반모드 {mode_after_lbl}  <b>(모드 변경)</b>\n"
+                    body_msg += f"  [변경 전] 리버스 {day_count_rc}일차: MOC 매도 {rsell_qty}주 @ ${rsell_price:.2f} (체결)\n"
+                    body_msg += f"  [변경 후] 일반모드 {mode_after_lbl}: {after_summary}\n"
+                    body_msg += "─────────────────────\n"
+                except Exception:
+                    pass
             body_msg += f"📋 <b>[주문 계획 - {proc_status}]</b>\n"
             plan_orders = plan_dict.get('orders') or []
             if plan_orders:

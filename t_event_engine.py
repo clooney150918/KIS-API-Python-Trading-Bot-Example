@@ -20,17 +20,25 @@ from laoer_v4_20 import apply_fill_event as _kernel_apply_fill_event
 # 리버스 쿼터매수 이벤트가 없어 일반매수(T+1)로 잘못 연결된다. 커널을 건드리지 않고
 # 정산 레이어에서 리버스 쿼터매수 이벤트를 별도 배선한다.
 REVERSE_QUARTER_BUY_EVENT = "REVERSE_QUARTER_BUY"
+REVERSE_SELL_EVENT = "REVERSE_SELL"
 _REVERSE_SPLIT = Decimal("20")
 _REVERSE_QUARTER_RATIO = Decimal("0.25")
+_REVERSE_SELL_RATIO = Decimal("0.9")
 
 
 def apply_fill_event_extended(t_before, event_type):
-    """Apply a fill event to T, including the reverse quarter-buy rule.
+    """Apply a fill event to T, including the reverse sell/buy rules.
 
     Reverse quarter-buy (BUY in reverse mode) advances T by
     ``T + (20 - T) * 0.25``, distinct from the normal-mode FULL buy (``T + 1``).
+
+    Reverse sell (SELL in reverse mode) scales T by ``T * 0.9``, distinct
+    from the normal-mode QUARTER sell (``T * 0.75``).
     All other event types delegate to the kernel's normal-mode table.
     """
+    if str(event_type).upper() == REVERSE_SELL_EVENT:
+        t = parse_decimal(t_before, "t_before")
+        return t * _REVERSE_SELL_RATIO
     if str(event_type).upper() == REVERSE_QUARTER_BUY_EVENT:
         t = parse_decimal(t_before, "t_before")
         return t + ((_REVERSE_SPLIT - t) * _REVERSE_QUARTER_RATIO)

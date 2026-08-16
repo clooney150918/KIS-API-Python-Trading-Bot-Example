@@ -405,13 +405,32 @@ class TelegramSyncEngine:
                         if final_qty == 0:
                             curr_p = 0.0
                          
-                        await asyncio.wait_for(asyncio.to_thread(
+                        snap_plan = await asyncio.wait_for(asyncio.to_thread(
                             self.strategy.get_plan, ticker, curr_p, final_avg, final_qty, prev_c, ma_5day=ma_5day,
                             market_type="REG", available_cash=avail_cash, is_simulation=True, is_snapshot_mode=True
                         ), timeout=15.0)
                         
                         if is_after_market:
                             logging.info(f"📸 [{ticker}] 16:05 EST 확정 정산 완료 후 명일(D+1) 대비 스냅샷 박제(Forward-Lock) 성공.")
+                            if isinstance(snap_plan, dict) and snap_plan.get("process_status") == "♻️리버스복귀대기":
+                                try:
+                                    rev_state_snap = await asyncio.wait_for(asyncio.to_thread(self.cfg.get_reverse_state, ticker), timeout=5.0)
+                                    carry_t = self._safe_float((rev_state_snap or {}).get("dynamic_t", 0.0))
+                                    carry_cash = self._safe_float((rev_state_snap or {}).get("rem_cash", 0.0))
+                                    await asyncio.wait_for(asyncio.to_thread(
+                                        self.cfg.set_reverse_state, ticker, False, 0, 0.0,
+                                        dynamic_t=carry_t, rem_cash=carry_cash
+                                    ), timeout=10.0)
+                                    avg_x_08 = round(final_avg * 0.80, 2) if final_avg > 0 else 0.0
+                                    dm_msg = (
+                                        f"♻️ <b>[진호봇 SOXL] 리버스 모드 종료 → 일반모드 복귀</b>\n"
+                                        f"▫️ {now_est.strftime('%m-%d')} 확정 종가 <b>${prev_c:.2f}</b> &gt; 평단×0.80 (<b>${avg_x_08:.2f}</b>)\n"
+                                        f"▫️ 다음 영업일 일반모드 주문계획으로 진행"
+                                    )
+                                    await self._safe_send(context, chat_id, dm_msg, parse_mode='HTML')
+                                    logging.info(f"♻️ [{ticker}] 리버스 복귀 판정 완료 → 일반모드 전환 + DM 발송.")
+                                except Exception as _rev_exc:
+                                    logging.error(f"🚨 [{ticker}] 리버스 복귀 처리 오류: {_rev_exc}")
                         else:
                             logging.info(f"📸 [{ticker}] 장부 교정 감지! 낡은 스냅샷 정리 및 실시간 팩트 지시서 재생성(Regenerate) 성공.")
                     except Exception as e:

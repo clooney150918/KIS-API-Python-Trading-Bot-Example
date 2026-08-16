@@ -422,7 +422,8 @@ class TelegramCommands:
             plan = await self._retry_api(
                 self.strategy.get_plan, t, curr, actual_avg, logic_qty, safe_prev_close, ma_5day=ma_5day,
                 market_type="REG", available_cash=allocated_cash.get(t, 0.0),
-                is_simulation=True, regime_data=regime_data, is_snapshot_mode=False
+                is_simulation=True, regime_data=regime_data, is_snapshot_mode=False,
+                confirmed_close=(safe_prev_close if status_code in ["CLOSE", "AFTER"] else None)
             ) or {}
                
             split = await self._retry_api(self.cfg.get_split_count, t, default=40.0)
@@ -474,6 +475,24 @@ class TelegramCommands:
             reverse_state = await self._retry_api(self.cfg.get_reverse_state, t, default={}) or {}
             if not isinstance(reverse_state, dict):
                 reverse_state = {}
+            # 모드 변경(리버스→일반) 표시용: t_events의 REVERSE_SELL 이벤트 로드
+            reverse_sell_events = []
+            try:
+                _t_events_path = os.path.join("data", f"t_events_{t}.jsonl")
+                if os.path.exists(_t_events_path):
+                    with open(_t_events_path, 'r', encoding='utf-8') as _ef:
+                        for _el in _ef:
+                            _el = _el.strip()
+                            if not _el:
+                                continue
+                            try:
+                                _ev = json.loads(_el)
+                                if isinstance(_ev, dict) and str(_ev.get('event_type', '')).upper() == 'REVERSE_SELL':
+                                    reverse_sell_events.append(_ev)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
             discrepancy = self._build_kis_local_discrepancy_for_sync(official_balance, local_ledger)
             order_statuses = self._load_order_statuses_for_sync(t)
             order_status_warning = {}
@@ -511,7 +530,8 @@ class TelegramCommands:
                 'is_manual_slice': is_manual_slice,
                 'is_zero_start': is_zero_start_fact,
                 'has_snapshot': bool(cached_snap),
-                'reverse_state': reverse_state
+                'reverse_state': reverse_state,
+                'reverse_sell_events': reverse_sell_events
             })
             
             plan_orders_raw = plan.get('orders', []) if isinstance(plan.get('orders'), list) else []
