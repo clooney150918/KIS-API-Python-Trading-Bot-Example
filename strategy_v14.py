@@ -44,6 +44,22 @@ class V4Strategy:
             return None, "invalid reverse day domain: day_count must be a positive integer"
         return int(value), ""
 
+    def _get_reverse_plan_display_day(self, day, rev_state):
+        # 주문계획 표시용 보정: 진입일이 지난 day_count=1은 2일차 계획으로 보여준다.
+        if day != 1:
+            return day
+        raw_last_update_date = rev_state.get("last_update_date")
+        if not raw_last_update_date:
+            return day
+        try:
+            entry_date = datetime.strptime(str(raw_last_update_date).strip()[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return day
+        today_est = datetime.now(ZoneInfo("America/New_York")).date()
+        if entry_date < today_est:
+            return 2
+        return day
+
     def _ceil(self, val): return math.ceil(self._safe_float(val) * 100) / 100.0
     def _floor(self, val): return math.floor(self._safe_float(val) * 100) / 100.0
 
@@ -337,6 +353,7 @@ class V4Strategy:
                 kernel_fail_closed = True
                 kernel_reason = day_reason
             else:
+                day = self._get_reverse_plan_display_day(day, rev_state)
                 previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
                 if day <= 1:
                     previous_closes = []
