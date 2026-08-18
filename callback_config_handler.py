@@ -18,7 +18,7 @@ import os
 import asyncio
 import html
 import telegram.error
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle
 from telegram_auth import UNSUPPORTED_OFFICIAL_SOXL_MESSAGE
@@ -41,6 +41,15 @@ class CallbackConfigHandler:
             return f_val
         except Exception:
             return 0.0
+
+    async def _get_current_cash_balance(self):
+        try:
+            res = await asyncio.wait_for(asyncio.to_thread(self.broker.get_account_balance), timeout=10.0)
+            if isinstance(res, (list, tuple)) and len(res) > 0:
+                return self._safe_float(res[0])
+        except Exception as e:
+            logging.warning(f"⚠️ 현재 잔고 조회 실패: {e}")
+        return None
 
     async def handle(self, update: Update, context: ContextTypes.DEFAULT_TYPE, controller, action: str, sub: str, data: list):
         if not update.effective_chat or not update.callback_query:
@@ -533,6 +542,64 @@ class CallbackConfigHandler:
             
         elif action == "SEED":
             if not ticker: return
+            if sub == "BAL_REQ":
+                cash = await self._get_current_cash_balance()
+                safe_ticker = html.escape(str(ticker))
+                if cash is None:
+                    try:
+                        await asyncio.wait_for(query.answer("⚠️ 현재 잔고 조회에 실패했습니다.", show_alert=True), timeout=5.0)
+                    except Exception:
+                        pass
+                    return
+
+                try:
+                    current_seed = self._safe_float(await asyncio.wait_for(asyncio.to_thread(self.cfg.get_seed, ticker), timeout=10.0))
+                except Exception:
+                    current_seed = 0.0
+
+                msg = f"⚠️ <b>[{safe_ticker} 시드 재설정 확인]</b>\n\n"
+                msg += f"현재 시드: <b>${current_seed:,.0f}</b>\n"
+                msg += f"현재 잔고: <b>${cash:,.0f}</b>\n\n"
+                msg += "현재 잔고를 이 종목의 새 시드로 저장하시겠습니까?"
+                markup = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ 현재 잔고로 재설정", callback_data=f"SEED:BAL_CONFIRM:{safe_ticker}")],
+                    [InlineKeyboardButton("❌ 취소", callback_data="RESET:CANCEL")],
+                ])
+                try:
+                    await asyncio.wait_for(query.edit_message_text(msg, reply_markup=markup, parse_mode='HTML'), timeout=10.0)
+                except telegram.error.BadRequest as e:
+                    if "not modified" not in str(e).lower(): logging.warning(f"⚠️ UI 갱신 예외: {e}")
+                except Exception:
+                    pass
+                return
+
+            if sub == "BAL_CONFIRM":
+                cash = await self._get_current_cash_balance()
+                safe_ticker = html.escape(str(ticker))
+                if cash is None:
+                    try:
+                        await asyncio.wait_for(query.answer("⚠️ 현재 잔고 조회에 실패했습니다. 시드는 변경하지 않았습니다.", show_alert=True), timeout=5.0)
+                    except Exception:
+                        pass
+                    return
+
+                try:
+                    await asyncio.wait_for(asyncio.to_thread(self.cfg.set_seed, ticker, cash), timeout=10.0)
+                    await asyncio.wait_for(
+                        query.edit_message_text(
+                            f"✅ <b>[{safe_ticker}] 시드 재설정 완료</b>\n▫️ 새 시드: <b>${cash:,.0f}</b>",
+                            parse_mode='HTML'
+                        ),
+                        timeout=10.0,
+                    )
+                except Exception as e:
+                    logging.error(f"🚨 현재 잔고 기반 시드 재설정 에러: {e}")
+                    try:
+                        await asyncio.wait_for(query.answer("❌ 시드 재설정 중 오류가 발생했습니다.", show_alert=True), timeout=5.0)
+                    except Exception:
+                        pass
+                return
+
             controller.user_states[chat_id] = f"SEED_{sub}_{ticker}"
             await asyncio.wait_for(context.bot.send_message(chat_id, f"💵 [{html.escape(str(ticker))}] 시드머니 금액 입력:", parse_mode='HTML'), timeout=10.0)
 

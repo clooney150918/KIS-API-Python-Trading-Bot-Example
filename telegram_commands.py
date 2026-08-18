@@ -47,6 +47,15 @@ class TelegramCommands:
         except Exception:
             return 0.0
 
+    async def _get_current_cash_balance(self):
+        try:
+            res = await self._retry_api(self.broker.get_account_balance, timeout=10.0, default=None)
+            if isinstance(res, (list, tuple)) and len(res) > 0:
+                return self._safe_float(res[0])
+        except Exception as e:
+            logging.warning(f"⚠️ 현재 잔고 조회 실패: {e}")
+        return None
+
     def _build_official_balance_for_sync(self, cash, holding):
         holding = holding if isinstance(holding, dict) else {}
         return {
@@ -677,15 +686,21 @@ class TelegramCommands:
     async def cmd_seed(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "💵 <b>[ 종목별 시드머니 관리 ]</b>\n\n"
         keyboard = []
+        current_cash = await self._get_current_cash_balance()
         active_tickers = await self._retry_api(self.cfg.get_active_tickers, default=[])
         if not isinstance(active_tickers, list): active_tickers = []
         for t in active_tickers:
+            safe_ticker = html.escape(str(t))
             current_seed = self._safe_float(await self._retry_api(self.cfg.get_seed, t))
-            msg += f"💎 <b>{html.escape(str(t))}</b>: ${current_seed:,.0f}\n"
+            balance_text = f" | 현재 잔고 ${current_cash:,.0f}" if current_cash is not None else " | 현재 잔고 조회실패"
+            msg += f"💎 <b>{safe_ticker}</b>: 시드 ${current_seed:,.0f}{balance_text}\n"
             keyboard.append([
-                InlineKeyboardButton(f"➕ {html.escape(str(t))} 추가", callback_data=f"SEED:ADD:{html.escape(str(t))}"), 
-                InlineKeyboardButton(f"➖ {html.escape(str(t))} 감소", callback_data=f"SEED:SUB:{html.escape(str(t))}"),
-                InlineKeyboardButton(f"🔢 {html.escape(str(t))} 고정", callback_data=f"SEED:SET:{html.escape(str(t))}")
+                InlineKeyboardButton(f"➕ {safe_ticker} 추가", callback_data=f"SEED:ADD:{safe_ticker}"), 
+                InlineKeyboardButton(f"➖ {safe_ticker} 감소", callback_data=f"SEED:SUB:{safe_ticker}"),
+                InlineKeyboardButton(f"🔢 {safe_ticker} 고정", callback_data=f"SEED:SET:{safe_ticker}")
+            ])
+            keyboard.append([
+                InlineKeyboardButton(f"💰 {safe_ticker} 현재 잔고로 시드 재설정", callback_data=f"SEED:BAL_REQ:{safe_ticker}")
             ])
             
         is_callback = update.callback_query is not None
