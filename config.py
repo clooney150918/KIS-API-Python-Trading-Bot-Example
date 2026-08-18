@@ -607,6 +607,7 @@ class ConfigManager:
             "seed": None,
             "implied_seed_at_baseline": None,
             "seed_consistent": None,
+            "baseline_seed_delta": "0.00",
             "reason": "",
         }
 
@@ -689,7 +690,9 @@ class ConfigManager:
                 bavg = Decimal(str(baseline.get("avg_price", "0")))
                 implied = (base_cash + (bqty * bavg)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 detail["implied_seed_at_baseline"] = format(implied, "f")
-                detail["seed_consistent"] = bool(abs(implied - seed) <= Decimal("50"))
+                seed_delta = (seed - implied).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                detail["baseline_seed_delta"] = format(seed_delta, "f")
+                detail["seed_consistent"] = bool(abs(seed_delta) <= Decimal("50"))
             except (InvalidOperation, ValueError):
                 pass
 
@@ -745,14 +748,18 @@ class ConfigManager:
                 del d[target]
                 self._save_json(path, d)
 
-    def reconcile_cycle_cash(self, ticker, kis_deposit, tolerance=50.0):
-        """정합 검증: KIS 예수금 ≈ cycle_cash + pending_seed 항등식.
+    def reconcile_cycle_cash(self, ticker, kis_deposit, tolerance=50.0, record_pending=True):
+        """정합 검증: KIS 매수미정산 보정현금 ≈ baseline 정규화 cycle_cash.
 
-        - kis_deposit: KIS 원장 예수금(frcr_dncl_amt_2) 권장.
-        - pending_seed = max(0, kis_deposit − cycle_cash) 를 격리 기록만 하고 사이클 미반영.
-        - cycle_cash 가 kis_deposit 를 tolerance 이상 초과(원장 과대)하면 fail-closed(halt).
+        - kis_deposit: KIS 예수금 + 매도미정산 + 매수미정산 보정값.
+        - baseline_seed_delta = seed − (baseline.available_cash + baseline 보유원가)
+          는 기준점 이전 실현손익/수수료/환율 차이이므로 HALT 차이에서 제외한다.
+        - expected_kis_cash = cycle_cash − baseline_seed_delta.
+        - KIS 초과분은 pending_seed 로 격리 기록만 하고 사이클 미반영.
+        - KIS 부족분이 tolerance 를 넘으면 실제 출금/누락 가능성이므로 fail-closed(halt).
 
-        반환 dict: ok, halt, reason, cycle_cash, kis_deposit, pending_seed, discrepancy, detail
+        반환 dict: ok, halt, reason, cycle_cash, kis_deposit, expected_kis_cash,
+        pending_seed, discrepancy, detail
         """
         from decimal import Decimal
 
@@ -764,6 +771,8 @@ class ConfigManager:
             "reason": "",
             "cycle_cash": None,
             "kis_deposit": round(self._safe_float(kis_deposit), 2),
+            "expected_kis_cash": None,
+            "baseline_seed_delta": 0.0,
             "pending_seed": 0.0,
             "discrepancy": None,
         }
@@ -778,31 +787,40 @@ class ConfigManager:
         dep = Decimal(str(self._safe_float(kis_deposit)))
         cyc = Decimal(str(cycle_cash))
         tol = Decimal(str(tolerance))
-        pending = dep - cyc
+        baseline_seed_delta = Decimal(str(detail.get("baseline_seed_delta") or "0"))
+        expected = cyc - baseline_seed_delta
+        surplus = dep - expected
+        deficit = expected - dep
+        result["expected_kis_cash"] = round(float(expected), 2)
+        result["baseline_seed_delta"] = round(float(baseline_seed_delta), 2)
 
-        if pending > tol:
+        if surplus > tol:
             # 입금분 감지 → 격리 기록 (자동 합산 금지)
-            rec = self.record_pending_seed(target, float(pending), float(dep), float(cyc))
+            rec = None
+            if record_pending:
+                rec = self.record_pending_seed(target, float(surplus), float(dep), float(cyc))
             result["ok"] = True
-            result["pending_seed"] = round(float(pending), 2)
-            result["discrepancy"] = round(float(pending), 2)
+            result["pending_seed"] = round(float(surplus), 2)
+            result["discrepancy"] = round(float(surplus), 2)
             result["reason"] = "입금분 격리 기록(사이클 미반영)"
-            result["record"] = rec
+            if rec is not None:
+                result["record"] = rec
             return result
 
-        if (cyc - dep) > tol:
-            # 원장이 실제 예수금보다 과다 → 주문 차단
+        if deficit > tol:
+            # 원장이 구조적 기준차 보정 후 KIS 현금보다 과다 → 주문 차단
             result["halt"] = True
-            result["discrepancy"] = round(float(cyc - dep), 2)
+            result["discrepancy"] = round(float(deficit), 2)
             result["reason"] = (
                 f"정합 실패 HALT: cycle_cash({result['cycle_cash']})가 "
-                f"KIS 예수금({result['kis_deposit']})을 {result['discrepancy']}$ 초과"
+                f"baseline 구조차 보정 KIS 현금({result['expected_kis_cash']}) 대비 "
+                f"실제 KIS 보정현금({result['kis_deposit']})을 {result['discrepancy']}$ 초과"
             )
             return result
 
         # 항등식 성립 (±tolerance). 소액 편차는 환율/미정산 시점차로 흡수.
         result["ok"] = True
-        result["discrepancy"] = round(float(abs(dep - cyc)), 2)
+        result["discrepancy"] = round(float(abs(surplus)), 2)
         result["reason"] = "정합 성립"
         return result
 

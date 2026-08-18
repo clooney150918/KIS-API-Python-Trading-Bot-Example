@@ -3,8 +3,10 @@
 승인 설계:
   cycle_cash = baseline.available_cash + Σ매도 − Σ매수 (KIS 예수금 미사용)
   1회매수금 = cycle_cash / (20 − T)
-  입금분(pending_seed) = KIS 예수금 − cycle_cash (양수일 때만) → 격리 기록, 사이클 미반영
-  정합: KIS 예수금 ≈ cycle_cash + pending_seed (±$50), 초과 시 fail-closed HALT
+  baseline_seed_delta = seed − (baseline.available_cash + baseline 보유원가)
+  정합 기준 KIS 현금 = cycle_cash − baseline_seed_delta
+  입금분(pending_seed) = KIS 보정현금 − 정합 기준 KIS 현금 (양수일 때만) → 격리 기록, 사이클 미반영
+  정합: KIS 매수미정산 보정현금 ≈ 정합 기준 KIS 현금 + pending_seed (±$50), 부족 시 fail-closed HALT
 """
 
 import json
@@ -47,6 +49,8 @@ LEDGER_FILLS = [
 # baseline.available_cash 1482.88 + 매도 6165.89 − 매수 1484.45 = 6164.32
 EXPECTED_CYCLE_CASH_WITH_FILLS = 6164.32
 BASELINE_CYCLE_CASH = 1482.88
+BASELINE_SEED_DELTA = 684.92
+BASELINE_EXPECTED_KIS_CASH = 797.96
 
 
 def _hermetic_cfg(tmp_path, *, ledger_lines=None, seed=17659.0):
@@ -127,7 +131,28 @@ def test_cycle_cash_seed_consistency_flag(tmp_path):
     _cc, detail = cfg.calculate_cycle_cash("SOXL")
     assert detail["seed"] == "17659.0"
     assert detail["implied_seed_at_baseline"] == "16974.08"
+    assert detail["baseline_seed_delta"] == "684.92"
     assert detail["seed_consistent"] is False
+
+
+def test_reconcile_allows_seed_baseline_structural_gap(tmp_path):
+    cfg = _hermetic_cfg(tmp_path)
+    rec = cfg.reconcile_cycle_cash("SOXL", BASELINE_EXPECTED_KIS_CASH + 17.12)
+    assert rec["ok"] is True
+    assert rec["halt"] is False
+    assert rec["baseline_seed_delta"] == BASELINE_SEED_DELTA
+    assert rec["expected_kis_cash"] == BASELINE_EXPECTED_KIS_CASH
+    assert rec["pending_seed"] == 0.0
+
+
+def test_reconcile_readonly_does_not_record_pending_seed(tmp_path):
+    cfg = _hermetic_cfg(tmp_path)
+    rec = cfg.reconcile_cycle_cash("SOXL", BASELINE_EXPECTED_KIS_CASH + 7000.0, record_pending=False)
+    assert rec["ok"] is True
+    assert rec["halt"] is False
+    assert rec["pending_seed"] == 7000.0
+    assert "record" not in rec
+    assert cfg.read_pending_seed("SOXL") == {}
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +162,8 @@ def test_deposit_recorded_as_pending_seed_and_not_added_to_cycle(tmp_path):
     cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88
     seed_before = (tmp_path / "seed.json").read_text(encoding="utf-8")
 
-    # 대표님 $7,000 입금 → KIS 예수금 = 1482.88 + 7000 = 8482.88
-    rec = cfg.reconcile_cycle_cash("SOXL", 8482.88)
+    # 대표님 $7,000 입금 → KIS 보정현금 = 구조차 보정 기준현금 + 7000
+    rec = cfg.reconcile_cycle_cash("SOXL", BASELINE_EXPECTED_KIS_CASH + 7000.0)
     assert rec["ok"] is True
     assert rec["halt"] is False
     assert rec["pending_seed"] == 7000.0
@@ -148,7 +173,7 @@ def test_deposit_recorded_as_pending_seed_and_not_added_to_cycle(tmp_path):
     pending = cfg.read_pending_seed("SOXL")
     assert pending["amount"] == 7000.0
     assert pending["cycle_cash"] == 1482.88
-    assert pending["kis_deposit"] == 8482.88
+    assert pending["kis_deposit"] == 7797.96
     assert (tmp_path / "seed.json").read_text(encoding="utf-8") == seed_before
 
     # cycle_cash 자체는 입금분을 흡수하지 않음
@@ -158,23 +183,23 @@ def test_deposit_recorded_as_pending_seed_and_not_added_to_cycle(tmp_path):
 
 def test_pending_seed_record_is_idempotent(tmp_path):
     cfg = _hermetic_cfg(tmp_path)
-    first = cfg.record_pending_seed("SOXL", 7000.0, 8482.88, 1482.88)
-    second = cfg.record_pending_seed("SOXL", 7000.0, 8482.88, 1482.88)
+    first = cfg.record_pending_seed("SOXL", 7000.0, 7797.96, 1482.88)
+    second = cfg.record_pending_seed("SOXL", 7000.0, 7797.96, 1482.88)
     assert first["amount"] == second["amount"] == 7000.0
 
 
 def test_reconcile_halts_when_ledger_cash_exceeds_deposit(tmp_path):
     # 원장이 실제 예수금보다 과다(±$50 초과) → fail-closed
     cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88
-    rec = cfg.reconcile_cycle_cash("SOXL", 1000.0)
+    rec = cfg.reconcile_cycle_cash("SOXL", BASELINE_EXPECTED_KIS_CASH - 100.0)
     assert rec["halt"] is True
     assert rec["ok"] is False
-    assert rec["discrepancy"] == 482.88
+    assert rec["discrepancy"] == 100.0
 
 
 def test_reconcile_within_tolerance_is_ok_without_pending(tmp_path):
     cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88
-    rec = cfg.reconcile_cycle_cash("SOXL", 1500.0)  # +17.12, ±$50 이내
+    rec = cfg.reconcile_cycle_cash("SOXL", BASELINE_EXPECTED_KIS_CASH + 17.12)  # +17.12, ±$50 이내
     assert rec["ok"] is True
     assert rec["halt"] is False
     assert rec["pending_seed"] == 0.0
@@ -194,7 +219,7 @@ def _make_strategy(cfg):
 def test_get_plan_cycle_cash_reconcile_adds_pending_buy_before_halt_check(tmp_path):
     cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88
     strategy = _make_strategy(cfg)
-    kis_cash_after_pending_buy = (1482.88 - 1000.0) * 0.9945
+    kis_cash_after_pending_buy = (BASELINE_EXPECTED_KIS_CASH - 500.0) * 0.9945
 
     halted_plan = strategy.get_plan(
         "SOXL", current_price=100.0, avg_price=158.0735, qty=98, prev_close=99.0,
@@ -205,7 +230,7 @@ def test_get_plan_cycle_cash_reconcile_adds_pending_buy_before_halt_check(tmp_pa
 
     plan = strategy.get_plan(
         "SOXL", current_price=100.0, avg_price=158.0735, qty=98, prev_close=99.0,
-        available_cash=kis_cash_after_pending_buy, pending_buy_amount=1000.0,
+        available_cash=kis_cash_after_pending_buy, pending_buy_amount=500.0,
         market_type="REG", is_simulation=True, is_snapshot_mode=False,
     )
     assert (plan.get("safety") or {}).get("halted") is not True
@@ -255,7 +280,7 @@ def test_get_plan_snapshot_records_pending_seed_on_deposit(tmp_path):
     cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88
     strategy = _make_strategy(cfg)
     # 일일 정산 스냅샷 + 입금 부풀린 예수금 → pending_seed 격리 기록
-    kis_cash = (1482.88 + 7000.0) * 0.9945  # KIS 파생 가용현금 형태
+    kis_cash = (BASELINE_EXPECTED_KIS_CASH + 7000.0) * 0.9945  # KIS 파생 가용현금 형태
     strategy.get_plan(
         "SOXL", current_price=100.0, avg_price=158.0735, qty=98, prev_close=99.0,
         available_cash=kis_cash, market_type="REG", is_snapshot_mode=True,

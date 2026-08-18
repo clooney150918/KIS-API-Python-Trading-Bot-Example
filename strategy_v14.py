@@ -213,9 +213,9 @@ class V4Strategy:
 
         - cycle_cash = baseline.available_cash + Σ매도 − Σ매수 (KIS 예수금 미사용).
           → 중간 입금이 예수금에 더해져도 1회매수금이 부풀지 않는다.
-        - 정합 검증: is_snapshot_mode(일일 정산 스냅샷) 시 reconcile_cycle_cash로
-          입금분(pending_seed) 격리 기록 + 항등식 HALT 판정. 그 외 경로는 부작용 없이
-          읽기전용 과대현금 가드만 수행.
+        - 정합 검증: 모든 실계좌 계획에서 reconcile_cycle_cash로 항등식 HALT를
+          판정한다. is_snapshot_mode(일일 정산 스냅샷)에서만 입금분(pending_seed)을
+          기록하고, 그 외 경로는 부작용 없이 읽기전용으로 검증한다.
         - fail-closed: cycle_cash 계산 불가 또는 정합 실패 시 (cash, True, reason).
 
         반환: (official_cash: float, halted: bool, reason: str)
@@ -241,13 +241,12 @@ class V4Strategy:
             kis_deposit_est = real_available_cash / 0.9945
             pending_buy_amount = max(0.0, self._safe_float(pending_buy_amount))
             cycle_compare_cash = kis_deposit_est + pending_buy_amount
-            if is_snapshot_mode:
-                reconcile_fn = getattr(self.cfg, "reconcile_cycle_cash", None)
-                if callable(reconcile_fn):
-                    rec = reconcile_fn(target, cycle_compare_cash)
-                    if rec.get("halt"):
-                        halted = True
-                        reason = rec.get("reason", "정합 실패 HALT")
+            reconcile_fn = getattr(self.cfg, "reconcile_cycle_cash", None)
+            if callable(reconcile_fn):
+                rec = reconcile_fn(target, cycle_compare_cash, record_pending=bool(is_snapshot_mode))
+                if rec.get("halt"):
+                    halted = True
+                    reason = rec.get("reason", "정합 실패 HALT")
             elif (cycle_cash - cycle_compare_cash) > 50.0:
                 halted = True
                 reason = (
