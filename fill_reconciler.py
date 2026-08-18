@@ -71,7 +71,13 @@ def normalize_kis_execution(row: Mapping[str, Any], *, account_fingerprint: str)
     exchange = _text(row.get("ovrs_excg_cd") or row.get("exchange") or "AMEX").upper()
     qty = _positive_int(row.get("ft_ccld_qty") or row.get("qty"), "ft_ccld_qty")
     price = _decimal(row.get("ft_ccld_unpr3") or row.get("price"), "ft_ccld_unpr3")
-    return {
+    order_price = None
+    for key in ("ord_unpr", "ovrs_ord_unpr", "ft_ord_unpr3", "ft_ord_unpr", "order_price"):
+        raw = row.get(key)
+        if raw not in (None, ""):
+            order_price = _decimal(raw, key)
+            break
+    normalized = {
         "account_fingerprint": _text(account_fingerprint),
         "ticker": ticker,
         "exchange": exchange,
@@ -83,6 +89,9 @@ def normalize_kis_execution(row: Mapping[str, Any], *, account_fingerprint: str)
         "price": price,
         "amount": price * Decimal(qty),
     }
+    if order_price is not None:
+        normalized["order_price"] = order_price
+    return normalized
 
 
 def _money_text(value: Decimal) -> str:
@@ -213,10 +222,17 @@ class FillReconciler:
             "CANCELLED_PARTIAL_REMAINS",
             "FINALIZATION_FAILED",
         }
+        final_fill_keys = {
+            record.get("fill_key")
+            for record in processed
+            if _text(record.get("ticker")).upper() == ticker
+            and record.get("classification") == "FINAL"
+        }
         return any(
             _text(record.get("ticker")).upper() == ticker
             and record.get("classification") in durable_halt_classifications
             and record.get("fill_key") not in t_event_fill_keys
+            and record.get("fill_key") not in final_fill_keys
             for record in processed
         )
 
@@ -325,6 +341,51 @@ class FillReconciler:
             if accepted_order.get("matching_key") != fill_matching_key:
                 continue
             candidates.append(intent)
+        if len(candidates) == 1:
+            return candidates[0]
+        if candidates:
+            return None
+
+        return self._match_intent_by_order_terms(ticker, fill, latest)
+
+    def _match_intent_by_order_terms(self, ticker: str, fill: Mapping[str, Any], latest: list[dict[str, Any]]) -> dict[str, Any] | None:
+        order_price = fill.get("order_price")
+        if order_price is None:
+            return None
+        fill_prefix = "|".join([
+            _text(fill.get("account_fingerprint")),
+            _text(fill.get("ticker")).upper(),
+            _text(fill.get("exchange")).upper(),
+            _text(fill.get("trade_date")),
+        ])
+        candidates = []
+        for intent in latest:
+            if intent.get("ticker") != ticker:
+                continue
+            if intent.get("status") not in {"SUBMITTED", "PARTIAL"}:
+                continue
+            if intent.get("side") != fill.get("side"):
+                continue
+            accepted_order = intent.get("accepted_order")
+            if not isinstance(accepted_order, Mapping):
+                continue
+            accepted_prefix = "|".join([
+                _text(accepted_order.get("account_fingerprint")),
+                _text(accepted_order.get("ticker")).upper(),
+                _text(accepted_order.get("exchange")).upper(),
+                _text(accepted_order.get("trade_date")).replace("-", ""),
+            ])
+            if accepted_prefix != fill_prefix:
+                continue
+            try:
+                intent_price = _decimal(intent.get("price"), "intent.price")
+            except FillReconciliationError:
+                continue
+            if abs(intent_price - order_price) > Decimal("0.01"):
+                continue
+            if not self._fill_within_intent(intent, fill):
+                continue
+            candidates.append(intent)
         return candidates[0] if len(candidates) == 1 else None
 
     def _fill_within_intent(self, intent: Mapping[str, Any], fill: Mapping[str, Any]) -> bool:
@@ -403,6 +464,7 @@ class FillReconciler:
             "side": fill["side"],
             "qty": int(fill["qty"]),
             "price": _money_text(fill["price"]),
+            **({"order_price": _money_text(fill["order_price"])} if fill.get("order_price") is not None else {}),
             "amount": _money_text(fill["amount"]),
             "intent_id": intent_id,
             "classification": classification,

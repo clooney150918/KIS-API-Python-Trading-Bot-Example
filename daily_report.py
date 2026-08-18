@@ -153,6 +153,57 @@ def _load_current_t(config, ticker):
     return _safe_float(state.get("t_val", state.get("t")) if isinstance(state, dict) else 0.0), 0.0
 
 
+def _t_event_fill_keys(config, ticker):
+    try:
+        path = Path(getattr(config, "FILES", {}).get("T_EVENTS", f"data/t_events_{ticker}.jsonl"))
+    except Exception:
+        path = Path("data") / f"t_events_{ticker}.jsonl"
+    keys = set()
+    for row in _read_jsonl(path):
+        if str(row.get("ticker", "")).upper() == ticker and row.get("fill_key"):
+            keys.update(_ledger_fill_key_variants({"fill_key": row.get("fill_key")}))
+    return keys
+
+
+def _ledger_fill_key_variants(fill):
+    fill_key = str(fill.get("fill_key") or "").strip()
+    if not fill_key:
+        return set()
+    variants = {fill_key}
+    parts = fill_key.split("|")
+    if len(parts) == 9:
+        variants.add("|".join(parts[1:]))
+    elif len(parts) == 8:
+        variants.add("|" + fill_key)
+    return variants
+
+
+def _apply_report_t_event(t_value, event_type):
+    try:
+        from t_event_engine import apply_fill_event_extended
+
+        return _safe_float(apply_fill_event_extended(str(t_value), str(event_type).upper()), t_value)
+    except Exception as exc:
+        logging.warning("daily report T projection failed for %s: %s", event_type, exc)
+        return t_value
+
+
+def _project_current_t_from_missing_daily_fills(config, ticker, current_t, fills, snapshot, order_by_no):
+    """Report-only guard: project confirmed same-day fills absent from t_events."""
+    t_event_keys = _t_event_fill_keys(config, ticker)
+    projected = _safe_float(current_t)
+    applied_event_types = set()
+    for fill in fills:
+        if _ledger_fill_key_variants(fill) & t_event_keys:
+            continue
+        event_type = _classify_fill(fill, snapshot, order_by_no)
+        if event_type in applied_event_types:
+            continue
+        projected = _apply_report_t_event(projected, event_type)
+        applied_event_types.add(event_type)
+    return projected
+
+
 def _load_order_metadata(ticker):
     by_order_no = {}
     by_intent_id = {}
@@ -167,6 +218,13 @@ def _load_order_metadata(ticker):
         intent_id = str(row.get("intent_id") or "").strip()
         if intent_id:
             by_intent_id[intent_id] = row
+    for row in _read_jsonl(Path("data") / f"t_events_{ticker}.jsonl"):
+        if str(row.get("ticker", "")).upper() != ticker:
+            continue
+        order_no = str(row.get("kis_order_no") or row.get("order_no") or "").strip()
+        event_type = str(row.get("event_type") or "").upper()
+        if order_no and event_type:
+            by_order_no[order_no] = {"event_type": event_type}
     return by_order_no, by_intent_id
 
 
@@ -417,6 +475,8 @@ def build_daily_report(config, broker, strategy, view=None):
     grouped_orders = _orders_by_event(today_plan)
 
     order_by_no, _ = _load_order_metadata(TICKER)
+    current_t = _project_current_t_from_missing_daily_fills(config, TICKER, current_t, fills, snapshot, order_by_no)
+    current_one = current_cash / max(1.0, SPLIT_COUNT - current_t)
     aggregated = _aggregate_fills(fills, snapshot, order_by_no)
     planned_qty = _planned_qtys(snapshot, TICKER, trade_date)
     eval_amount = (price - current_avg) * current_qty if price > 0 and current_avg > 0 and current_qty > 0 else 0.0

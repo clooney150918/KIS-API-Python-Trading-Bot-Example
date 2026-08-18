@@ -168,6 +168,62 @@ def test_external_unrelated_odno_account_or_exchange_does_not_match_existing_int
     assert events_path.read_text(encoding="utf-8") == ""
 
 
+def test_kis_loc_execution_with_reissued_order_number_matches_by_order_price_once(tmp_path):
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
+    intent = submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(order_no="RESERVATION-ODNO"),
+        event_type="FULL_BUY",
+        side="BUY",
+        qty=5,
+        price="150.39",
+    )
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+
+    result = reconciler.reconcile(
+        "SOXL",
+        [
+            kis_fill(
+                odno="EXECUTION-ODNO",
+                ft_ccld_qty="5",
+                ft_ccld_unpr3="129.10",
+                ord_unpr="150.39",
+            )
+        ],
+    )
+
+    assert result["operator_halt"] is False
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    assert event["intent_id"] == intent["intent_id"]
+    assert event["kis_order_no"] == "EXECUTION-ODNO"
+    assert event["filled_qty"] == 5
+    processed = json.loads(processed_path.read_text(encoding="utf-8"))
+    assert processed["order_price"] == "150.39"
+    assert processed["classification"] == "FINAL"
+
+
+def test_reissued_order_number_without_order_price_stays_unclassified(tmp_path):
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(order_no="RESERVATION-ODNO"),
+        event_type="FULL_BUY",
+        qty=5,
+        price="150.39",
+    )
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+
+    result = reconciler.reconcile(
+        "SOXL",
+        [kis_fill(odno="EXECUTION-ODNO", ft_ccld_qty="5", ft_ccld_unpr3="129.10")],
+    )
+
+    assert result["operator_halt"] is True
+    assert "UNCLASSIFIED_FILL" in result["codes"]
+    assert events_path.read_text(encoding="utf-8") == ""
+
+
 @pytest.mark.parametrize(
     "accepted_overrides,fill_overrides,reconciler_account",
     [
