@@ -53,6 +53,28 @@ class TelegramView:
         except Exception:
             return 0.0
 
+    def _get_cycle_cash(self, ticker):
+        try:
+            cfg = self.cfg
+            if cfg is None:
+                from config import ConfigManager
+                cfg = ConfigManager()
+                self.cfg = cfg
+            if not hasattr(cfg, "calculate_cycle_cash"):
+                raise AttributeError("calculate_cycle_cash unavailable")
+            cycle_cash, detail = cfg.calculate_cycle_cash(ticker)
+            if cycle_cash is None:
+                logging.warning("cycle_cash unavailable for %s: %s", ticker, detail.get("reason", ""))
+                return None
+            return self._safe_float(cycle_cash)
+        except Exception as exc:
+            logging.warning("cycle_cash calculation failed for %s: %s", ticker, exc)
+            return None
+
+    def _format_cash_display(self, kis_cash, cycle_cash):
+        cycle_text = "N/A" if cycle_cash is None else f"{cycle_cash:,.0f}"
+        return f"잔금: KIS {kis_cash:,.0f} / 사이클현금 {cycle_text}"
+
     def _load_best_font(self, font_paths, size):
         for path in font_paths:
             try:
@@ -347,7 +369,8 @@ class TelegramView:
         for t_info in ticker_data:
             if not isinstance(t_info, dict): continue
 
-            t = html.escape(str(t_info.get('ticker') or 'UNK'))
+            raw_ticker = str(t_info.get('ticker') or 'UNK')
+            t = html.escape(raw_ticker)
             v_mode = str(t_info.get('version') or 'V4.0')
             is_manual_slice = False
 
@@ -458,7 +481,9 @@ class TelegramView:
                 warning_reason = order_status_warning.get('reason') or 'order intent ledger unavailable'
                 body_msg += f"⛔ <b>HALT 주문 상태 원장:</b> {html.escape(str(warning_reason))}\n"
 
-            body_msg += f"💰 보유   <b>{fact_qty}주 · 평단 ${safe_avg:.2f} · 현재가 ${safe_curr:.2f} · 잔금 ${kis_cash:,.0f}</b>\n"
+            cycle_cash = self._get_cycle_cash("SOXL")
+            cash_display = self._format_cash_display(kis_cash, cycle_cash)
+            body_msg += f"💰 보유   <b>{fact_qty}주 · 평단 ${safe_avg:.2f} · 현재가 ${safe_curr:.2f} · {cash_display}</b>\n"
             sign = "+" if safe_profit_amt >= 0 else "-"
             icon = "🔺" if safe_profit_amt >= 0 else "🔻"
             body_msg += f"{icon} 수익   <b>{sign}{abs(safe_profit_pct):.1f}% ({sign}${abs(safe_profit_amt):,.0f})</b>\n\n"
