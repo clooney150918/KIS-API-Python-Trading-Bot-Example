@@ -191,6 +191,28 @@ def _make_strategy(cfg):
     return strategy
 
 
+def test_get_plan_cycle_cash_reconcile_adds_pending_buy_before_halt_check(tmp_path):
+    cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88
+    strategy = _make_strategy(cfg)
+    kis_cash_after_pending_buy = (1482.88 - 1000.0) * 0.9945
+
+    halted_plan = strategy.get_plan(
+        "SOXL", current_price=100.0, avg_price=158.0735, qty=98, prev_close=99.0,
+        available_cash=kis_cash_after_pending_buy, market_type="REG",
+        is_simulation=True, is_snapshot_mode=False,
+    )
+    assert halted_plan.get("safety", {}).get("halted") is True
+
+    plan = strategy.get_plan(
+        "SOXL", current_price=100.0, avg_price=158.0735, qty=98, prev_close=99.0,
+        available_cash=kis_cash_after_pending_buy, pending_buy_amount=1000.0,
+        market_type="REG", is_simulation=True, is_snapshot_mode=False,
+    )
+    assert (plan.get("safety") or {}).get("halted") is not True
+    expected = 1482.88 / (20 - 18.32)
+    assert abs(plan["one_portion"] - expected) < 1e-6
+
+
 def test_get_plan_one_portion_uses_cycle_cash_not_inflated_deposit(tmp_path):
     cfg = _hermetic_cfg(tmp_path)  # cycle_cash = 1482.88, T=18.32, denom=1.68
     strategy = _make_strategy(cfg)

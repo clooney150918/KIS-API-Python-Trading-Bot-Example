@@ -264,6 +264,7 @@ class CallbackConfigHandler:
                                     self.strategy.get_plan, 
                                     ticker, 0.0, kis_avg, kis_qty, prev_c, 
                                     ma_5day=0.0, market_type="REG", available_cash=available_cash, 
+                                    pending_buy_amount=getattr(self.broker, "last_pending_buy_amount", 0.0),
                                     is_simulation=True, is_snapshot_mode=True
                                 ), timeout=15.0
                             )

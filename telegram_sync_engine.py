@@ -407,7 +407,9 @@ class TelegramSyncEngine:
                          
                         snap_plan = await asyncio.wait_for(asyncio.to_thread(
                             self.strategy.get_plan, ticker, curr_p, final_avg, final_qty, prev_c, ma_5day=ma_5day,
-                            market_type="REG", available_cash=avail_cash, is_simulation=True, is_snapshot_mode=True
+                            market_type="REG", available_cash=avail_cash,
+                            pending_buy_amount=getattr(self.broker, "last_pending_buy_amount", 0.0),
+                            is_simulation=True, is_snapshot_mode=True
                         ), timeout=15.0)
                         
                         if is_after_market:

@@ -296,7 +296,7 @@ class CallbackOrderHandler:
             is_manual_slice = await asyncio.wait_for(asyncio.to_thread(getattr(self.cfg, 'get_manual_slice_mode', lambda x: False), t), timeout=10.0)
             
             try:
-                plan = await asyncio.wait_for(asyncio.to_thread(self.strategy.get_plan, t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_budget, is_simulation=True, is_snapshot_mode=False), timeout=10.0)
+                plan = await asyncio.wait_for(asyncio.to_thread(self.strategy.get_plan, t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=allocated_budget, pending_buy_amount=getattr(self.broker, "last_pending_buy_amount", 0.0), is_simulation=True, is_snapshot_mode=False), timeout=10.0)
             except Exception as e:
                 logging.error(f"🚨 [{t}] 수동 전송 플랜 생성 에러 (샌드박스 방어): {e}")
                 plan = {}

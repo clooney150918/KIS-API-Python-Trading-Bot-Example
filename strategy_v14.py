@@ -208,7 +208,7 @@ class V4Strategy:
             status_setter(target, True)
         return baseline, state
 
-    def _resolve_cycle_cash(self, target, real_available_cash, official_state, is_snapshot_mode):
+    def _resolve_cycle_cash(self, target, real_available_cash, official_state, is_snapshot_mode, pending_buy_amount=0.0):
         """1회매수금 기준현금을 cycle_cash(원장 기반)로 확정하고 정합 검증한다.
 
         - cycle_cash = baseline.available_cash + Σ매도 − Σ매수 (KIS 예수금 미사용).
@@ -239,18 +239,21 @@ class V4Strategy:
         if real_available_cash and real_available_cash > 0:
             # KIS 파생 가용현금 =(예수금+매도미정산)×0.9945 → 예수금 근사 복원
             kis_deposit_est = real_available_cash / 0.9945
+            pending_buy_amount = max(0.0, self._safe_float(pending_buy_amount))
+            cycle_compare_cash = kis_deposit_est + pending_buy_amount
             if is_snapshot_mode:
                 reconcile_fn = getattr(self.cfg, "reconcile_cycle_cash", None)
                 if callable(reconcile_fn):
-                    rec = reconcile_fn(target, kis_deposit_est)
+                    rec = reconcile_fn(target, cycle_compare_cash)
                     if rec.get("halt"):
                         halted = True
                         reason = rec.get("reason", "정합 실패 HALT")
-            elif (cycle_cash - kis_deposit_est) > 50.0:
+            elif (cycle_cash - cycle_compare_cash) > 50.0:
                 halted = True
                 reason = (
                     f"정합 실패 HALT: cycle_cash({cycle_cash:.2f})가 "
-                    f"KIS 가용현금 근사({kis_deposit_est:.2f})를 초과"
+                    f"KIS 매수미정산 보정현금({cycle_compare_cash:.2f}, "
+                    f"매수미정산 {pending_buy_amount:.2f})를 초과"
                 )
         return cycle_cash, halted, reason
 
@@ -359,8 +362,9 @@ class V4Strategy:
         from decimal import Decimal
         t_val_dec = Decimal(str(round(t_val, 2)))
         # 1회매수금 기준현금: KIS 예수금이 아니라 원장 기반 cycle_cash 사용(중간 입금 격리).
+        pending_buy_amount = kwargs.get("pending_buy_amount", kwargs.get("frcr_buy_amt_smtl", 0.0))
         official_cash, cash_halt, cash_halt_reason = self._resolve_cycle_cash(
-            target, real_available_cash, official_state, is_snapshot_mode
+            target, real_available_cash, official_state, is_snapshot_mode, pending_buy_amount
         )
         if split != 20:
             plan_result = self._empty_official_plan(

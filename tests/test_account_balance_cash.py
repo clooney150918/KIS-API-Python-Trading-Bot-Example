@@ -39,4 +39,5 @@ def test_account_balance_cash_does_not_subtract_pending_buy_amount():
 
     assert cash == 4867.41
     assert cash != 3634.25
+    assert engine.last_pending_buy_amount == 1239.98
     assert holdings == {}

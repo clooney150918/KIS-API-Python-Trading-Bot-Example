@@ -422,6 +422,7 @@ class TelegramCommands:
             plan = await self._retry_api(
                 self.strategy.get_plan, t, curr, actual_avg, logic_qty, safe_prev_close, ma_5day=ma_5day,
                 market_type="REG", available_cash=allocated_cash.get(t, 0.0),
+                pending_buy_amount=getattr(self.broker, "last_pending_buy_amount", 0.0),
                 is_simulation=True, regime_data=regime_data, is_snapshot_mode=False,
                 confirmed_close=(safe_prev_close if status_code in ["CLOSE", "AFTER"] else None)
             ) or {}

@@ -455,6 +455,7 @@ class KisOrderEngine(MarketDataProvider):
         cash = 0.0
         holdings = {}
         api_success = False 
+        self.last_pending_buy_amount = 0.0
   
         params = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "WCRC_FRCR_DVSN_CD": "02", "NATN_CD": "840", "TR_MKET_CD": "00", "INQR_DVSN_CD": "00"}
        
@@ -471,6 +472,7 @@ class KisOrderEngine(MarketDataProvider):
             # 🚨 MODIFIED: [주문가능금액 역산 팩트 복구] KIS API 오류를 우회하는 100% 수식 계산망 롤백
             dncl_amt = self._safe_float(o2.get('frcr_dncl_amt_2', 0))     
             sll_amt = self._safe_float(o2.get('frcr_sll_amt_smtl', 0))      
+            self.last_pending_buy_amount = self._safe_float(o2.get('frcr_buy_amt_smtl', 0))
             raw_bp = dncl_amt + sll_amt
             cash = max(0.0, math.floor((raw_bp * 0.9945) * 100) / 100.0)
 

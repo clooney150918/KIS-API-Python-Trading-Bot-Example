@@ -512,6 +512,7 @@ async def process_realtime_graduation(ticker, cfg, broker, legacy_lot_book, chat
                                         asyncio.to_thread(
                                             strategy.get_plan, ticker, curr_p, 0.0, 0, prev_c, ma_5day=0.0,
                                             market_type="REG", available_cash=available_cash,
+                                            pending_buy_amount=getattr(broker, "last_pending_buy_amount", 0.0),
                                             is_simulation=True, is_snapshot_mode=True
                                         ),
                                         timeout=15.0
