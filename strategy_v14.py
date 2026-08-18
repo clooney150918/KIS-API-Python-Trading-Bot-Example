@@ -208,6 +208,52 @@ class V4Strategy:
             status_setter(target, True)
         return baseline, state
 
+    def _resolve_cycle_cash(self, target, real_available_cash, official_state, is_snapshot_mode):
+        """1회매수금 기준현금을 cycle_cash(원장 기반)로 확정하고 정합 검증한다.
+
+        - cycle_cash = baseline.available_cash + Σ매도 − Σ매수 (KIS 예수금 미사용).
+          → 중간 입금이 예수금에 더해져도 1회매수금이 부풀지 않는다.
+        - 정합 검증: is_snapshot_mode(일일 정산 스냅샷) 시 reconcile_cycle_cash로
+          입금분(pending_seed) 격리 기록 + 항등식 HALT 판정. 그 외 경로는 부작용 없이
+          읽기전용 과대현금 가드만 수행.
+        - fail-closed: cycle_cash 계산 불가 또는 정합 실패 시 (cash, True, reason).
+
+        반환: (official_cash: float, halted: bool, reason: str)
+        """
+        cycle_fn = getattr(self.cfg, "calculate_cycle_cash", None)
+        if not callable(cycle_fn):
+            # 레거시/대체 config: 기존 동작(예수금→baseline) 유지
+            legacy = real_available_cash if real_available_cash > 0 else self._safe_float(
+                getattr(official_state, "available_cash", 0.0)
+            )
+            return legacy, False, ""
+
+        cycle_cash, detail = cycle_fn(target)
+        if cycle_cash is None or self._safe_float(cycle_cash) <= 0.0:
+            fallback = self._safe_float(getattr(official_state, "available_cash", 0.0))
+            return fallback, True, f"cycle_cash 계산 불가(fail-closed): {detail.get('reason', '')}"
+
+        cycle_cash = self._safe_float(cycle_cash)
+        halted = False
+        reason = ""
+        if real_available_cash and real_available_cash > 0:
+            # KIS 파생 가용현금 =(예수금+매도미정산)×0.9945 → 예수금 근사 복원
+            kis_deposit_est = real_available_cash / 0.9945
+            if is_snapshot_mode:
+                reconcile_fn = getattr(self.cfg, "reconcile_cycle_cash", None)
+                if callable(reconcile_fn):
+                    rec = reconcile_fn(target, kis_deposit_est)
+                    if rec.get("halt"):
+                        halted = True
+                        reason = rec.get("reason", "정합 실패 HALT")
+            elif (cycle_cash - kis_deposit_est) > 50.0:
+                halted = True
+                reason = (
+                    f"정합 실패 HALT: cycle_cash({cycle_cash:.2f})가 "
+                    f"KIS 가용현금 근사({kis_deposit_est:.2f})를 초과"
+                )
+        return cycle_cash, halted, reason
+
     def _official_intent_id(self, order):
         from order_intent_store import compute_intent_id
         return compute_intent_id(order)
@@ -312,7 +358,10 @@ class V4Strategy:
         t_val = float(official_state.t)
         from decimal import Decimal
         t_val_dec = Decimal(str(round(t_val, 2)))
-        official_cash = real_available_cash if real_available_cash > 0 else official_state.available_cash
+        # 1회매수금 기준현금: KIS 예수금이 아니라 원장 기반 cycle_cash 사용(중간 입금 격리).
+        official_cash, cash_halt, cash_halt_reason = self._resolve_cycle_cash(
+            target, real_available_cash, official_state, is_snapshot_mode
+        )
         if split != 20:
             plan_result = self._empty_official_plan(
                 target, qty, avg_price, t_val,
@@ -558,6 +607,9 @@ class V4Strategy:
                         desc="공식목표매도",
                     ))
 
+        if cash_halt and not kernel_fail_closed:
+            kernel_fail_closed = True
+            kernel_reason = cash_halt_reason
         if kernel_fail_closed:
             orders = []
 

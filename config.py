@@ -66,6 +66,7 @@ class ConfigManager:
             "LEGACY_HISTORY": "data/legacy_history_SOXL_20260622_20260810.json",
             "EXECUTION_LEDGER": "data/execution_ledger_SOXL.jsonl",
             "PROCESSED_FILLS": "data/processed_fills_SOXL.jsonl",
+            "PENDING_SEED": "data/pending_seed.json",
             "VOLATILITY_MULTIPLIER_CFG": "data/volatility_multiplier.json",
             "SPLIT_HISTORY": "data/split_history.json",
             "AUX_HYBRID_CFG": "data/aux_hybrid.json",
@@ -568,6 +569,242 @@ class ConfigManager:
         invested_up = math.ceil(total_invested * 100) / 100.0
         sold_up = math.ceil(total_sold * 100) / 100.0
         return total_qty, avg_price, invested_up, sold_up
+
+    def _official_data_path(self, files_key, default_name):
+        """official 원장 파일 경로를 baseline 디렉터리 기준으로 co-locate 해석한다.
+
+        cycle_cash·pending_seed 는 반드시 불변 baseline과 같은 데이터 디렉터리의
+        원장을 읽어야 하므로, baseline 경로의 디렉터리에 파일명을 결합해 돌려준다.
+        (운영: data/… 그대로. 테스트: baseline을 tmp로 지정하면 자동 격리된다.)
+        """
+        base = self.FILES.get("STRATEGY_BASELINE", "") or ""
+        base_dir = os.path.dirname(base) or "."
+        name = os.path.basename(self.FILES.get(files_key, "") or default_name) or default_name
+        return os.path.join(base_dir, name)
+
+    def calculate_cycle_cash(self, ticker):
+        """사이클 기준 현금(cycle_cash) — KIS 예수금과 독립적인 원장 기반 값.
+
+        cycle_cash = baseline.available_cash
+                     + Σ(baseline 이후 매도금액) − Σ(baseline 이후 매수금액)
+        금액 = qty × price (Decimal). 단일 멱등 소스 = execution_ledger
+        (source=KIS_CONFIRMED_FILL, append-only, fill_key 유일). processed_fills는
+        재분류로 같은 fill_key 라인이 중복 생성되므로 합산 소스로 쓰지 않는다.
+
+        반환: (cycle_cash: float | None, detail: dict). 계산 불가/오염 시 None(fail-closed).
+        """
+        from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+
+        target = str(ticker).upper()
+        detail = {
+            "ticker": target,
+            "source": self._official_data_path("EXECUTION_LEDGER", "execution_ledger_SOXL.jsonl"),
+            "baseline_cash": None,
+            "buy_sum": "0.00",
+            "sell_sum": "0.00",
+            "fill_count": 0,
+            "cycle_cash": None,
+            "seed": None,
+            "implied_seed_at_baseline": None,
+            "seed_consistent": None,
+            "reason": "",
+        }
+
+        baseline = self._load_json(self.FILES.get("STRATEGY_BASELINE", ""), {})
+        if not isinstance(baseline, dict) or str(baseline.get("ticker", "")).upper() != target:
+            detail["reason"] = "official baseline missing or ticker mismatch"
+            return None, detail
+        try:
+            base_cash = Decimal(str(baseline.get("available_cash", "0")))
+        except (InvalidOperation, ValueError):
+            detail["reason"] = "baseline available_cash is not a finite decimal"
+            return None, detail
+        if not base_cash.is_finite():
+            detail["reason"] = "baseline available_cash is not a finite decimal"
+            return None, detail
+        detail["baseline_cash"] = format(base_cash, "f")
+
+        buy_sum = Decimal("0")
+        sell_sum = Decimal("0")
+        count = 0
+        seen_keys = set()
+        exec_path = detail["source"]
+        if exec_path and os.path.exists(exec_path):
+            try:
+                with open(exec_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            rec = json.loads(line)
+                        except json.JSONDecodeError:
+                            # 원장 오염 → 금액 신뢰 불가 → fail-closed
+                            detail["reason"] = "execution ledger JSONL parse error"
+                            return None, detail
+                        if not isinstance(rec, dict):
+                            continue
+                        if str(rec.get("source")) != "KIS_CONFIRMED_FILL":
+                            continue
+                        if str(rec.get("ticker", "")).upper() != target:
+                            continue
+                        fill_key = str(rec.get("fill_key") or "")
+                        if fill_key:
+                            if fill_key in seen_keys:
+                                continue  # 멱등: 동일 fill_key 중복 무시
+                            seen_keys.add(fill_key)
+                        side = str(rec.get("side", "")).upper()
+                        try:
+                            qty = Decimal(str(rec.get("qty", "0")))
+                            price = Decimal(str(rec.get("price", "0")))
+                        except (InvalidOperation, ValueError):
+                            detail["reason"] = "execution ledger qty/price not decimal"
+                            return None, detail
+                        if not (qty.is_finite() and price.is_finite()) or qty <= 0 or price <= 0:
+                            continue
+                        amount = qty * price
+                        if side == "SELL":
+                            sell_sum += amount
+                            count += 1
+                        elif side == "BUY":
+                            buy_sum += amount
+                            count += 1
+            except OSError as exc:
+                detail["reason"] = f"execution ledger read error: {exc}"
+                return None, detail
+
+        cycle = (base_cash + sell_sum - buy_sum).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        detail["buy_sum"] = format(buy_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+        detail["sell_sum"] = format(sell_sum.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+        detail["fill_count"] = count
+        detail["cycle_cash"] = format(cycle, "f")
+
+        # 참고용 seed 정합성: 시작시드 ≈ baseline.available_cash + 보유원가(qty×avg)
+        seed_cfg = self._load_json(self.FILES.get("SEED_CFG", ""), {})
+        if isinstance(seed_cfg, dict) and target in seed_cfg:
+            try:
+                seed = Decimal(str(seed_cfg.get(target)))
+                detail["seed"] = format(seed, "f")
+                bqty = Decimal(str(baseline.get("qty", "0")))
+                bavg = Decimal(str(baseline.get("avg_price", "0")))
+                implied = (base_cash + (bqty * bavg)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                detail["implied_seed_at_baseline"] = format(implied, "f")
+                detail["seed_consistent"] = bool(abs(implied - seed) <= Decimal("50"))
+            except (InvalidOperation, ValueError):
+                pass
+
+        if cycle <= 0:
+            detail["reason"] = "cycle_cash is non-positive"
+            return None, detail
+        return float(cycle), detail
+
+    def read_pending_seed(self, ticker):
+        """격리 기록된 입금분(pending_seed)을 조회한다. 없으면 {}."""
+        target = str(ticker).upper()
+        path = self._official_data_path("PENDING_SEED", "pending_seed.json")
+        with GlobalThrottle.get_file_lock(path):
+            d = self._load_json(path, {})
+        if not isinstance(d, dict):
+            return {}
+        val = d.get(target)
+        return val if isinstance(val, dict) else {}
+
+    def record_pending_seed(self, ticker, amount, kis_deposit, cycle_cash, note=""):
+        """입금분(pending_seed)을 격리 기록. 절대 seed에 자동 합산하지 않는다."""
+        target = str(ticker).upper()
+        est = ZoneInfo('America/New_York')
+        detected_at = datetime.datetime.now(est).strftime('%Y-%m-%d %H:%M:%S %Z')
+        path = self._official_data_path("PENDING_SEED", "pending_seed.json")
+        record = {
+            "ticker": target,
+            "amount": round(self._safe_float(amount), 2),
+            "kis_deposit": round(self._safe_float(kis_deposit), 2),
+            "cycle_cash": round(self._safe_float(cycle_cash), 2),
+            "detected_at": detected_at,
+            "note": note or "중간 입금 감지 — 대표님 수동 승인 전까지 사이클 미반영",
+        }
+        with GlobalThrottle.get_file_lock(path):
+            d = self._load_json(path, {})
+            if not isinstance(d, dict):
+                d = {}
+            prev = d.get(target)
+            # 멱등: 동일 금액이 이미 기록돼 있으면 재기록 생략
+            if isinstance(prev, dict) and round(self._safe_float(prev.get("amount")), 2) == record["amount"]:
+                return prev
+            d[target] = record
+            self._save_json(path, d)
+        return record
+
+    def clear_pending_seed(self, ticker):
+        """대표님 승인·반영 후 격리 기록을 제거한다 (자동 호출 금지)."""
+        target = str(ticker).upper()
+        path = self._official_data_path("PENDING_SEED", "pending_seed.json")
+        with GlobalThrottle.get_file_lock(path):
+            d = self._load_json(path, {})
+            if isinstance(d, dict) and target in d:
+                del d[target]
+                self._save_json(path, d)
+
+    def reconcile_cycle_cash(self, ticker, kis_deposit, tolerance=50.0):
+        """정합 검증: KIS 예수금 ≈ cycle_cash + pending_seed 항등식.
+
+        - kis_deposit: KIS 원장 예수금(frcr_dncl_amt_2) 권장.
+        - pending_seed = max(0, kis_deposit − cycle_cash) 를 격리 기록만 하고 사이클 미반영.
+        - cycle_cash 가 kis_deposit 를 tolerance 이상 초과(원장 과대)하면 fail-closed(halt).
+
+        반환 dict: ok, halt, reason, cycle_cash, kis_deposit, pending_seed, discrepancy, detail
+        """
+        from decimal import Decimal
+
+        target = str(ticker).upper()
+        result = {
+            "ticker": target,
+            "ok": False,
+            "halt": False,
+            "reason": "",
+            "cycle_cash": None,
+            "kis_deposit": round(self._safe_float(kis_deposit), 2),
+            "pending_seed": 0.0,
+            "discrepancy": None,
+        }
+        cycle_cash, detail = self.calculate_cycle_cash(target)
+        result["detail"] = detail
+        if cycle_cash is None:
+            result["halt"] = True
+            result["reason"] = f"cycle_cash 계산 불가: {detail.get('reason', '')}"
+            return result
+
+        result["cycle_cash"] = round(float(cycle_cash), 2)
+        dep = Decimal(str(self._safe_float(kis_deposit)))
+        cyc = Decimal(str(cycle_cash))
+        tol = Decimal(str(tolerance))
+        pending = dep - cyc
+
+        if pending > tol:
+            # 입금분 감지 → 격리 기록 (자동 합산 금지)
+            rec = self.record_pending_seed(target, float(pending), float(dep), float(cyc))
+            result["ok"] = True
+            result["pending_seed"] = round(float(pending), 2)
+            result["discrepancy"] = round(float(pending), 2)
+            result["reason"] = "입금분 격리 기록(사이클 미반영)"
+            result["record"] = rec
+            return result
+
+        if (cyc - dep) > tol:
+            # 원장이 실제 예수금보다 과다 → 주문 차단
+            result["halt"] = True
+            result["discrepancy"] = round(float(cyc - dep), 2)
+            result["reason"] = (
+                f"정합 실패 HALT: cycle_cash({result['cycle_cash']})가 "
+                f"KIS 예수금({result['kis_deposit']})을 {result['discrepancy']}$ 초과"
+            )
+            return result
+
+        # 항등식 성립 (±tolerance). 소액 편차는 환율/미정산 시점차로 흡수.
+        result["ok"] = True
+        result["discrepancy"] = round(float(abs(dep - cyc)), 2)
+        result["reason"] = "정합 성립"
+        return result
 
     def get_official_fills(self, ticker):
         """/record 거래내역 리스트 전용: 신규 원장(실제 체결가) 기준 각 체결 건.
