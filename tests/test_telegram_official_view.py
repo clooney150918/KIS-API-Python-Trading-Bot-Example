@@ -39,7 +39,7 @@ def _base_ticker_info(**overrides):
 
 
 def _render(info):
-    text, _markup = TelegramView().create_sync_report(
+    text, _markup = TelegramView(DummyCycleCashConfig()).create_sync_report(
         "SHADOW_ONLY",
         "2026-08-12",
         cash=999999.0,
@@ -50,10 +50,15 @@ def _render(info):
     return text
 
 
+class DummyCycleCashConfig:
+    def calculate_cycle_cash(self, ticker):
+        return 1482.88, {"cycle_cash": "1482.88"}
+
+
 def test_official_view_prefers_kis_qty_avg_cash_and_halts_on_local_discrepancy():
     text = _render(_base_ticker_info())
 
-    assert "💰 보유   <b>98주 · 평단 $158.07 · 잔금 $1,483</b>" in text
+    assert "💰 보유   <b>98주 · 평단 $158.07 · 현재가 $150.00 · 잔금: KIS 1,483 / 사이클현금 1,483</b>" in text
     assert "⛔ <b>HALT" in text
     assert "KIS/local mismatch" in text
 
@@ -70,6 +75,28 @@ def test_official_view_displays_mode_star_point_star_percent_and_one_portion_fro
 
     assert "무한매수 20분할 · 전반전" in text
     assert "⭐ 별지점  <b>$130.19 (-17.6%) · 1회 매수금 $883</b>" in text
+
+
+def test_official_view_never_falls_back_to_stale_t_info_one_portion_for_buy_budget():
+    text = _render(
+        _base_ticker_info(
+            one_portion=999999.0,
+            cycle_cash=1482.88,
+            plan={
+                "process_status": "🌓공식전반전",
+                "t_val": 18.32,
+                "t_revision": 2,
+                "star_ratio": -0.1664,
+                "star_price": 131.76,
+                "official_cash": 1482.88,
+                "orders": [],
+            },
+            official_t_state={"t": 18.32, "revision": 2},
+        )
+    )
+
+    assert "1회 매수금 $883" in text
+    assert "1회 매수금 $999,999" not in text
 
 
 def test_official_view_displays_reverse_mode_from_official_plan():

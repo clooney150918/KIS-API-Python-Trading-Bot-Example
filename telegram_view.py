@@ -75,6 +75,27 @@ class TelegramView:
         cycle_text = "N/A" if cycle_cash is None else f"{cycle_cash:,.0f}"
         return f"잔금: KIS {kis_cash:,.0f} / 사이클현금 {cycle_text}"
 
+    def _resolve_one_portion_display(self, ticker, plan_dict, t_info, safe_t_val):
+        plan_dict = plan_dict if isinstance(plan_dict, dict) else {}
+        t_info = t_info if isinstance(t_info, dict) else {}
+        plan_one = plan_dict.get('one_portion')
+        if plan_one is not None:
+            return self._safe_float(plan_one)
+
+        official_cash = plan_dict.get('official_cash')
+        if official_cash is None:
+            official_cash = t_info.get('official_cash')
+        if official_cash is None:
+            official_cash = t_info.get('cycle_cash')
+        if official_cash is None:
+            official_cash = self._get_cycle_cash(ticker)
+
+        denominator = 20.0 - self._safe_float(safe_t_val)
+        official_cash = self._safe_float(official_cash)
+        if official_cash > 0.0 and denominator > 0.0:
+            return official_cash / denominator
+        return 0.0
+
     def _load_best_font(self, font_paths, size):
         for path in font_paths:
             try:
@@ -382,7 +403,6 @@ class TelegramView:
             official_t_state = t_info.get('official_t_state') or {}
 
             safe_seed = self._safe_float(t_info.get('seed') or 0.0)
-            safe_one_portion = self._safe_float(plan_dict.get('one_portion') if plan_dict.get('one_portion') is not None else (t_info.get('one_portion') or 0.0))
             safe_curr = self._safe_float(t_info.get('curr') or 0.0)
             safe_avg = self._safe_float(official_balance.get('avg') if official_balance.get('avg') is not None else (t_info.get('avg') or 0.0))
             fact_qty = int(self._safe_float(official_balance.get('qty') if official_balance.get('qty') is not None else (t_info.get('qty') or 0)))
@@ -391,6 +411,7 @@ class TelegramView:
             safe_split = self._safe_float(t_info.get('split') or 40.0)
             safe_t_val = self._safe_float(official_t_state.get('t') if official_t_state.get('t') is not None else (plan_dict.get('t_val') if plan_dict.get('t_val') is not None else (t_info.get('t_val') or 0.0)))
             safe_t_revision = int(self._safe_float(official_t_state.get('revision') if official_t_state.get('revision') is not None else (plan_dict.get('t_revision') if plan_dict.get('t_revision') is not None else (t_info.get('t_revision') or 0))))
+            safe_one_portion = self._resolve_one_portion_display(raw_ticker, plan_dict, t_info, safe_t_val)
 
             v_mode_display = ""
             main_icon = ""
@@ -481,7 +502,13 @@ class TelegramView:
                 warning_reason = order_status_warning.get('reason') or 'order intent ledger unavailable'
                 body_msg += f"⛔ <b>HALT 주문 상태 원장:</b> {html.escape(str(warning_reason))}\n"
 
-            cycle_cash = self._get_cycle_cash("SOXL")
+            cycle_cash = t_info.get('cycle_cash')
+            if cycle_cash is None:
+                cycle_cash = plan_dict.get('official_cash')
+            if cycle_cash is None:
+                cycle_cash = self._get_cycle_cash(raw_ticker)
+            else:
+                cycle_cash = self._safe_float(cycle_cash)
             cash_display = self._format_cash_display(kis_cash, cycle_cash)
             body_msg += f"💰 보유   <b>{fact_qty}주 · 평단 ${safe_avg:.2f} · 현재가 ${safe_curr:.2f} · {cash_display}</b>\n"
             sign = "+" if safe_profit_amt >= 0 else "-"

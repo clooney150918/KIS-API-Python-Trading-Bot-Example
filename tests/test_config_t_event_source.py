@@ -1,22 +1,16 @@
 import json
 
 from config import ConfigManager
+from trade_state_store import APPROVED_BASELINE
 from strategy_v14 import V4Strategy
 
 
-BASELINE = {
-    "schema_version": 1,
-    "ticker": "SOXL",
-    "as_of": "2026-08-11",
-    "qty": 98,
-    "avg_price": "158.0735",
-    "available_cash": "1482.88",
-    "t": "18.32",
-    "reverse_active": False,
-    "source": "CEO_APPROVED_KIS_BASELINE",
-    "legacy_execution_count": 72,
-    "immutable": True,
-}
+BASELINE = dict(APPROVED_BASELINE)
+BASELINE_T = float(BASELINE["t"])
+BASELINE_CASH = float(BASELINE["available_cash"])
+BASELINE_QTY = int(BASELINE["qty"])
+BASELINE_AVG = float(BASELINE["avg_price"])
+BASELINE_IMPLIED_SEED = round(BASELINE_CASH + (BASELINE_QTY * BASELINE_AVG), 2)
 
 
 def _isolated_strategy_config(tmp_path, events_path):
@@ -35,7 +29,7 @@ def _isolated_strategy_config(tmp_path, events_path):
     (tmp_path / "t_state.json").write_text("{}", encoding="utf-8")
     (tmp_path / "reverse.json").write_text("{}", encoding="utf-8")
     (tmp_path / "split.json").write_text(json.dumps({"SOXL": 20.0}), encoding="utf-8")
-    (tmp_path / "seed.json").write_text(json.dumps({"SOXL": 6720.0}), encoding="utf-8")
+    (tmp_path / "seed.json").write_text(json.dumps({"SOXL": BASELINE_IMPLIED_SEED}), encoding="utf-8")
     (tmp_path / "profit.json").write_text(json.dumps({"SOXL": 12.0}), encoding="utf-8")
     return cfg
 
@@ -50,10 +44,10 @@ def _get_strategy_plan(strategy):
     return strategy.get_plan(
         "SOXL",
         current_price=100.0,
-        avg_price=158.0735,
-        qty=98,
+        avg_price=BASELINE_AVG,
+        qty=BASELINE_QTY,
         prev_close=99.0,
-        available_cash=1482.88,
+        available_cash=BASELINE_CASH,
         market_type="REG",
     )
 
@@ -139,7 +133,7 @@ def test_strategy_empty_existing_event_ledger_uses_baseline_t_without_overblocki
 
     plan = _strategy_plan(cfg)
 
-    assert plan["t_val"] == 18.32
+    assert plan["t_val"] == BASELINE_T
     assert plan.get("safety") is None
     assert plan["orders"]
     assert any(order.get("side") in {"BUY", "SELL"} for order in plan["orders"])
@@ -154,12 +148,24 @@ def test_config_absolute_t_reads_baseline_event_ledger_only(tmp_path):
     cfg = ConfigManager()
     cfg.FILES["STRATEGY_BASELINE"] = str(baseline_path)
     cfg.FILES["T_EVENTS"] = str(events_path)
+    cfg.FILES["EXECUTION_LEDGER"] = str(tmp_path / "execution_ledger.jsonl")
+    (tmp_path / "execution_ledger.jsonl").write_text(
+        json.dumps({
+            "source": "KIS_CONFIRMED_FILL",
+            "ticker": "SOXL",
+            "side": "SELL",
+            "qty": 1,
+            "price": "100.00",
+            "fill_key": "sell-1",
+        }) + "\n",
+        encoding="utf-8",
+    )
 
-    first_t, first_portion = cfg.get_absolute_t_val("SOXL", actual_qty=98, actual_avg_price=158.0735)
+    first_t, first_portion = cfg.get_absolute_t_val("SOXL", actual_qty=BASELINE_QTY, actual_avg_price=BASELINE_AVG)
     second_t, second_portion = cfg.get_absolute_t_val("SOXL", actual_qty=999, actual_avg_price=1)
 
-    assert first_t == second_t == 18.32
-    assert first_portion == second_portion == 1482.88 / (20 - 18.32)
+    assert first_t == second_t == BASELINE_T
+    assert first_portion == second_portion == (BASELINE_CASH + 100.0) / (20 - BASELINE_T)
 
 
 def test_calculate_v14_state_does_not_inverse_cost_basis(tmp_path):
@@ -178,9 +184,9 @@ def test_calculate_v14_state_does_not_inverse_cost_basis(tmp_path):
 
     t_val, budget, rem_cash = cfg.calculate_v14_state("SOXL")
 
-    assert t_val == 18.32
-    assert budget == 1482.88 / (20 - 18.32)
-    assert rem_cash == 1482.88
+    assert t_val == BASELINE_T
+    assert budget == BASELINE_CASH / (20 - BASELINE_T)
+    assert rem_cash == BASELINE_CASH
 
 
 def test_missing_event_ledger_get_absolute_t_val_returns_fail_safe_zero(tmp_path):

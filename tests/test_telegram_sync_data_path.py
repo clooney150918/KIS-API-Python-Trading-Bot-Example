@@ -81,6 +81,7 @@ class FakeStrategy:
             "star_ratio": -0.1764,
             "star_price": 130.19,
             "one_portion": 882.67,
+            "official_cash": 1482.88,
             "orders": [],
         }
 
@@ -234,9 +235,11 @@ def test_cmd_sync_actual_data_path_populates_kis_local_discrepancy_halt_without_
     assert item["local_ledger"]["avg"] == pytest.approx(9.87)
     assert item["discrepancy"]["halted"] is True
     assert "KIS/local mismatch" in item["discrepancy"]["reason"]
+    assert item["cycle_cash"] == pytest.approx(1482.88)
+    assert item["official_cash"] == pytest.approx(1482.88)
 
     text = _latest_text(update.effective_message)
-    assert "💰 보유   <b>98주 · 평단 $158.07 · 잔금 $1,483</b>" in text
+    assert "💰 보유   <b>98주 · 평단 $158.07 · 현재가 $150.00 · 잔금: KIS 1,483 / 사이클현금 1,483</b>" in text
     assert "⛔ <b>HALT" in text
     assert "KIS/local mismatch" in text
     assert files["LEDGER"].read_text(encoding="utf-8") == before_text

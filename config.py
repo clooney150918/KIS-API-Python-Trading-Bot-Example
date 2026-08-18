@@ -321,7 +321,10 @@ class ConfigManager:
             t_val = float(state.t)
             split = self.get_split_count(target)
             remaining_splits = max(1.0, split - t_val)
-            one_portion = float(state.available_cash) / remaining_splits
+            cycle_cash, detail = self.calculate_cycle_cash(target)
+            if cycle_cash is None:
+                raise ValueError(f"cycle_cash unavailable: {detail.get('reason', '')}")
+            one_portion = float(cycle_cash) / remaining_splits
             self._set_t_event_status(target, True)
             return round(t_val, 2), one_portion
         except Exception as e:
@@ -1040,7 +1043,10 @@ class ConfigManager:
 
             state = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"]).load_state(target)
             t_val = float(state.t)
-            rem_cash = float(state.available_cash)
+            cycle_cash, detail = self.calculate_cycle_cash(target)
+            if cycle_cash is None:
+                raise ValueError(f"cycle_cash unavailable: {detail.get('reason', '')}")
+            rem_cash = float(cycle_cash)
             safe_denom = max(1.0, 20.0 - t_val)
             current_budget = rem_cash / safe_denom
             self._set_t_event_status(target, True)

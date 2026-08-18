@@ -36,6 +36,8 @@ class TelegramCommands:
         self.legacy_lot_book = legacy_lot_book
         self.sync_engine = sync_engine
         self.view = view
+        if getattr(self.view, "cfg", None) is None:
+            self.view.cfg = config
         self.tx_lock = tx_lock
 
     def _safe_float(self, val):
@@ -116,6 +118,20 @@ class TelegramCommands:
             "halted": bool(diffs),
             "reason": "KIS/local mismatch: " + ", ".join(diffs) if diffs else "",
         }
+
+    def _get_cycle_cash_for_sync(self, ticker):
+        try:
+            cycle_fn = getattr(self.cfg, "calculate_cycle_cash", None)
+            if not callable(cycle_fn):
+                return None
+            cycle_cash, detail = cycle_fn(ticker)
+            if cycle_cash is None:
+                logging.warning("⚠️ [%s] /sync cycle_cash 계산 실패: %s", ticker, detail.get("reason", ""))
+                return None
+            return self._safe_float(cycle_cash)
+        except Exception as e:
+            logging.warning("⚠️ [%s] /sync cycle_cash 조회 실패: %s", ticker, e)
+            return None
 
     def _load_order_statuses_for_sync(self, ticker):
         statuses = {key: [] for key in ["SUBMITTED", "PARTIAL", "FILLED", "CANCELLED", "REJECTED"]}
@@ -504,6 +520,7 @@ class TelegramCommands:
             except Exception:
                 pass
             discrepancy = self._build_kis_local_discrepancy_for_sync(official_balance, local_ledger)
+            cycle_cash = self._safe_float(plan.get("official_cash", 0.0)) or self._get_cycle_cash_for_sync(t)
             order_statuses = self._load_order_statuses_for_sync(t)
             order_status_warning = {}
             if isinstance(order_statuses, dict) and "_warning" in order_statuses:
@@ -522,7 +539,8 @@ class TelegramCommands:
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
                 'upward_' + 'sni' + 'per': "ON" if upward_volatility_mode_on else "OFF",
                 'target': target_val, 'star_pct': round(self._safe_float(plan.get('star_ratio', 0.0)) * 100, 2),
-                'seed': safe_seed, 'one_portion': self._safe_float(plan.get('one_portion', 0.0)), 'plan': plan,
+                'seed': safe_seed, 'one_portion': self._safe_float(plan.get('one_portion', 0.0)),
+                'official_cash': cycle_cash, 'cycle_cash': cycle_cash, 'plan': plan,
                 'is_locked': is_already_ordered, 'mode': "REG",
                 'is_reverse': is_rev, 'star_price': self._safe_float(plan.get('star_price', 0.0)),
                 'hybrid_target': hybrid_target_price,
