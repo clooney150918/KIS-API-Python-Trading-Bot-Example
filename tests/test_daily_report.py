@@ -15,7 +15,10 @@ class DummyConfig:
         }
 
     def get_official_t_state(self, ticker):
-        return {"t": 12.055, "available_cash": 1482.88}
+        return {"t": 12.055, "available_cash": 9999.99}
+
+    def calculate_cycle_cash(self, ticker):
+        return 1482.88, {"cycle_cash": "1482.88"}
 
     def get_official_fills(self, ticker):
         return []
@@ -72,7 +75,8 @@ def test_daily_report_projects_t_from_confirmed_fills_missing_t_event(tmp_path, 
     report = daily_report.build_daily_report(DummyConfig(tmp_path), DummyBroker(), DummyStrategy())
 
     assert "T      12.1  →  13.1    (+1.0)" in report
-    assert "잔금   $13,893 → $13,247" in report
+    assert "잔금   $2,128 → $1,483" in report
+    assert "매수금  $268  →  $214" in report
 
 
 def test_daily_report_does_not_project_fill_already_in_t_events(tmp_path, monkeypatch):
@@ -124,3 +128,4 @@ def test_daily_report_does_not_project_fill_already_in_t_events(tmp_path, monkey
     report = daily_report.build_daily_report(cfg, DummyBroker(), DummyStrategy())
 
     assert "T      12.1  →  13.1    (+1.0)" in report
+    assert "잔금   $2,128 → $1,483" in report

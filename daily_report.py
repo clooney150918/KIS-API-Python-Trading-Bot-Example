@@ -407,25 +407,31 @@ def _realized_pnl_from_ledger(config, ticker):
     return realized
 
 
-def _cash_from_snapshot_and_fills(snapshot, fills, current_t, official_cash=0.0):
-    if official_cash > 0 and not isinstance(snapshot, dict):
-        return official_cash
-    prev_t = _safe_float(snapshot.get("t_val") if isinstance(snapshot, dict) else 0.0)
-    prev_one = _safe_float(snapshot.get("one_portion") if isinstance(snapshot, dict) else 0.0)
-    if official_cash > 0 and prev_one <= 0:
-        return official_cash
-    cash = prev_one * max(0.0, SPLIT_COUNT - prev_t)
+def _cash_from_cycle_and_fills(config, ticker, fills):
+    cycle_fn = getattr(config, "calculate_cycle_cash", None)
+    if not callable(cycle_fn):
+        logging.warning("daily report cycle_cash unavailable: config.calculate_cycle_cash missing")
+        return 0.0, 0.0
+    try:
+        current_cash, detail = cycle_fn(ticker)
+    except Exception as exc:
+        logging.warning("daily report cycle_cash load failed: %s", exc)
+        return 0.0, 0.0
+    if current_cash is None or _safe_float(current_cash) <= 0.0:
+        reason = detail.get("reason", "") if isinstance(detail, dict) else ""
+        logging.warning("daily report cycle_cash invalid: %s", reason)
+        return 0.0, 0.0
+
+    current_cash = _safe_float(current_cash)
+    prev_cash = current_cash
     for fill in fills:
         amount = _safe_int(fill.get("qty")) * _safe_float(fill.get("price"))
         side = str(fill.get("side", "")).upper()
         if side == "BUY":
-            cash -= amount
+            prev_cash += amount
         elif side == "SELL":
-            cash += amount
-    if cash <= 0 and current_t < SPLIT_COUNT:
-        current_one = _safe_float(snapshot.get("one_portion") if isinstance(snapshot, dict) else 0.0)
-        cash = current_one * max(0.0, SPLIT_COUNT - current_t)
-    return max(0.0, cash)
+            prev_cash -= amount
+    return max(0.0, prev_cash), max(0.0, current_cash)
 
 
 def build_daily_report(config, broker, strategy, view=None):
@@ -442,12 +448,11 @@ def build_daily_report(config, broker, strategy, view=None):
     ]
 
     current_balance = _load_current_balance(TICKER, broker)
-    current_t, official_cash = _load_current_t(config, TICKER)
+    current_t, _official_cash = _load_current_t(config, TICKER)
     current_qty = _safe_int(current_balance.get("qty"))
     current_avg = _safe_float(current_balance.get("avg_price"))
-    # 잔금은 스냅샷 기준 + 전일 체결 반영으로 산출 (KIS 예수금은 결제지연으로 스테일될 수 있음)
-    current_cash = _cash_from_snapshot_and_fills(snapshot, fills, current_t, official_cash=official_cash)
-    current_one = current_cash / max(1.0, SPLIT_COUNT - current_t)
+    # 잔금/매수금은 KIS 예수금이나 스냅샷 one_portion이 아니라 원장 기반 cycle_cash를 사용한다.
+    prev_cash, current_cash = _cash_from_cycle_and_fills(config, TICKER, fills)
     price = _current_price(TICKER, broker, snapshot)
 
     if not fills:
@@ -459,8 +464,7 @@ def build_daily_report(config, broker, strategy, view=None):
 
     prev_t = _safe_float(snapshot.get("t_val") if isinstance(snapshot, dict) else 0.0)
     prev_qty = _safe_int(snapshot.get("total_q") if isinstance(snapshot, dict) else 0)
-    prev_one = _safe_float(snapshot.get("one_portion") if isinstance(snapshot, dict) else 0.0)
-    prev_cash = prev_one * max(0.0, SPLIT_COUNT - prev_t)
+    prev_one = prev_cash / max(1.0, SPLIT_COUNT - prev_t)
 
     prev_close = price or _safe_float(snapshot.get("star_price") if isinstance(snapshot, dict) else 0.0)
     try:
