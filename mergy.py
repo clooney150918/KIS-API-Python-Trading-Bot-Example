@@ -14,7 +14,6 @@ TARGET_FILES = [
     "kis_order_engine.py",
     "config.py",
     "main.py",
-    "plugin_updater.py",
     "retired_lot_ledger.py",
     "scheduler_core.py",
     "scheduler_regular.py",
