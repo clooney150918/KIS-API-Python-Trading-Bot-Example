@@ -20,6 +20,18 @@ from test_runtime_safety import (
 
 ORDER_PATH = "/uapi/overseas-stock/v1/trading/order"
 ORDER_URL = f"https://openapi.koreainvestment.com:9443{ORDER_PATH}"
+CANCEL_PATH = "/uapi/overseas-stock/v1/trading/order-rvsecncl"
+CANCEL_BODY = {
+    "CANO": SYNTHETIC_CANO,
+    "ACNT_PRDT_CD": SYNTHETIC_PRODUCT_CODE,
+    "OVRS_EXCG_CD": "NASD",
+    "PDNO": "SOXL",
+    "ORGN_ODNO": "12345",
+    "RVSE_CNCL_DVSN_CD": "02",
+    "ORD_QTY": "0",
+    "OVRS_ORD_UNPR": "0",
+    "ORD_SVR_DVSN_CD": "0",
+}
 ORDER_BODY = {
     "CANO": SYNTHETIC_CANO,
     "ACNT_PRDT_CD": SYNTHETIC_PRODUCT_CODE,
@@ -83,6 +95,19 @@ def test_direct_call_api_order_post_is_blocked_before_transport(monkeypatch):
     assert transport_calls == []
     assert result["rt_cd"] == "999"
     assert result["msg1"]
+    assert result["odno"] == ""
+    assert result["shadow"] is False
+    assert result["safety_decision"]["code"] == "ORDER_AUTHORIZATION_REQUIRED"
+
+
+def test_direct_call_api_cancel_post_is_blocked_before_transport(monkeypatch):
+    client = make_client()
+    transport_calls = install_fake_transport(monkeypatch)
+
+    result = client._call_api("TTTT1004U", CANCEL_PATH, "POST", body=CANCEL_BODY)
+
+    assert transport_calls == []
+    assert result["rt_cd"] == "999"
     assert result["odno"] == ""
     assert result["shadow"] is False
     assert result["safety_decision"]["code"] == "ORDER_AUTHORIZATION_REQUIRED"
@@ -363,10 +388,21 @@ def test_order_post_never_retries_after_first_send(tmp_path, monkeypatch, failur
         assert result["reconciliation_required"] is True
 
 
+def test_kis_order_engine_cancel_order_uses_request_authorization(tmp_path, monkeypatch):
+    engine = make_live_engine(tmp_path)
+    transport_calls = install_fake_transport(monkeypatch)
+
+    result = engine.cancel_order("SOXL", "12345", side="BUY")
+
+    assert result["rt_cd"] == "0"
+    _, headers, body = posted_request(transport_calls)
+    assert headers["tr_id"] == "TTTT1004U"
+    assert body == CANCEL_BODY
+
+
 @pytest.mark.parametrize(
     "invoke",
     [
-        lambda engine: engine.cancel_order("SOXL", "12345"),
         lambda engine: engine.cancel_daytime_order("SOXL", "12345", qty="1", price="100"),
         lambda engine: engine.cancel_reservation_order("20260811", "12345"),
     ],

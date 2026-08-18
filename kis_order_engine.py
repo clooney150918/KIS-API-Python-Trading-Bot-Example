@@ -381,6 +381,74 @@ class KisOrderEngine(MarketDataProvider):
             ticker=ticker,
             side=side,
         )
+
+    @staticmethod
+    def _side_from_unfilled_order(order, fallback=None):
+        side_code = str((order or {}).get("sll_buy_dvsn_cd") or "")
+        if side_code == "02":
+            return "BUY"
+        if side_code == "01":
+            return "SELL"
+        return str(fallback or "SELL").strip().upper()
+
+    def _call_cancel_api(self, ticker, side, tr_id, path, body):
+        """Authorize a cancel request without applying opening-order amount caps."""
+        ticker = str(ticker or "").strip().upper()
+        side, order_type = canonical_order_values(side, "CANCEL")
+        gate = getattr(self, "runtime_safety_gate", None)
+        if gate is None or not hasattr(gate, "authorize_request"):
+            decision = RuntimeSafetyGate.denied(
+                "SAFETY_NOT_CONFIGURED",
+                "runtime safety gate cannot issue request-bound authorization",
+                shadow_only=False,
+                ticker=ticker,
+                side=side,
+            )
+            return self._blocked_order_result(decision, ticker, side, 0, 0, order_type)
+
+        key = resolve_account_fingerprint_key(
+            getattr(self, "account_fingerprint_key", None)
+        )
+        fingerprint = None
+        if key is not None:
+            fingerprint = account_fingerprint(
+                getattr(self, "cano", None),
+                getattr(self, "acnt_prdt_cd", None),
+                key=key,
+            )
+        request_digest = canonical_request_digest("POST", tr_id, path, body)
+        decision, authorization = gate.authorize_request(
+            ticker,
+            side,
+            0,
+            0,
+            method="POST",
+            tr_id=tr_id,
+            path=path,
+            body=body,
+            account_fingerprint=fingerprint,
+            account_fingerprint_key=key,
+            account_fingerprint_key_available=key is not None,
+            order_type=order_type,
+        )
+        if not decision.can_submit or authorization is None:
+            return self._blocked_order_result(decision, ticker, side, 0, 0, order_type)
+        if authorization.request_digest != request_digest:
+            return safety_block_result(RuntimeSafetyGate.denied(
+                "WIRE_REQUEST_MISMATCH",
+                "gate authorization digest differs from the final KIS wire request",
+                shadow_only=False,
+                ticker=ticker,
+                side=side,
+            ))
+        return self._call_api(
+            tr_id,
+            path,
+            "POST",
+            body=body,
+            _order_authorization=authorization,
+            _order_gate=gate,
+        )
     
     def get_account_balance(self):
         """ 🚨 [Case 03 준수] API 잔고 응답 중복 합산 절대 방어 락온 """
@@ -560,7 +628,7 @@ class KisOrderEngine(MarketDataProvider):
             if not target_orders: return True
             for o in target_orders: 
                 # 🚨 MODIFIED: 파편화된 sleep 정리
-                self.cancel_order(ticker, o.get('odno'))
+                self.cancel_order(ticker, o.get('odno'), side=self._side_from_unfilled_order(o, side))
      
             # 🚨 MODIFIED: [이벤트 루프 교착 방어] 5.0초의 긴 대기 시간을 1.0초로 단축하여 상위 스케줄러 TimeoutError 원천 봉쇄
             time.sleep(1.0)
@@ -579,7 +647,7 @@ class KisOrderEngine(MarketDataProvider):
         target_orders = [o for o in orders if o.get('sll_buy_dvsn_cd') == sll_buy_cd and str(o.get('ord_dvsn_cd') or o.get('ord_dvsn') or '') == target_ord_dvsn]
         for o in target_orders: 
             # 🚨 MODIFIED: 파편화된 sleep 정리
-            self.cancel_order(ticker, o.get('odno'))
+            self.cancel_order(ticker, o.get('odno'), side=self._side_from_unfilled_order(o, side))
             time.sleep(0.3)
         return len(target_orders)
 
@@ -606,7 +674,7 @@ class KisOrderEngine(MarketDataProvider):
                     if o_price > 0 and abs(o_price - tp) < 0.005: target_orders.append(o); break
         for o in target_orders: 
             # 🚨 MODIFIED: 파편화된 sleep 정리
-            self.cancel_order(ticker, o.get('odno'))
+            self.cancel_order(ticker, o.get('odno'), side=self._side_from_unfilled_order(o, side))
             time.sleep(0.3)
         return len(target_orders)
 
@@ -703,12 +771,18 @@ class KisOrderEngine(MarketDataProvider):
             'odno': str(out.get('ODNO') or ''),
         }
 
-    def cancel_order(self, ticker, order_id):
+    def cancel_order(self, ticker, order_id, side="SELL"):
         # 🚨 MODIFIED: 파편화된 sleep 정리
         excg_cd = self._get_exchange_code(ticker, target_api="ORDER")
         body = {"CANO": self.cano, "ACNT_PRDT_CD": self.acnt_prdt_cd, "OVRS_EXCG_CD": excg_cd, "PDNO": ticker, "ORGN_ODNO": order_id, "RVSE_CNCL_DVSN_CD": "02", "ORD_QTY": "0", "OVRS_ORD_UNPR": "0", "ORD_SVR_DVSN_CD": "0"}
         # 🚨 MODIFIED: [Case 30 팩트 교정] 취소 주문 API 응답 객체 반환 배선 강제 이식
-        return self._call_api("TTTT1004U", "/uapi/overseas-stock/v1/trading/order-rvsecncl", "POST", body=body)
+        return self._call_cancel_api(
+            ticker,
+            side,
+            "TTTT1004U",
+            "/uapi/overseas-stock/v1/trading/order-rvsecncl",
+            body,
+        )
 
     def send_daytime_order(
         self,

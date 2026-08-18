@@ -51,6 +51,18 @@ _NEW_ORDER_WIRE_SCHEMAS = {
         "quantity_field": "FT_ORD_QTY",
         "price_field": "FT_ORD_UNPR3",
     },
+    "/uapi/overseas-stock/v1/trading/order-rvsecncl": {
+        "tr_ids": {"TTTT1004U": None},
+        "quantity_field": "ORD_QTY",
+        "price_field": "OVRS_ORD_UNPR",
+        "operation": "CANCEL",
+    },
+    "/uapi/overseas-stock/v1/trading/daytime-order-rvsecncl": {
+        "tr_ids": {"TTTS6038U": None},
+        "quantity_field": "ORD_QTY",
+        "price_field": "OVRS_ORD_UNPR",
+        "operation": "CANCEL",
+    },
 }
 _CHECKPOINT_LOCKS = {}
 _CHECKPOINT_LOCKS_GUARD = threading.Lock()
@@ -492,9 +504,9 @@ class RuntimeSafetyGate:
         schema = _NEW_ORDER_WIRE_SCHEMAS.get(path_text)
         if schema is None:
             raise ValueError("unsupported new order path")
-        side = schema["tr_ids"].get(tr_id_text)
-        if side is None:
+        if tr_id_text not in schema["tr_ids"]:
             raise ValueError("unsupported new order TR id")
+        side = schema["tr_ids"][tr_id_text]
         if not isinstance(body, dict):
             raise ValueError("new order body must be a JSON object")
 
@@ -503,14 +515,23 @@ class RuntimeSafetyGate:
         ticker = self._exact_body_string(body, "PDNO")
         quantity_text = self._exact_body_string(body, schema["quantity_field"])
         price_text = self._exact_body_string(body, schema["price_field"])
-        order_code = self._exact_body_string(body, "ORD_DVSN")
-        order_type = _OVERSEAS_ORDER_TYPES_BY_CODE.get(order_code)
-        if order_type is None:
-            raise ValueError("unsupported order division code")
+        operation = schema.get("operation", "NEW")
+        if operation == "CANCEL":
+            self._exact_body_string(body, "ORGN_ODNO")
+            if self._exact_body_string(body, "RVSE_CNCL_DVSN_CD") != "02":
+                raise ValueError("wire request is not a cancel request")
+            order_type = "CANCEL"
+        else:
+            order_code = self._exact_body_string(body, "ORD_DVSN")
+            order_type = _OVERSEAS_ORDER_TYPES_BY_CODE.get(order_code)
+            if order_type is None:
+                raise ValueError("unsupported order division code")
         quantity = self._decimal(quantity_text)
         price = self._decimal(price_text)
-        if quantity <= 0 or quantity != quantity.to_integral_value():
-            raise ValueError("wire quantity must be a positive integer string")
+        if quantity != quantity.to_integral_value() or (
+            operation != "CANCEL" and quantity <= 0
+        ) or (operation == "CANCEL" and quantity < 0):
+            raise ValueError("wire quantity is outside supported bounds")
         if price < 0:
             raise ValueError("wire price must be a non-negative decimal string")
 
@@ -528,6 +549,7 @@ class RuntimeSafetyGate:
             "quantity": quantity,
             "price": price,
             "order_type": order_type,
+            "operation": operation,
         }
 
     def _wire_values_match_metadata(
@@ -548,7 +570,7 @@ class RuntimeSafetyGate:
             return False
         if wire["ticker"] != ticker:
             return False
-        if wire["side"] != side:
+        if wire["side"] is not None and wire["side"] != side:
             return False
         if wire["order_type"] != order_type:
             return False
@@ -650,7 +672,7 @@ class RuntimeSafetyGate:
         )
         policy_values = (
             wire["ticker"],
-            wire["side"],
+            side_text if wire["side"] is None else wire["side"],
             wire["order_type"],
             wire["quantity"],
             wire["price"],
@@ -659,6 +681,7 @@ class RuntimeSafetyGate:
             risk_reference_price,
             trusted_market_quote,
             market_quote_preflight,
+            wire["operation"] == "CANCEL",
         )
 
         with self._lock, self._checkpoint_lock:
@@ -940,6 +963,7 @@ class RuntimeSafetyGate:
         risk_reference_price,
         trusted_market_quote,
         market_quote_preflight,
+        skip_amount_limits=False,
     ):
             if self._ambiguous_halt_reason is not None:
                 return self.denied(
@@ -998,6 +1022,37 @@ class RuntimeSafetyGate:
                     "ACCOUNT_NOT_ALLOWED",
                     "account fingerprint is missing or not allow-listed",
                     **context,
+                )
+            if skip_amount_limits:
+                try:
+                    order_quantity = self._decimal(quantity)
+                    order_price = self._decimal(price)
+                except ValueError:
+                    return self.denied(
+                        "ORDER_REQUEST_INVALID",
+                        "cancel request quantity and price must be valid Decimals",
+                        **context,
+                    )
+                amount_context = {
+                    **context,
+                    "quantity": order_quantity,
+                    "notional": Decimal("0"),
+                }
+                if (
+                    order_quantity < 0
+                    or order_quantity != order_quantity.to_integral_value()
+                    or order_price < 0
+                ):
+                    return self.denied(
+                        "ORDER_REQUEST_INVALID",
+                        "cancel request quantity and price must be non-negative",
+                        **amount_context,
+                    )
+                return SafetyDecision(
+                    code="LIVE_AUTHORIZED",
+                    reason="live cancel request authorized",
+                    can_submit=True,
+                    **amount_context,
                 )
 
             try:

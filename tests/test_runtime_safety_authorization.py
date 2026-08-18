@@ -47,6 +47,31 @@ POLICY_REQUEST = {
     "price": "100.00",
     "account_fingerprint": SYNTHETIC_ACCOUNT_FINGERPRINT,
 }
+CANCEL_BODY = {
+    "CANO": "00000000",
+    "ACNT_PRDT_CD": "01",
+    "OVRS_EXCG_CD": "NASD",
+    "PDNO": "SOXL",
+    "ORGN_ODNO": "12345",
+    "RVSE_CNCL_DVSN_CD": "02",
+    "ORD_QTY": "0",
+    "OVRS_ORD_UNPR": "0",
+    "ORD_SVR_DVSN_CD": "0",
+}
+CANCEL_REQUEST = {
+    "method": "POST",
+    "tr_id": "TTTT1004U",
+    "path": "/uapi/overseas-stock/v1/trading/order-rvsecncl",
+    "body": CANCEL_BODY,
+}
+CANCEL_POLICY_REQUEST = {
+    "ticker": "SOXL",
+    "side": "SELL",
+    "quantity": 0,
+    "price": "0",
+    "account_fingerprint": SYNTHETIC_ACCOUNT_FINGERPRINT,
+    "order_type": "CANCEL",
+}
 
 
 def issue(gate):
@@ -354,6 +379,54 @@ def test_authorize_request_refuses_non_post_methods(tmp_path):
     )
 
     assert decision.code == "ORDER_REQUEST_METHOD_INVALID"
+    assert authorization is None
+
+
+def test_cancel_request_wire_is_authorized_without_amount_caps(tmp_path):
+    state_path = write_state(
+        tmp_path / "runtime_safety.json",
+        max_order_quantity=1,
+        max_order_notional="0.01",
+    )
+    gate = RuntimeSafetyGate(state_path)
+
+    decision, authorization = gate.authorize_request(
+        **CANCEL_POLICY_REQUEST,
+        **CANCEL_REQUEST,
+        account_fingerprint_key=SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    )
+
+    assert decision.code == "LIVE_AUTHORIZED"
+    assert decision.quantity == Decimal("0")
+    assert decision.notional == Decimal("0")
+    assert authorization.request_digest == canonical_request_digest(**CANCEL_REQUEST)
+    with gate.authorized_post(authorization, **CANCEL_REQUEST):
+        pass
+
+
+@pytest.mark.parametrize(
+    "state_overrides,request_overrides,expected_code",
+    [
+        ({"allowed_tickers": ["TQQQ"]}, {}, "TICKER_NOT_ALLOWED"),
+        ({"allowed_account_fingerprints": ["0" * 64]}, {}, "ACCOUNT_NOT_ALLOWED"),
+        ({"operator_halt": True}, {}, "OPERATOR_HALT"),
+        ({}, {"body": {**CANCEL_BODY, "PDNO": "TQQQ"}}, "WIRE_REQUEST_MISMATCH"),
+        ({}, {"body": {**CANCEL_BODY, "CANO": "99999999"}}, "WIRE_REQUEST_MISMATCH"),
+    ],
+)
+def test_cancel_request_preserves_ticker_account_and_halt_guards(
+    tmp_path, state_overrides, request_overrides, expected_code
+):
+    state_path = write_state(tmp_path / "runtime_safety.json", **state_overrides)
+    request = {**CANCEL_REQUEST, **request_overrides}
+
+    decision, authorization = RuntimeSafetyGate(state_path).authorize_request(
+        **CANCEL_POLICY_REQUEST,
+        **request,
+        account_fingerprint_key=SYNTHETIC_ACCOUNT_FINGERPRINT_KEY,
+    )
+
+    assert decision.code == expected_code
     assert authorization is None
 
 
