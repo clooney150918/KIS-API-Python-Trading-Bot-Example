@@ -318,12 +318,13 @@ class FillReconciler:
                     continue
 
                 event = self._build_t_event(intent, fill, accumulated_qty, accumulated_amount)
+                snapshots = self._snapshot_ledgers()
                 try:
                     self.trade_state_store.append_event(event)
                     self._record_processed(fill, intent["intent_id"], "FINAL")
                     self.intent_store.transition_status(intent["intent_id"], "FILLED")
                 except Exception as exc:
-                    self._record_finalization_failed(fill, intent["intent_id"], exc)
+                    self._rollback_finalization(fill, event, snapshots)
                     raise FillReconciliationError("atomic fill finalization failed; retry required") from exc
                 result["new_fill_count"] += 1
             result["partial_open"] = self.forbid_new_orders(ticker)
@@ -505,11 +506,23 @@ class FillReconciler:
             "processed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         })
 
-    def _record_finalization_failed(self, fill: Mapping[str, Any], intent_id: str, exc: Exception) -> None:
-        try:
-            self._record_processed(fill, intent_id, "FINALIZATION_FAILED")
-        except Exception:
-            pass
+    def _snapshot_ledgers(self) -> dict[str, bytes]:
+        return {
+            "t_events": _read_bytes(Path(self.trade_state_store.events_path)),
+            "processed_fills": _read_bytes(self.processed_fill_store.ledger_path),
+            "order_intents": _read_bytes(Path(self.intent_store.ledger_path)),
+        }
+
+    def _rollback_finalization(self, fill: Mapping[str, Any], event: Mapping[str, Any], snapshots: Mapping[str, bytes]) -> None:
+        fill_key = build_fill_key(fill)
+        _remove_jsonl_records(
+            Path(self.trade_state_store.events_path),
+            lambda record: record.get("event_id") == event.get("event_id") or record.get("fill_key") == fill_key,
+        )
+        _remove_jsonl_records(
+            self.processed_fill_store.ledger_path,
+            lambda record: record.get("fill_key") == fill_key and record.get("classification") == "FINAL",
+        )
 
 
 def _latest_by_intent(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -537,6 +550,47 @@ def _fsync_dir(path: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _read_bytes(path: Path) -> bytes:
+    if not path.exists():
+        return b""
+    return path.read_bytes()
+
+
+def _write_bytes_durably(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
+    try:
+        os.write(fd, data)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    _fsync_dir(path.parent)
+
+
+def _remove_jsonl_records(path: Path, should_remove) -> None:
+    original = _read_bytes(path)
+    if not original:
+        return
+    kept: list[bytes] = []
+    changed = False
+    for line in original.splitlines(keepends=True):
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        try:
+            record = json.loads(stripped.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            kept.append(line)
+            continue
+        if should_remove(record):
+            changed = True
+            continue
+        kept.append(line)
+    if changed:
+        _write_bytes_durably(path, b"".join(kept))
 
 
 class _FileLock:
