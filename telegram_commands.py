@@ -206,6 +206,28 @@ class TelegramCommands:
             statuses["_warning"]["kis_unfilled_warning"] = str(e)
         return statuses
 
+    def _load_kst_execution_history_for_sync(self, ticker):
+        kst = ZoneInfo('Asia/Seoul')
+        today = datetime.datetime.now(kst).date()
+        yesterday = today - datetime.timedelta(days=1)
+
+        def _fetch(target_date):
+            date_text = target_date.strftime("%Y%m%d")
+            try:
+                getter = getattr(self.broker, "get_execution_history", None)
+                if not callable(getter):
+                    return []
+                rows = getter(ticker, date_text, date_text)
+                return rows if isinstance(rows, list) else []
+            except Exception as e:
+                logging.warning(f"⚠️ [{ticker}] KST 체결 내역 조회 실패({date_text}): {e}")
+                return []
+
+        return {
+            "yesterday": {"date": yesterday.strftime("%Y%m%d"), "fills": _fetch(yesterday)},
+            "today": {"date": today.strftime("%Y%m%d"), "fills": _fetch(today)},
+        }
+
     async def _retry_api(self, func, *args, timeout=15.0, default=None, **kwargs):
         for attempt in range(3):
             try:
@@ -525,6 +547,7 @@ class TelegramCommands:
             order_status_warning = {}
             if isinstance(order_statuses, dict) and "_warning" in order_statuses:
                 order_status_warning = order_statuses.pop("_warning") or {}
+            kst_execution_history = await self._retry_api(self._load_kst_execution_history_for_sync, t, default={}) or {}
             
             ticker_data_list.append({
                 'ticker': t, 'version': ver, 't_val': t_val, 'split': split, 'curr': curr, 'avg': actual_avg, 'qty': actual_qty,
@@ -535,6 +558,10 @@ class TelegramCommands:
                 'discrepancy': discrepancy,
                 'order_statuses': order_statuses,
                 'order_status_warning': order_status_warning,
+                'yesterday_fills': (kst_execution_history.get('yesterday') or {}).get('fills') or [],
+                'today_fills': (kst_execution_history.get('today') or {}).get('fills') or [],
+                'yesterday_fill_date': (kst_execution_history.get('yesterday') or {}).get('date') or '',
+                'today_fill_date': (kst_execution_history.get('today') or {}).get('date') or '',
                 'profit_amt': (curr - actual_avg) * actual_qty if actual_qty > 0 else 0, 
                 'profit_pct': (curr - actual_avg) / actual_avg * 100 if actual_avg > 0 else 0,
                 'upward_' + 'sni' + 'per': "ON" if upward_volatility_mode_on else "OFF",

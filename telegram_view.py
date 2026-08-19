@@ -75,6 +75,122 @@ class TelegramView:
         cycle_text = "N/A" if cycle_cash is None else f"{cycle_cash:,.0f}"
         return f"잔금: KIS {kis_cash:,.0f} / 사이클현금 {cycle_text}"
 
+    def _fill_side_from_record(self, record):
+        side = str(record.get('side') or '').upper()
+        if side in ('BUY', 'SELL'):
+            return side
+        code = str(record.get('sll_buy_dvsn_cd') or record.get('buy_sell_code') or '').strip()
+        if code in ('02', '2', 'BUY', '매수'):
+            return 'BUY'
+        if code in ('01', '1', 'SELL', '매도'):
+            return 'SELL'
+        return ''
+
+    def _fill_qty_from_record(self, record):
+        return int(self._safe_float(record.get('qty') or record.get('ft_ccld_qty') or record.get('filled_qty') or 0))
+
+    def _fill_price_from_record(self, record):
+        return self._safe_float(record.get('price') or record.get('ft_ccld_unpr3') or record.get('filled_price') or 0.0)
+
+    def _fill_event_type_label(self, event_type):
+        event_type = str(event_type or '').upper()
+        labels = {
+            'FULL': '별값',
+            'FULL_BUY': '별값',
+            'HALF': '줍줍',
+            'HALF_BUY': '줍줍',
+            'BONUS': '보너스',
+            'BONUS_BUY': '보너스',
+            'QUARTER': '쿼터',
+            'QUARTER_SELL': '쿼터',
+            'TARGET_FULL': '목표',
+            'TARGET_SELL_THEN_FULL_BUY': '목표',
+            'TARGET_HALF': '목표',
+            'TARGET_SELL_THEN_HALF_BUY': '목표',
+        }
+        return labels.get(event_type, '')
+
+    def _fill_order_no(self, record):
+        return str(record.get('kis_order_no') or record.get('odno') or record.get('ODNO') or record.get('order_no') or '').strip()
+
+    def _fill_event_type_for_record(self, record, order_statuses):
+        direct = str(record.get('event_type') or '').upper()
+        if direct:
+            return direct
+        intent_id = str(record.get('intent_id') or '').strip()
+        order_no = self._fill_order_no(record)
+        if not isinstance(order_statuses, dict):
+            return ''
+        for records in order_statuses.values():
+            if not isinstance(records, list):
+                continue
+            for candidate in records:
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_intent_id = str(candidate.get('intent_id') or '').strip()
+                candidate_order_no = self._fill_order_no(candidate)
+                if (intent_id and candidate_intent_id == intent_id) or (order_no and candidate_order_no == order_no):
+                    return str(candidate.get('event_type') or '').upper()
+        return ''
+
+    def _format_execution_fill_lines(self, fills, order_statuses):
+        totals = {
+            'BUY': {'qty': 0, 'amount': 0.0, 'details': {}},
+            'SELL': {'qty': 0, 'amount': 0.0, 'details': {}},
+        }
+        for record in fills if isinstance(fills, list) else []:
+            if not isinstance(record, dict):
+                continue
+            side = self._fill_side_from_record(record)
+            qty = self._fill_qty_from_record(record)
+            price = self._fill_price_from_record(record)
+            if side not in totals or qty <= 0:
+                continue
+            totals[side]['qty'] += qty
+            totals[side]['amount'] += qty * price
+            label = self._fill_event_type_label(self._fill_event_type_for_record(record, order_statuses))
+            if label:
+                totals[side]['details'][label] = totals[side]['details'].get(label, 0) + qty
+
+        lines = []
+        for side, icon, label in (('BUY', '🟢', '매수'), ('SELL', '🔴', '매도')):
+            total = totals[side]
+            if total['qty'] <= 0:
+                lines.append(f"     {icon} {label} —")
+                continue
+            avg_price = total['amount'] / total['qty'] if total['qty'] > 0 else 0.0
+            details = []
+            for detail_label in ('별값', '줍줍', '보너스', '쿼터', '목표'):
+                qty = total['details'].get(detail_label, 0)
+                if qty > 0:
+                    details.append(f"{detail_label} {qty}주")
+            details_part = f"  ({' · '.join(details)})" if details else ""
+            lines.append(f"     {icon} {label} {total['qty']}주 @ ${avg_price:.2f}{details_part}")
+        return lines
+
+    def _format_kst_execution_section(self, t_info, order_statuses):
+        yesterday_fills = t_info.get('yesterday_fills') if isinstance(t_info.get('yesterday_fills'), list) else []
+        today_fills = t_info.get('today_fills') if isinstance(t_info.get('today_fills'), list) else []
+        if not yesterday_fills and not today_fills and not t_info.get('yesterday_fill_date') and not t_info.get('today_fill_date'):
+            return ""
+
+        def _label_date(raw):
+            text = str(raw or '').replace('-', '')
+            return f"{text[4:6]}-{text[6:8]}" if len(text) == 8 else "--"
+
+        lines = ["\n📊 <b>체결 내역 (KST)</b>"]
+        for title, raw_date, fills in (
+            ('어제', t_info.get('yesterday_fill_date'), yesterday_fills),
+            ('오늘', t_info.get('today_fill_date'), today_fills),
+        ):
+            lines.append(f"  📅 {title}(미국장 {_label_date(raw_date)})")
+            if fills:
+                lines.extend(self._format_execution_fill_lines(fills, order_statuses))
+            else:
+                lines.append("     ⏳ 아직 체결 없음")
+        lines.append("─────────────────────")
+        return "\n".join(lines) + "\n"
+
     def _resolve_one_portion_display(self, ticker, plan_dict, t_info, safe_t_val):
         plan_dict = plan_dict if isinstance(plan_dict, dict) else {}
         t_info = t_info if isinstance(t_info, dict) else {}
@@ -545,47 +661,7 @@ class TelegramView:
                     if sn_target > 0: body_msg += f"🎯 변동성 지표 분석: ${sn_target:.2f} 이상 대기\n"
 
             order_statuses = t_info.get('order_statuses') or plan_dict.get('order_statuses') or {}
-            supported_event_types = ("FULL", "HALF", "BONUS", "QUARTER", "TARGET_FULL")
-            total_by_type = {}
-            filled_by_type = {}
-            for o in plan_orders:
-                if not isinstance(o, dict):
-                    continue
-                et = str(o.get('event_type', '')).upper()
-                if et and et in supported_event_types:
-                    total_by_type[et] = total_by_type.get(et, 0) + int(self._safe_float(o.get('qty') or 0))
-            # 체결 현황 분자(오늘 체결)는 반드시 당일 trade_date만 카운트한다.
-            # 분모(오늘 주문계획 plan_orders)와 기준일을 맞춰, 전일 체결이
-            # 오늘 계획의 분자로 잘못 합산되는 것을 차단한다.
-            est_tz = ZoneInfo('America/New_York')
-            today_str = datetime.datetime.now(est_tz).strftime('%Y-%m-%d')
-            if isinstance(order_statuses, dict):
-                filled_records = (order_statuses.get('FILLED') or []) + (order_statuses.get('PARTIAL') or [])
-                for rec in filled_records:
-                    if not isinstance(rec, dict):
-                        continue
-                    rec_date = str(rec.get('trade_date') or '')[:10]
-                    if rec_date and rec_date != today_str:
-                        continue
-                    et = str(rec.get('event_type', '')).upper()
-                    if et and et in total_by_type:
-                        filled_by_type[et] = filled_by_type.get(et, 0) + int(self._safe_float(rec.get('qty') or 0))
-
-            buy_parts = []
-            sell_parts = []
-            for et, label in (("FULL", "별값"), ("HALF", "평단"), ("BONUS", "보너스")):
-                if total_by_type.get(et, 0) > 0:
-                    buy_parts.append(f"{label} {filled_by_type.get(et, 0)}/{total_by_type.get(et, 0)}")
-            for et, label in (("QUARTER", "쿼터"), ("TARGET_FULL", "목표")):
-                if total_by_type.get(et, 0) > 0:
-                    sell_parts.append(f"{label} {filled_by_type.get(et, 0)}/{total_by_type.get(et, 0)}")
-            if buy_parts or sell_parts:
-                body_msg += "\n📊 <b>체결 현황</b>\n"
-                if buy_parts:
-                    body_msg += f"  🔴 매수   {' · '.join(buy_parts)}\n"
-                if sell_parts:
-                    body_msg += f"  🔵 매도   {' · '.join(sell_parts)}\n"
-                body_msg += "─────────────────────\n"
+            body_msg += self._format_kst_execution_section(t_info, order_statuses)
 
             # 모드 변경(리버스→일반) 감지 및 표시
             reverse_sell_events_body = t_info.get('reverse_sell_events') or []

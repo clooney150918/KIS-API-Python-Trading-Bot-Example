@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import hashlib
 import json
 from types import SimpleNamespace
@@ -40,7 +41,18 @@ class FakeContext:
         self.job_queue = None
 
 
+class FakeAsyncLock:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
 class FakeBroker:
+    def __init__(self):
+        self.execution_history_calls = []
+
     def get_account_balance(self):
         return 1482.88, {"SOXL": {"qty": 98, "avg": 158.0735}}
 
@@ -59,6 +71,10 @@ class FakeBroker:
     def get_dynamic_volatility_target(self, ticker):
         return SimpleNamespace(base_amp=8.79, metric_val=0.0)
 
+    def get_execution_history(self, ticker, start, end):
+        self.execution_history_calls.append((ticker, start, end))
+        return []
+
 
 class EmptyHistory:
     empty = True
@@ -70,6 +86,21 @@ class FakeYFTicker:
 
     def history(self, *args, **kwargs):
         return EmptyHistory()
+
+
+class FakeSchedule:
+    empty = False
+
+    class _ILoc:
+        def __getitem__(self, index):
+            return {"market_open": datetime.datetime(2026, 8, 19, 13, 30, tzinfo=datetime.timezone.utc)}
+
+    iloc = _ILoc()
+
+
+class FakeCalendar:
+    def schedule(self, *args, **kwargs):
+        return FakeSchedule()
 
 
 class FakeStrategy:
@@ -172,6 +203,15 @@ def _isolated_cfg(tmp_path):
     files["MANUAL_VWAP_CFG"].write_text("{}", encoding="utf-8")
     files["AVWAP_HYBRID_CFG"].write_text("{}", encoding="utf-8")
     files["ORDER_INTENTS"].write_text("", encoding="utf-8")
+    cfg.get_active_tickers = lambda: ["SOXL"]
+    cfg.get_split_count = lambda ticker: 20
+    cfg.get_seed = lambda ticker: 6720.0
+    cfg.get_version = lambda ticker: "LAOER_V4_SOXL_20"
+    cfg.check_lock = lambda ticker, mode: False
+    cfg.get_reverse_state = lambda ticker: {}
+    cfg.get_upward_volatility_mode = lambda ticker: False
+    cfg.get_target_profit = lambda ticker: 20.0
+    cfg.calculate_holdings_from_official_ledger = lambda ticker: (7, 9.87, 69.09, 0.0)
     return cfg, files
 
 
@@ -183,7 +223,7 @@ def _create_commands(cfg, view):
         legacy_lot_book=None,
         sync_engine=SimpleNamespace(sync_locks={}),
         view=view,
-        tx_lock=asyncio.Lock(),
+        tx_lock=FakeAsyncLock(),
     )
 
 
@@ -193,8 +233,7 @@ async def _run_cmd_sync(commands, monkeypatch):
 
     monkeypatch.setattr(TelegramCommands, "_get_market_status", fake_market_status)
     monkeypatch.setattr(TelegramCommands, "_get_dst_info", lambda self: (17, "🌞"))
-    monkeypatch.setattr(telegram_commands, "get_budget_allocation", lambda cash, tickers, cfg: (tickers, {"SOXL": cash}))
-    monkeypatch.setattr(telegram_commands.GlobalThrottle, "wait_api_sync", lambda: None)
+    _patch_cmd_sync_io(monkeypatch)
     await commands.cmd_sync(FakeUpdate(), FakeContext())
 
 
@@ -205,6 +244,23 @@ def _latest_text(message):
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+def _patch_cmd_sync_io(monkeypatch):
+    async def fast_retry(self, func, *args, default=None, **kwargs):
+        kwargs.pop("timeout", None)
+        try:
+            if asyncio.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            return func(*args, **kwargs)
+        except Exception:
+            return default
+
+    monkeypatch.setattr(TelegramCommands, "_retry_api", fast_retry)
+    monkeypatch.setattr(telegram_commands, "get_budget_allocation", lambda cash, tickers, cfg: (tickers, {"SOXL": cash}))
+    monkeypatch.setattr(telegram_commands.GlobalThrottle, "wait_api_sync", lambda: None)
+    monkeypatch.setattr(telegram_commands.yf, "Ticker", FakeYFTicker)
+    monkeypatch.setattr(telegram_commands.mcal, "get_calendar", lambda name: FakeCalendar())
 
 
 def test_cmd_sync_actual_data_path_populates_kis_local_discrepancy_halt_without_mutating_manual_ledger(tmp_path, monkeypatch):
@@ -221,9 +277,7 @@ def test_cmd_sync_actual_data_path_populates_kis_local_discrepancy_halt_without_
             return "REG", "정규장"
         monkeypatch.setattr(TelegramCommands, "_get_market_status", fake_market_status)
         monkeypatch.setattr(TelegramCommands, "_get_dst_info", lambda self: (17, "🌞"))
-        monkeypatch.setattr(telegram_commands, "get_budget_allocation", lambda cash, tickers, cfg: (tickers, {"SOXL": cash}))
-        monkeypatch.setattr(telegram_commands.GlobalThrottle, "wait_api_sync", lambda: None)
-        monkeypatch.setattr(telegram_commands.yf, "Ticker", FakeYFTicker)
+        _patch_cmd_sync_io(monkeypatch)
         await commands.cmd_sync(update, FakeContext())
 
     _run(fake_run())
@@ -275,9 +329,7 @@ def test_cmd_sync_actual_data_path_loads_order_statuses_from_intent_ledger_for_s
         return "REG", "정규장"
     monkeypatch.setattr(TelegramCommands, "_get_market_status", fake_market_status)
     monkeypatch.setattr(TelegramCommands, "_get_dst_info", lambda self: (17, "🌞"))
-    monkeypatch.setattr(telegram_commands, "get_budget_allocation", lambda cash, tickers, cfg: (tickers, {"SOXL": cash}))
-    monkeypatch.setattr(telegram_commands.GlobalThrottle, "wait_api_sync", lambda: None)
-    monkeypatch.setattr(telegram_commands.yf, "Ticker", FakeYFTicker)
+    _patch_cmd_sync_io(monkeypatch)
     _run(commands.cmd_sync(update, FakeContext()))
 
     statuses = view.captured_ticker_data[0]["order_statuses"]
@@ -290,6 +342,33 @@ def test_cmd_sync_actual_data_path_loads_order_statuses_from_intent_ledger_for_s
     }
 
 
+def test_cmd_sync_fetches_yesterday_and_today_execution_history_by_kst_date(tmp_path, monkeypatch):
+    cfg, _files = _isolated_cfg(tmp_path)
+    view = CapturingView()
+    commands = _create_commands(cfg, view)
+    update = FakeUpdate()
+
+    async def fake_market_status(self):
+        return "REG", "정규장"
+    monkeypatch.setattr(TelegramCommands, "_get_market_status", fake_market_status)
+    monkeypatch.setattr(TelegramCommands, "_get_dst_info", lambda self: (17, "🌞"))
+    _patch_cmd_sync_io(monkeypatch)
+
+    _run(commands.cmd_sync(update, FakeContext()))
+
+    import datetime
+    from zoneinfo import ZoneInfo
+    today = datetime.datetime.now(ZoneInfo("Asia/Seoul")).date()
+    yesterday = today - datetime.timedelta(days=1)
+    assert commands.broker.execution_history_calls == [
+        ("SOXL", yesterday.strftime("%Y%m%d"), yesterday.strftime("%Y%m%d")),
+        ("SOXL", today.strftime("%Y%m%d"), today.strftime("%Y%m%d")),
+    ]
+    item = view.captured_ticker_data[0]
+    assert item["yesterday_fill_date"] == yesterday.strftime("%Y%m%d")
+    assert item["today_fill_date"] == today.strftime("%Y%m%d")
+
+
 def test_broken_local_ledger_summary_fails_closed_discrepancy_instead_of_healthy_empty(tmp_path):
     cfg, _files = _isolated_cfg(tmp_path)
     commands = _create_commands(cfg, CapturingView())
@@ -297,7 +376,7 @@ def test_broken_local_ledger_summary_fails_closed_discrepancy_instead_of_healthy
     def raise_corrupt_ledger():
         raise ValueError("corrupt manual ledger unavailable")
 
-    cfg.get_ledger = raise_corrupt_ledger
+    cfg.calculate_holdings_from_official_ledger = lambda ticker: raise_corrupt_ledger()
 
     local_ledger = commands._build_local_ledger_summary_for_sync("SOXL")
     discrepancy = commands._build_kis_local_discrepancy_for_sync(
@@ -323,9 +402,7 @@ def test_cmd_sync_corrupt_order_intent_ledger_surfaces_warning_instead_of_all_ze
         return "REG", "정규장"
     monkeypatch.setattr(TelegramCommands, "_get_market_status", fake_market_status)
     monkeypatch.setattr(TelegramCommands, "_get_dst_info", lambda self: (17, "🌞"))
-    monkeypatch.setattr(telegram_commands, "get_budget_allocation", lambda cash, tickers, cfg: (tickers, {"SOXL": cash}))
-    monkeypatch.setattr(telegram_commands.GlobalThrottle, "wait_api_sync", lambda: None)
-    monkeypatch.setattr(telegram_commands.yf, "Ticker", FakeYFTicker)
+    _patch_cmd_sync_io(monkeypatch)
 
     _run(commands.cmd_sync(update, FakeContext()))
 

@@ -625,20 +625,35 @@ def _event_type_for_intent_id(reconciler, intent_id, ticker) -> str:
 
 
 def build_daily_fill_summary(bot_label: str, records: list, reconciler=None) -> str:
-    """16:05 정산 스캔의 하루 체결 요약 알림 텍스트(확정 포맷).
-
-        🔔 [진호봇] 오늘 체결 요약 (N건)
-        🟢 매수 6주 @ $142.35 (별값매수)
-        🔴 매도 19주 @ $142.36 (쿼터매도)
-        · 08-14
-    """
-    if not records:
+    """16:05 정산 스캔의 KST 기준 어제/오늘 체결 요약 알림 텍스트."""
+    valid_records = [record for record in records if isinstance(record, dict)]
+    if not valid_records:
         return ""
-    lines = [f"🔔 {bot_label} 오늘 체결 요약 ({len(records)}건)"]
-    date_text = ""
+
+    kst = ZoneInfo("Asia/Seoul")
+    today = datetime.datetime.now(kst).date()
+    yesterday = today - datetime.timedelta(days=1)
+    sections = [
+        ("어제", yesterday.strftime("%Y%m%d"), []),
+        ("오늘", today.strftime("%Y%m%d"), []),
+    ]
+    by_date = {date_text: rows for _label, date_text, rows in sections}
+    for record in valid_records:
+        td = str(record.get("trade_date") or "").replace("-", "").strip()
+        if td in by_date:
+            by_date[td].append(record)
+
+    lines = [f"🔔 {bot_label} 체결 요약 (KST, {len(valid_records)}건)"]
+    unmatched = []
     for record in records:
         if not isinstance(record, dict):
             continue
+        td = str(record.get("trade_date") or "").replace("-", "").strip()
+        if td in by_date:
+            continue
+        unmatched.append(record)
+
+    def _append_record_line(record):
         side = _fill_side_label(record.get("side"))
         icon = _fill_side_icon(record.get("side"))
         try:
@@ -649,10 +664,18 @@ def build_daily_fill_summary(bot_label: str, records: list, reconciler=None) -> 
         gubun = _fill_gubun_label(_event_type_for_intent_id(reconciler, record.get("intent_id"), record.get("ticker")))
         gubun_part = f" ({gubun})" if gubun else ""
         lines.append(f"{icon} {side} {qty_text} @ ${price_text}{gubun_part}")
-        if not date_text:
-            date_text = _format_fill_date(record)
-    if date_text:
-        lines.append(f"· {date_text}")
+
+    for label, date_text, section_records in sections:
+        lines.append(f"📅 {label}(미국장 {date_text[4:6]}-{date_text[6:8]})")
+        if section_records:
+            for record in section_records:
+                _append_record_line(record)
+        else:
+            lines.append("⏳ 아직 체결 없음")
+    if unmatched:
+        lines.append("📅 기타")
+        for record in unmatched:
+            _append_record_line(record)
     return "\n".join(lines)
 
 

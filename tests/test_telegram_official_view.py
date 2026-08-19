@@ -105,33 +105,39 @@ def test_official_view_displays_reverse_mode_from_official_plan():
     assert "무한매수 20분할 · 리버스" in text
 
 
-def test_official_view_renders_fill_progress_from_order_statuses():
+def test_official_view_renders_kst_yesterday_and_today_execution_fills():
     text = _render(
         _base_ticker_info(
             plan={
                 "process_status": "🌕공식후반전",
-                "orders": [
-                    {"event_type": "FULL", "side": "BUY", "qty": 5},
-                    {"event_type": "BONUS", "side": "BUY", "qty": 5},
-                    {"event_type": "QUARTER", "side": "SELL", "qty": 18},
-                    {"event_type": "TARGET_FULL", "side": "SELL", "qty": 56},
-                ],
+                "orders": [],
             },
             order_statuses={
-                "SUBMITTED": [{"event_type": "FULL", "qty": 5}, {"event_type": "BONUS", "qty": 5}],
-                "PARTIAL": [{"event_type": "QUARTER", "qty": 3}],
-                "FILLED": [{"event_type": "TARGET_FULL", "qty": 56}],
+                "SUBMITTED": [],
+                "PARTIAL": [],
+                "FILLED": [
+                    {"kis_order_no": "ODNO-1", "event_type": "FULL_BUY"},
+                    {"kis_order_no": "ODNO-2", "event_type": "BONUS_BUY"},
+                ],
                 "CANCELLED": [],
                 "REJECTED": [],
             },
+            yesterday_fill_date="20260818",
+            today_fill_date="20260819",
+            yesterday_fills=[
+                {"odno": "ODNO-1", "side": "BUY", "qty": 5, "price": "129.00"},
+                {"odno": "ODNO-2", "side": "BUY", "qty": 1, "price": "129.60"},
+            ],
+            today_fills=[],
         )
     )
 
-    assert "📊 <b>체결 현황</b>" in text
-    assert "별값 0/5" in text
-    assert "줍줍 0/5" in text
-    assert "쿼터 3/18" in text
-    assert "목표 56/56" in text
+    assert "📊 <b>체결 내역 (KST)</b>" in text
+    assert "📅 어제(미국장 08-18)" in text
+    assert "🟢 매수 6주 @ $129.10  (별값 5주 · 보너스 1주)" in text
+    assert "🔴 매도 —" in text
+    assert "📅 오늘(미국장 08-19)" in text
+    assert "⏳ 아직 체결 없음" in text
 
 
 def test_official_view_renders_corrupt_order_intent_ledger_warning_as_halt():
