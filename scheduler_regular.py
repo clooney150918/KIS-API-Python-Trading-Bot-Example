@@ -215,7 +215,7 @@ async def scheduled_early_regular_trade(context):
                     
                     try:
                         plan = await asyncio.wait_for(asyncio.to_thread(
-                            strategy.get_plan, t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=safe_alloc_cash, is_snapshot_mode=True
+                            strategy.get_plan, t, curr_p, safe_avg, safe_qty, prev_c, ma_5day=ma_5day, market_type="REG", available_cash=safe_alloc_cash, pending_buy_amount=getattr(broker, 'last_pending_buy_amount', 0.0), is_snapshot_mode=True
                         ), timeout=15.0)
                     except Exception as e:
                         logging.error(f"🚨 [{t}] 플랜 생성 타임아웃/에러: {e}")
