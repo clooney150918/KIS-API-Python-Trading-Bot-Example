@@ -6,7 +6,7 @@ import pytest
 
 from order_intent_store import OrderIntentStore, compute_intent_id
 from trade_state_store import APPROVED_BASELINE, TradeStateStore
-from t_event_engine import REQUIRED_EVENT_KEYS
+from t_event_engine import OPTIONAL_EVENT_KEYS, REQUIRED_EVENT_KEYS
 from fill_reconciler import (
     FillReconciler,
     FillReconciliationError,
@@ -17,8 +17,15 @@ from fill_reconciler import (
 )
 
 
+BASELINE_T = Decimal(str(APPROVED_BASELINE["t"]))
+
+
 def write_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def fixed_split_amount(_ticker):
+    return Decimal("882.95")
 
 
 def planned_intent(**overrides):
@@ -102,7 +109,7 @@ def test_fill_key_is_stable_but_matching_key_includes_account_ticker_exchange_da
 def test_unclassified_manual_fill_halt_persists_across_duplicate_reconcile_runs(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-1"), event_type="FULL_BUY", qty=4, price="100.00")
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
     manual_row = kis_fill(odno="MANUAL-DURABLE-1", ft_ccld_qty="1")
 
     first = reconciler.reconcile("SOXL", [manual_row])
@@ -136,10 +143,10 @@ def test_fill_key_scope_prevents_cross_account_or_date_duplicate_suppression(tmp
         price="100.00",
     )
 
-    result_a = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A").reconcile(
+    result_a = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount).reconcile(
         "SOXL", [kis_fill(odno="ODNO-SAME", ord_dt="20260812", ord_tmd="223015")]
     )
-    result_b = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-B").reconcile(
+    result_b = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-B", split_amount_provider=fixed_split_amount).reconcile(
         "SOXL", [kis_fill(odno="ODNO-SAME", ord_dt="20260813", ord_tmd="223015")]
     )
 
@@ -158,7 +165,7 @@ def test_fill_key_scope_prevents_cross_account_or_date_duplicate_suppression(tmp
 def test_external_unrelated_odno_account_or_exchange_does_not_match_existing_intent(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-ACCEPTED"))
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="EXT-UNRELATED-1")])
 
@@ -178,7 +185,7 @@ def test_kis_loc_execution_with_reissued_order_number_matches_by_order_price_onc
         qty=5,
         price="150.39",
     )
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile(
         "SOXL",
@@ -212,7 +219,7 @@ def test_reissued_order_number_without_order_price_stays_unclassified(tmp_path):
         qty=5,
         price="150.39",
     )
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile(
         "SOXL",
@@ -236,7 +243,7 @@ def test_reissued_order_number_without_order_price_stays_unclassified(tmp_path):
 def test_reconciler_only_matches_exact_accepted_order_key(tmp_path, accepted_overrides, fill_overrides, reconciler_account):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(**accepted_overrides))
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint=reconciler_account)
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint=reconciler_account, split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [kis_fill(**fill_overrides)])
 
@@ -249,7 +256,7 @@ def test_reconciler_only_matches_exact_accepted_order_key(tmp_path, accepted_ove
 def test_append_event_failure_appends_failure_record_and_leaves_fill_retryable(tmp_path, monkeypatch):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-FAIL"), event_type="FULL_BUY", qty=4)
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
     real_append = trade_store.append_event
     calls = {"n": 0}
 
@@ -282,7 +289,7 @@ def test_append_event_failure_appends_failure_record_and_leaves_fill_retryable(t
 def test_finalization_failure_appends_failure_record_without_removing_existing_lines(tmp_path, monkeypatch):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-ROLLBACK"), event_type="FULL_BUY", qty=4)
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     def crash_after_t_event(intent_id, status):
         raise RuntimeError("simulated crash after snapshot while unrelated writer appended")
@@ -307,7 +314,7 @@ def test_finalization_failure_appends_failure_record_without_removing_existing_l
 def test_order_acceptance_without_any_fill_keeps_submitted_and_does_not_append_t_event(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     intent = submitted_intent(intent_store)
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [])
 
@@ -321,7 +328,7 @@ def test_order_acceptance_without_any_fill_keeps_submitted_and_does_not_append_t
 def test_full_fill_transitions_intent_and_appends_one_t_event_atomically(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     intent = submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-1"), event_type="FULL_BUY", qty=4, price="100.00")
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-1", ft_ccld_qty="4", ft_ccld_unpr3="100.00")])
 
@@ -329,17 +336,20 @@ def test_full_fill_transitions_intent_and_appends_one_t_event_atomically(tmp_pat
     assert result["operator_halt"] is False
     assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
     event = json.loads(events_path.read_text(encoding="utf-8"))
-    assert set(event) == REQUIRED_EVENT_KEYS
+    assert set(event) == REQUIRED_EVENT_KEYS | OPTIONAL_EVENT_KEYS
     assert event["intent_id"] == intent["intent_id"]
     assert event["kis_order_no"] == "ODNO-1"
     assert event["event_type"] == "FULL_BUY"
+    assert event["side"] == "BUY"
     assert event["filled_qty"] == 4
     assert event["filled_amount"] == "400.00"
+    assert event["split_amount"] == "882.95"
+    assert event["t_after"] == str(BASELINE_T + (Decimal("400.00") / Decimal("882.95")))
     processed = json.loads(processed_path.read_text(encoding="utf-8"))
     assert processed["matching_key"] == "acct-A|SOXL|AMEX|20260812|ODNO-1"
 
 
-def test_quarter_sell_fill_appends_t_event_with_seventy_five_percent_t(tmp_path):
+def test_quarter_sell_fill_appends_t_event_with_proportional_t_decrease(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     intent = submitted_intent(
         intent_store,
@@ -349,7 +359,7 @@ def test_quarter_sell_fill_appends_t_event_with_seventy_five_percent_t(tmp_path)
         qty=19,
         price="142.36",
     )
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile(
         "SOXL",
@@ -369,16 +379,17 @@ def test_quarter_sell_fill_appends_t_event_with_seventy_five_percent_t(tmp_path)
     event = json.loads(events_path.read_text(encoding="utf-8"))
     assert event["intent_id"] == intent["intent_id"]
     assert event["event_type"] == "QUARTER"
+    assert event["side"] == "SELL"
     assert event["filled_qty"] == 19
-    assert event["t_before"] == "18.32"
-    assert event["t_after"] == "13.7400"
+    assert event["t_before"] == str(BASELINE_T)
+    assert event["t_after"] == str(BASELINE_T - (Decimal("2754.05") / Decimal("882.95")))
     processed = json.loads(processed_path.read_text(encoding="utf-8"))
     assert processed["classification"] == "FINAL"
 
 
 def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_available(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
     fill = kis_fill(
         odno="ODNO-QSELL",
         sll_buy_dvsn_cd="01",
@@ -407,8 +418,8 @@ def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_availab
     assert event["intent_id"] == intent["intent_id"]
     assert event["event_type"] == "QUARTER"
     assert event["filled_qty"] == 19
-    assert event["t_before"] == "18.32"
-    assert event["t_after"] == "13.7400"
+    assert event["t_before"] == str(BASELINE_T)
+    assert event["t_after"] == str(BASELINE_T - (Decimal("2754.05") / Decimal("882.95")))
     processed_records = [json.loads(line) for line in processed_path.read_text(encoding="utf-8").splitlines()]
     assert [record["classification"] for record in processed_records] == ["UNCLASSIFIED", "FINAL"]
     assert processed_records[-1]["intent_id"] == intent["intent_id"]
@@ -418,10 +429,34 @@ def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_availab
     assert len(events_path.read_text(encoding="utf-8").splitlines()) == 1
 
 
+def test_reverse_sell_fill_uses_proportional_t_decrease_not_reverse_multiplier(tmp_path):
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(order_no="ODNO-REV-SELL"),
+        event_type="REVERSE_SELL",
+        side="SELL",
+        qty=5,
+        price="100.00",
+    )
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
+
+    result = reconciler.reconcile(
+        "SOXL",
+        [kis_fill(odno="ODNO-REV-SELL", sll_buy_dvsn_cd="01", ft_ccld_qty="5", ft_ccld_unpr3="100.00")],
+    )
+
+    assert result["operator_halt"] is False
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    assert event["event_type"] == "REVERSE_SELL"
+    assert event["side"] == "SELL"
+    assert event["t_after"] == str(BASELINE_T - (Decimal("500.00") / Decimal("882.95")))
+
+
 def test_partial_then_additional_fill_accumulates_but_updates_t_only_after_final(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-2"), event_type="FULL_BUY", qty=4, price="100.00")
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     partial = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-2", ord_tmd="223000", ft_ccld_qty="2")])
 
@@ -445,7 +480,7 @@ def test_partial_then_additional_fill_accumulates_but_updates_t_only_after_final
 def test_duplicate_fill_requery_is_ignored_without_second_t_event(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-3"), event_type="FULL_BUY", qty=4)
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
     row = kis_fill(odno="ODNO-3")
 
     first = reconciler.reconcile("SOXL", [row])
@@ -460,7 +495,7 @@ def test_cancelled_order_with_residual_partial_fill_keeps_halt_and_never_updates
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     intent = submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-4"), event_type="FULL_BUY", qty=4)
     intent_store.transition_status(intent["intent_id"], "CANCELLED")
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-4", ft_ccld_qty="2")])
 
@@ -473,7 +508,7 @@ def test_cancelled_order_with_residual_partial_fill_keeps_halt_and_never_updates
 def test_external_manual_fill_is_unclassified_halt_and_no_t_update(tmp_path):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-1"), event_type="FULL_BUY", qty=4, price="100.00")
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="MANUAL-1", ft_ccld_qty="1")])
 
@@ -493,7 +528,7 @@ def test_external_manual_fill_is_unclassified_halt_and_no_t_update(tmp_path):
 def test_fill_outside_intent_qty_price_side_is_unclassified_halt_no_proportional_t(tmp_path, overrides):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-5"), event_type="FULL_BUY", qty=4, price="100.00", side="BUY")
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
 
     result = reconciler.reconcile("SOXL", [kis_fill(odno="ODNO-5", **overrides)])
 
@@ -505,7 +540,7 @@ def test_fill_outside_intent_qty_price_side_is_unclassified_halt_no_proportional
 def test_middle_failure_between_t_event_and_intent_status_is_atomic_and_retryable(tmp_path, monkeypatch):
     intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
     submitted_intent(intent_store, accepted_order=accepted_key(order_no="ODNO-6"), event_type="FULL_BUY", qty=4)
-    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A")
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
     real_transition = intent_store.transition_status
     calls = {"n": 0}
 

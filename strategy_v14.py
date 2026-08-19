@@ -98,6 +98,7 @@ class V4Strategy:
             "total_q": int(self._safe_float(safe_plan.get('total_q', 0))),
             "avg_price": self._safe_float(safe_plan.get('avg_price', 0.0)),
             "one_portion": self._safe_float(safe_plan.get('one_portion', 0.0)),
+            "split_amount": self._safe_float(safe_plan.get('split_amount', 0.0)),
             "official_cash": self._safe_float(safe_plan.get('official_cash', 0.0)),
             "star_price": self._safe_float(safe_plan.get('star_price', 0.0)),
             "star_ratio": self._safe_float(safe_plan.get('star_ratio', 0.0)),
@@ -190,6 +191,7 @@ class V4Strategy:
             "orders": [], "core_orders": [], "bonus_orders": [],
             "total_q": int(self._safe_float(qty)), "avg_price": self._safe_float(avg_price),
             "t_val": self._safe_float(t_val), "one_portion": 0.0,
+            "split_amount": 0.0,
             "process_status": process_status, "is_reverse": False,
             "star_price": 0.0, "star_ratio": 0.0, "target_price": 0.0,
             "real_cash_used": 0.0, "tracking_info": {}, "initial_qty": int(self._safe_float(qty)),
@@ -357,10 +359,23 @@ class V4Strategy:
 
         t_revision = int(official_state.revision)
         split = int(self._safe_float(self.cfg.get_split_count(target)) or 20)
+        try:
+            split_amount = self.cfg.get_split_amount(target, split=20)
+        except Exception as exc:
+            logging.error(f"⛔ [{target}] fixed split amount unavailable: {exc}")
+            plan_result = self._empty_official_plan(
+                target, qty, avg_price,
+                reason=f"fixed split amount unavailable: {exc}",
+                process_status="⛔분할금HALT",
+            )
+            plan_result["t_revision"] = t_revision
+            plan_result["source_balance_at"] = baseline.get("as_of", "")
+            if is_snapshot_mode: self.save_daily_snapshot(target, plan_result)
+            return plan_result
         # 이벤트식 T: baseline + T 이벤트 원장에서 온 official_state.t 를 그대로 사용
         t_val = float(official_state.t)
         from decimal import Decimal
-        t_val_dec = Decimal(str(round(t_val, 2)))
+        t_val_dec = Decimal(str(official_state.t))
         # 1회매수금 기준현금: KIS 예수금이 아니라 원장 기반 cycle_cash 사용(중간 입금 격리).
         pending_buy_amount = kwargs.get("pending_buy_amount", kwargs.get("frcr_buy_amt_smtl", 0.0))
         official_cash, cash_halt, cash_halt_reason = self._resolve_cycle_cash(
@@ -630,6 +645,7 @@ class V4Strategy:
             "avg_price": avg_price,
             "t_val": t_val,
             "one_portion": one_portion,
+            "split_amount": float(split_amount),
             "official_cash": official_cash,
             "process_status": process_status if not kernel_fail_closed else "⛔공식커널HALT",
             "is_reverse": is_reverse,

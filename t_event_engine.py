@@ -11,38 +11,42 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Mapping, Any
 
-from laoer_v4_20 import apply_fill_event as _kernel_apply_fill_event
-
-# Gap 2: 리버스 쿼터매수 T 증가 정산 배선.
-# 커널 laoer_v4_20.calculate_reverse_plan 은 리버스 쿼터매수 T 공식
-#   t_after_buy = t_after_sell + (20 - t_after_sell) * 0.25
-# 을 이미 정확히 계산하지만, 정산 레이어의 T 이벤트 테이블(apply_fill_event)에는
-# 리버스 쿼터매수 이벤트가 없어 일반매수(T+1)로 잘못 연결된다. 커널을 건드리지 않고
-# 정산 레이어에서 리버스 쿼터매수 이벤트를 별도 배선한다.
 REVERSE_QUARTER_BUY_EVENT = "REVERSE_QUARTER_BUY"
 REVERSE_SELL_EVENT = "REVERSE_SELL"
-_REVERSE_SPLIT = Decimal("20")
-_REVERSE_QUARTER_RATIO = Decimal("0.25")
-_REVERSE_SELL_RATIO = Decimal("0.9")
 
 
-def apply_fill_event_extended(t_before, event_type):
-    """Apply a fill event to T, including the reverse sell/buy rules.
+def infer_side_from_event_type(event_type: object) -> str:
+    event = str(event_type).upper()
+    if event in {"QUARTER", "QUARTER_SELL", "TARGET_FULL", "TARGET_HALF", "REVERSE_SELL"}:
+        return "SELL"
+    if event in {"FULL", "FULL_BUY", "HALF", "HALF_BUY", "BONUS", "BONUS_BUY", "REVERSE_QUARTER_BUY"}:
+        return "BUY"
+    raise ValueError(f"unsupported fill event side inference: {event_type!r}")
 
-    Reverse quarter-buy (BUY in reverse mode) advances T by
-    ``T + (20 - T) * 0.25``, distinct from the normal-mode FULL buy (``T + 1``).
 
-    Reverse sell (SELL in reverse mode) scales T by ``T * 0.9``, distinct
-    from the normal-mode QUARTER sell (``T * 0.75``).
-    All other event types delegate to the kernel's normal-mode table.
+def apply_fill_event_extended(t_before, event_type, *, side=None, filled_amount=None, split_amount=None):
+    """Apply proportional fill amount to T.
+
+    New official events move T by ``filled_amount / split_amount``: BUY adds,
+    SELL subtracts.  ``event_type`` remains audit metadata; it no longer
+    contributes event coefficients.
     """
-    if str(event_type).upper() == REVERSE_SELL_EVENT:
-        t = parse_decimal(t_before, "t_before")
-        return t * _REVERSE_SELL_RATIO
-    if str(event_type).upper() == REVERSE_QUARTER_BUY_EVENT:
-        t = parse_decimal(t_before, "t_before")
-        return t + ((_REVERSE_SPLIT - t) * _REVERSE_QUARTER_RATIO)
-    return _kernel_apply_fill_event(t_before, event_type)
+    if filled_amount is None or split_amount is None:
+        raise ValueError("filled_amount and split_amount are required for proportional T")
+    t = parse_decimal(t_before, "t_before")
+    amount = parse_decimal(filled_amount, "filled_amount")
+    portion = parse_decimal(split_amount, "split_amount")
+    if amount < 0:
+        raise ValueError("filled_amount must be non-negative")
+    if portion <= 0:
+        raise ValueError("split_amount must be positive")
+    fill_side = str(side or infer_side_from_event_type(event_type)).upper()
+    delta = amount / portion
+    if fill_side == "BUY":
+        return t + delta
+    if fill_side == "SELL":
+        return t - delta
+    raise ValueError("side must be BUY or SELL")
 
 
 @dataclass(frozen=True)
@@ -69,6 +73,10 @@ REQUIRED_EVENT_KEYS = {
     "revision_after",
     "occurred_at",
 }
+OPTIONAL_EVENT_KEYS = {
+    "side",
+    "split_amount",
+}
 
 
 def parse_decimal(value: object, field: str) -> Decimal:
@@ -93,9 +101,9 @@ def validate_t_event(event: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(event, Mapping):
         raise ValueError("T event must be a JSON object")
     keys = set(event.keys())
-    if keys != REQUIRED_EVENT_KEYS:
+    if not REQUIRED_EVENT_KEYS.issubset(keys) or not keys.issubset(REQUIRED_EVENT_KEYS | OPTIONAL_EVENT_KEYS):
         missing = sorted(REQUIRED_EVENT_KEYS - keys)
-        extra = sorted(keys - REQUIRED_EVENT_KEYS)
+        extra = sorted(keys - REQUIRED_EVENT_KEYS - OPTIONAL_EVENT_KEYS)
         raise ValueError(f"T event schema mismatch missing={missing} extra={extra}")
 
     validated = dict(event)
@@ -110,6 +118,13 @@ def validate_t_event(event: Mapping[str, Any]) -> dict[str, Any]:
     parse_decimal(validated["filled_amount"], "filled_amount")
     parse_decimal(validated["t_before"], "t_before")
     parse_decimal(validated["t_after"], "t_after")
+    if "side" in validated:
+        if validated["side"] not in {"BUY", "SELL"}:
+            raise ValueError("side must be BUY or SELL")
+    if "split_amount" in validated:
+        split_amount = parse_decimal(validated["split_amount"], "split_amount")
+        if split_amount <= 0:
+            raise ValueError("split_amount must be positive")
     parse_int(validated["revision_before"], "revision_before")
     parse_int(validated["revision_after"], "revision_after")
     try:
@@ -133,9 +148,16 @@ def apply_t_event(current_t: Decimal, current_revision: int, event: Mapping[str,
     if revision_after != revision_before + 1:
         raise ValueError("revision_after must equal revision_before + 1")
 
-    kernel_t_after = apply_fill_event_extended(t_before, validated["event_type"])
-    if kernel_t_after != t_after:
-        raise ValueError(f"t_after mismatch: kernel expected {kernel_t_after}, got {t_after}")
+    if "split_amount" in validated:
+        proportional_t_after = apply_fill_event_extended(
+            t_before,
+            validated["event_type"],
+            side=validated.get("side"),
+            filled_amount=validated["filled_amount"],
+            split_amount=validated["split_amount"],
+        )
+        if proportional_t_after != t_after:
+            raise ValueError(f"t_after mismatch: proportional expected {proportional_t_after}, got {t_after}")
 
     return TState(
         ticker=validated["ticker"],

@@ -318,15 +318,18 @@ class ConfigManager:
 
             store = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"])
             state = store.load_state(target)
-            t_val = float(state.t)
-            split = self.get_split_count(target)
-            remaining_splits = max(1.0, split - t_val)
+            from decimal import Decimal
+            t_dec = Decimal(str(state.t))
+            split_dec = Decimal(str(self.get_split_count(target)))
+            remaining_splits = split_dec - t_dec
+            if remaining_splits < Decimal("1"):
+                remaining_splits = Decimal("1")
             cycle_cash, detail = self.calculate_cycle_cash(target)
             if cycle_cash is None:
                 raise ValueError(f"cycle_cash unavailable: {detail.get('reason', '')}")
-            one_portion = float(cycle_cash) / remaining_splits
+            one_portion = Decimal(str(cycle_cash)) / remaining_splits
             self._set_t_event_status(target, True)
-            return round(t_val, 2), one_portion
+            return round(float(t_dec), 2), float(one_portion)
         except Exception as e:
             self._set_t_event_status(target, False, e)
             logging.error(f"⛔ [{ticker}] T값 이벤트식 로드 실패: {e}")
@@ -1042,15 +1045,18 @@ class ConfigManager:
             from trade_state_store import TradeStateStore
 
             state = TradeStateStore(self.FILES["STRATEGY_BASELINE"], self.FILES["T_EVENTS"]).load_state(target)
-            t_val = float(state.t)
+            from decimal import Decimal
+            t_dec = Decimal(str(state.t))
             cycle_cash, detail = self.calculate_cycle_cash(target)
             if cycle_cash is None:
                 raise ValueError(f"cycle_cash unavailable: {detail.get('reason', '')}")
-            rem_cash = float(cycle_cash)
-            safe_denom = max(1.0, 20.0 - t_val)
-            current_budget = rem_cash / safe_denom
+            rem_cash_dec = Decimal(str(cycle_cash))
+            safe_denom = Decimal("20") - t_dec
+            if safe_denom < Decimal("1"):
+                safe_denom = Decimal("1")
+            current_budget = rem_cash_dec / safe_denom
             self._set_t_event_status(target, True)
-            return max(0.0, round(t_val, 4)), max(0.0, current_budget), max(0.0, rem_cash)
+            return max(0.0, round(float(t_dec), 4)), max(0.0, float(current_budget)), max(0.0, float(rem_cash_dec))
         except Exception as e:
             self._set_t_event_status(target, False, e)
             logging.error(f"⛔ [{ticker}] V14 state ledger load failed; cost-basis inverse blocked: {e}")
@@ -1100,6 +1106,25 @@ class ConfigManager:
     def get_seed(self, t): 
         with GlobalThrottle.get_file_lock(self.FILES["SEED_CFG"]):
             return self._safe_float(self._load_json(self.FILES["SEED_CFG"], self.DEFAULT_SEED).get(t, 6720.0))
+
+    def get_split_amount(self, t, split=20):
+        """Fixed T portion amount: configured seed / 20, returned as Decimal."""
+        from decimal import Decimal, InvalidOperation
+
+        target = str(t or "").strip().upper()
+        try:
+            divisor = Decimal(str(split))
+            if divisor <= 0:
+                raise InvalidOperation("non-positive split")
+            with GlobalThrottle.get_file_lock(self.FILES["SEED_CFG"]):
+                seeds = self._load_json(self.FILES["SEED_CFG"], self.DEFAULT_SEED)
+            raw_seed = seeds.get(target, self.DEFAULT_SEED.get(target, 6720.0)) if isinstance(seeds, dict) else self.DEFAULT_SEED.get(target, 6720.0)
+            seed = Decimal(str(raw_seed).replace(",", ""))
+            if not seed.is_finite() or seed <= 0:
+                raise InvalidOperation("invalid seed")
+            return seed / divisor
+        except (InvalidOperation, ValueError, TypeError) as exc:
+            raise ValueError(f"invalid split amount seed for {target}") from exc
         
     def set_seed(self, t, v): 
         with GlobalThrottle.get_file_lock(self.FILES["SEED_CFG"]):

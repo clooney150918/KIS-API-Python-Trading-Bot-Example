@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 
 from config import ConfigManager
 from trade_state_store import APPROVED_BASELINE
@@ -134,6 +135,7 @@ def test_strategy_empty_existing_event_ledger_uses_baseline_t_without_overblocki
     plan = _strategy_plan(cfg)
 
     assert plan["t_val"] == BASELINE_T
+    assert plan["split_amount"] == float(Decimal(str(BASELINE_IMPLIED_SEED)) / Decimal("20"))
     assert plan.get("safety") is None
     assert plan["orders"]
     assert any(order.get("side") in {"BUY", "SELL"} for order in plan["orders"])
@@ -165,7 +167,20 @@ def test_config_absolute_t_reads_baseline_event_ledger_only(tmp_path):
     second_t, second_portion = cfg.get_absolute_t_val("SOXL", actual_qty=999, actual_avg_price=1)
 
     assert first_t == second_t == BASELINE_T
-    assert first_portion == second_portion == (BASELINE_CASH + 100.0) / (20 - BASELINE_T)
+    expected_portion = Decimal(str(BASELINE_CASH + 100.0)) / (Decimal("20") - Decimal(str(BASELINE_T)))
+    assert first_portion == second_portion == float(expected_portion)
+
+
+def test_get_split_amount_is_fixed_seed_divided_by_twenty(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    events_path.write_text("", encoding="utf-8")
+    cfg = _isolated_strategy_config(tmp_path, events_path)
+    (tmp_path / "seed.json").write_text(json.dumps({"SOXL": 17659.0}), encoding="utf-8")
+
+    assert cfg.get_split_amount("SOXL") == Decimal("882.95")
+
+    (tmp_path / "seed.json").write_text(json.dumps({"SOXL": 16955.4}), encoding="utf-8")
+    assert cfg.get_split_amount("SOXL") == Decimal("847.77")
 
 
 def test_calculate_v14_state_does_not_inverse_cost_basis(tmp_path):
@@ -185,7 +200,8 @@ def test_calculate_v14_state_does_not_inverse_cost_basis(tmp_path):
     t_val, budget, rem_cash = cfg.calculate_v14_state("SOXL")
 
     assert t_val == BASELINE_T
-    assert budget == BASELINE_CASH / (20 - BASELINE_T)
+    expected_budget = Decimal(str(BASELINE_CASH)) / (Decimal("20") - Decimal(str(BASELINE_T)))
+    assert budget == float(expected_budget)
     assert rem_cash == BASELINE_CASH
 
 

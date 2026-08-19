@@ -16,9 +16,8 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
 
-from laoer_v4_20 import apply_fill_event
 from order_intent_store import OrderIntentLedgerCorruptError
-from t_event_engine import apply_fill_event_extended, parse_decimal
+from t_event_engine import apply_fill_event_extended
 
 
 class FillReconciliationError(RuntimeError):
@@ -199,11 +198,20 @@ class ProcessedFillStore:
 
 
 class FillReconciler:
-    def __init__(self, intent_store, trade_state_store, processed_fill_store: ProcessedFillStore, *, account_fingerprint: str):
+    def __init__(
+        self,
+        intent_store,
+        trade_state_store,
+        processed_fill_store: ProcessedFillStore,
+        *,
+        account_fingerprint: str,
+        split_amount_provider=None,
+    ):
         self.intent_store = intent_store
         self.trade_state_store = trade_state_store
         self.processed_fill_store = processed_fill_store
         self.account_fingerprint = account_fingerprint
+        self.split_amount_provider = split_amount_provider
         self.tx_lock_path = processed_fill_store.ledger_path.with_suffix(".reconcile.lock")
 
     def forbid_new_orders(self, ticker: str) -> bool:
@@ -430,7 +438,14 @@ class FillReconciler:
     def _build_t_event(self, intent: Mapping[str, Any], fill: Mapping[str, Any], qty: int, amount: Decimal) -> dict[str, Any]:
         event_type = str(intent["event_type"])
         t_state = self.trade_state_store.load_state(intent["ticker"])
-        t_after = apply_fill_event_extended(t_state.t, event_type)
+        split_amount = self._split_amount_for(intent["ticker"])
+        t_after = apply_fill_event_extended(
+            t_state.t,
+            event_type,
+            side=fill["side"],
+            filled_amount=amount,
+            split_amount=split_amount,
+        )
         fill_key = build_fill_key(fill)
         event_id = hashlib.sha256(
             f"{intent['intent_id']}|{fill_key}|{t_state.revision}".encode("utf-8")
@@ -442,14 +457,27 @@ class FillReconciler:
             "kis_order_no": fill["order_no"],
             "fill_key": fill_key,
             "event_type": event_type,
+            "side": fill["side"],
             "filled_qty": qty,
             "filled_amount": _money_text(amount),
+            "split_amount": format(split_amount, "f"),
             "t_before": str(t_state.t),
             "t_after": str(t_after),
             "revision_before": t_state.revision,
             "revision_after": t_state.revision + 1,
             "occurred_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         }
+
+    def _split_amount_for(self, ticker: str) -> Decimal:
+        if not callable(self.split_amount_provider):
+            raise FillReconciliationError("split_amount_provider is required for proportional T")
+        try:
+            split_amount = _decimal(self.split_amount_provider(ticker), "split_amount")
+        except Exception as exc:
+            raise FillReconciliationError("split_amount_provider returned invalid split amount") from exc
+        if split_amount <= 0:
+            raise FillReconciliationError("split_amount must be positive")
+        return split_amount
 
     def _record_processed(self, fill: Mapping[str, Any], intent_id: str | None, classification: str) -> None:
         self.processed_fill_store.append_record({

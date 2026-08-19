@@ -155,6 +155,7 @@ def main():
     fill_reconciler = FillReconciler(
         order_intent_store, trade_state_store, processed_fill_store,
         account_fingerprint=(_fp or ""),
+        split_amount_provider=cfg.get_split_amount,
     )
     strategy = InfiniteStrategy(cfg)
     bot = TelegramController(
