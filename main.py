@@ -180,6 +180,7 @@ def main():
     app = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
+        .concurrent_updates(8)
         .read_timeout(30.0)
         .write_timeout(30.0)
         .connection_pool_size(8)
