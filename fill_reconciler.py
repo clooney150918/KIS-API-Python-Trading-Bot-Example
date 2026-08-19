@@ -138,6 +138,11 @@ class ProcessedFillStore:
             latest = same_fill_records[-1] if same_fill_records else None
             if latest is not None and not self._allows_reclassification(latest, record):
                 return
+            if latest is not None:
+                rewritten = [r for r in records if r.get("fill_key") != record.get("fill_key")]
+                rewritten.append(dict(record))
+                self._atomic_rewrite_records(rewritten)
+                return
             self._atomic_append_line(payload)
 
     @staticmethod
@@ -191,6 +196,20 @@ class ProcessedFillStore:
             os.fsync(fd)
         finally:
             os.close(fd)
+        _fsync_dir(self.ledger_path.parent)
+
+    def _atomic_rewrite_records(self, records: list[Mapping[str, Any]]) -> None:
+        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = self.ledger_path.with_name(f".{self.ledger_path.name}.tmp.{os.getpid()}")
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o644)
+        try:
+            for record in records:
+                payload = json.dumps(dict(record), ensure_ascii=False, separators=(",", ":")) + "\n"
+                os.write(fd, payload.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp_path, self.ledger_path)
         _fsync_dir(self.ledger_path.parent)
 
     def _lock(self, mode: int):

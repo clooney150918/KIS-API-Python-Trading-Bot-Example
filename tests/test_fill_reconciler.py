@@ -466,8 +466,8 @@ def test_previously_unclassified_quarter_sell_can_recover_once_intent_is_availab
     assert event["t_before"] == str(BASELINE_T)
     assert event["t_after"] == str(BASELINE_T - (Decimal("2754.05") / Decimal("882.95")))
     processed_records = [json.loads(line) for line in processed_path.read_text(encoding="utf-8").splitlines()]
-    assert [record["classification"] for record in processed_records] == ["UNCLASSIFIED", "FINAL"]
-    assert processed_records[-1]["intent_id"] == intent["intent_id"]
+    assert [record["classification"] for record in processed_records] == ["FINAL"]
+    assert processed_records[0]["intent_id"] == intent["intent_id"]
 
     duplicate = reconciler.reconcile("SOXL", [fill])
     assert duplicate["new_fill_count"] == 0
