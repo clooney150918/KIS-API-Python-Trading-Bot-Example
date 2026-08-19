@@ -349,6 +349,48 @@ def test_full_fill_transitions_intent_and_appends_one_t_event_atomically(tmp_pat
     assert processed["matching_key"] == "acct-A|SOXL|AMEX|20260812|ODNO-1"
 
 
+def test_fractional_cent_fill_amount_keeps_t_after_and_filled_amount_closed_loop(tmp_path):
+    # A fill price with more than 2 decimals makes price*qty carry sub-cent
+    # digits.  filled_amount is stored rounded to 2 decimals, so t_after must be
+    # computed from that SAME rounded value or append_event's proportional
+    # re-derivation rejects the event and reconciliation halts.
+    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
+    submitted_intent(
+        intent_store,
+        accepted_order=accepted_key(order_no="ODNO-FRAC"),
+        event_type="FULL_BUY",
+        side="BUY",
+        qty=3,
+        price="150.00",
+    )
+    reconciler = FillReconciler(intent_store, trade_store, processed_store, account_fingerprint="acct-A", split_amount_provider=fixed_split_amount)
+
+    result = reconciler.reconcile(
+        "SOXL",
+        [kis_fill(odno="ODNO-FRAC", ft_ccld_qty="3", ft_ccld_unpr3="129.1075")],
+    )
+
+    assert result["operator_halt"] is False
+    assert result["new_fill_count"] == 1
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    # 129.1075 * 3 = 387.3225 -> rounds to 387.32
+    assert event["filled_amount"] == "387.32"
+    assert event["t_after"] == str(BASELINE_T + (Decimal("387.32") / Decimal("882.95")))
+    # Closed loop: t_after is reproducible from the stored rounded filled_amount.
+    from t_event_engine import apply_fill_event_extended
+
+    assert event["t_after"] == str(
+        apply_fill_event_extended(
+            BASELINE_T,
+            event["event_type"],
+            side=event["side"],
+            filled_amount=Decimal(event["filled_amount"]),
+            split_amount=Decimal(event["split_amount"]),
+        )
+    )
+
+
 def test_quarter_sell_fill_appends_t_event_with_proportional_t_decrease(tmp_path):
     intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
     intent = submitted_intent(

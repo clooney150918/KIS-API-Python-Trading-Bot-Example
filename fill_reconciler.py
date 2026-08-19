@@ -439,11 +439,17 @@ class FillReconciler:
         event_type = str(intent["event_type"])
         t_state = self.trade_state_store.load_state(intent["ticker"])
         split_amount = self._split_amount_for(intent["ticker"])
+        # filled_amount is persisted rounded to 2 decimals, so T must advance
+        # from that SAME rounded value.  Computing t_after from the unrounded
+        # amount would leave the stored (t_after, filled_amount) pair unable to
+        # reproduce each other on replay, breaking the closed-loop invariant.
+        amount_text = _money_text(amount)
+        rounded_amount = Decimal(amount_text)
         t_after = apply_fill_event_extended(
             t_state.t,
             event_type,
             side=fill["side"],
-            filled_amount=amount,
+            filled_amount=rounded_amount,
             split_amount=split_amount,
         )
         fill_key = build_fill_key(fill)
@@ -459,7 +465,7 @@ class FillReconciler:
             "event_type": event_type,
             "side": fill["side"],
             "filled_qty": qty,
-            "filled_amount": _money_text(amount),
+            "filled_amount": amount_text,
             "split_amount": format(split_amount, "f"),
             "t_before": str(t_state.t),
             "t_after": str(t_after),

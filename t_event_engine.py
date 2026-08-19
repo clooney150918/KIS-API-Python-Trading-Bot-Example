@@ -8,8 +8,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Mapping, Any
+
+# Fixed Decimal working precision for all proportional T arithmetic.  Pinning it
+# with ``localcontext`` makes T advancement independent of any ambient decimal
+# context that other modules may have mutated.
+T_DECIMAL_PRECISION = 28
 
 REVERSE_QUARTER_BUY_EVENT = "REVERSE_QUARTER_BUY"
 REVERSE_SELL_EVENT = "REVERSE_SELL"
@@ -41,12 +46,17 @@ def apply_fill_event_extended(t_before, event_type, *, side=None, filled_amount=
     if portion <= 0:
         raise ValueError("split_amount must be positive")
     fill_side = str(side or infer_side_from_event_type(event_type)).upper()
-    delta = amount / portion
-    if fill_side == "BUY":
-        return t + delta
-    if fill_side == "SELL":
-        return t - delta
-    raise ValueError("side must be BUY or SELL")
+    if fill_side not in {"BUY", "SELL"}:
+        raise ValueError("side must be BUY or SELL")
+    with localcontext() as ctx:
+        ctx.prec = T_DECIMAL_PRECISION
+        delta = amount / portion
+        result = t + delta if fill_side == "BUY" else t - delta
+    # T is a strategy level that must never fall below zero; clamp the lower
+    # bound so a large SELL fill cannot drive T negative.
+    if result < 0:
+        return Decimal("0")
+    return result
 
 
 @dataclass(frozen=True)
@@ -65,18 +75,18 @@ REQUIRED_EVENT_KEYS = {
     "kis_order_no",
     "fill_key",
     "event_type",
+    "side",
     "filled_qty",
     "filled_amount",
+    "split_amount",
     "t_before",
     "t_after",
     "revision_before",
     "revision_after",
     "occurred_at",
 }
-OPTIONAL_EVENT_KEYS = {
-    "side",
-    "split_amount",
-}
+# ``side`` and ``split_amount`` are now mandatory for every proportional T event.
+OPTIONAL_EVENT_KEYS: set[str] = set()
 
 
 def parse_decimal(value: object, field: str) -> Decimal:
@@ -118,13 +128,11 @@ def validate_t_event(event: Mapping[str, Any]) -> dict[str, Any]:
     parse_decimal(validated["filled_amount"], "filled_amount")
     parse_decimal(validated["t_before"], "t_before")
     parse_decimal(validated["t_after"], "t_after")
-    if "side" in validated:
-        if validated["side"] not in {"BUY", "SELL"}:
-            raise ValueError("side must be BUY or SELL")
-    if "split_amount" in validated:
-        split_amount = parse_decimal(validated["split_amount"], "split_amount")
-        if split_amount <= 0:
-            raise ValueError("split_amount must be positive")
+    if validated["side"] not in {"BUY", "SELL"}:
+        raise ValueError("side must be BUY or SELL")
+    split_amount = parse_decimal(validated["split_amount"], "split_amount")
+    if split_amount <= 0:
+        raise ValueError("split_amount must be positive")
     parse_int(validated["revision_before"], "revision_before")
     parse_int(validated["revision_after"], "revision_after")
     try:
@@ -148,16 +156,15 @@ def apply_t_event(current_t: Decimal, current_revision: int, event: Mapping[str,
     if revision_after != revision_before + 1:
         raise ValueError("revision_after must equal revision_before + 1")
 
-    if "split_amount" in validated:
-        proportional_t_after = apply_fill_event_extended(
-            t_before,
-            validated["event_type"],
-            side=validated.get("side"),
-            filled_amount=validated["filled_amount"],
-            split_amount=validated["split_amount"],
-        )
-        if proportional_t_after != t_after:
-            raise ValueError(f"t_after mismatch: proportional expected {proportional_t_after}, got {t_after}")
+    proportional_t_after = apply_fill_event_extended(
+        t_before,
+        validated["event_type"],
+        side=validated["side"],
+        filled_amount=validated["filled_amount"],
+        split_amount=validated["split_amount"],
+    )
+    if proportional_t_after != t_after:
+        raise ValueError(f"t_after mismatch: proportional expected {proportional_t_after}, got {t_after}")
 
     return TState(
         ticker=validated["ticker"],
