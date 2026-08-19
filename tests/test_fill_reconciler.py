@@ -210,12 +210,13 @@ def test_kis_loc_execution_with_reissued_order_number_matches_by_order_price_onc
     assert processed["classification"] == "FINAL"
 
 
-def test_reissued_order_number_without_order_price_stays_unclassified(tmp_path):
-    intent_store, trade_store, processed_store, events_path, _processed_path = make_stores(tmp_path)
-    submitted_intent(
+def test_reissued_order_number_without_order_price_matches_by_intent_limit_terms(tmp_path):
+    intent_store, trade_store, processed_store, events_path, processed_path = make_stores(tmp_path)
+    intent = submitted_intent(
         intent_store,
         accepted_order=accepted_key(order_no="RESERVATION-ODNO"),
         event_type="FULL_BUY",
+        order_type="LOC",
         qty=5,
         price="150.39",
     )
@@ -226,9 +227,14 @@ def test_reissued_order_number_without_order_price_stays_unclassified(tmp_path):
         [kis_fill(odno="EXECUTION-ODNO", ft_ccld_qty="5", ft_ccld_unpr3="129.10")],
     )
 
-    assert result["operator_halt"] is True
-    assert "UNCLASSIFIED_FILL" in result["codes"]
-    assert events_path.read_text(encoding="utf-8") == ""
+    assert result["operator_halt"] is False
+    assert "UNCLASSIFIED_FILL" not in result["codes"]
+    assert intent_store.list_intents("SOXL")[-1]["status"] == "FILLED"
+    event = json.loads(events_path.read_text(encoding="utf-8"))
+    assert event["intent_id"] == intent["intent_id"]
+    assert event["kis_order_no"] == "EXECUTION-ODNO"
+    processed = json.loads(processed_path.read_text(encoding="utf-8"))
+    assert processed["classification"] == "FINAL"
 
 
 @pytest.mark.parametrize(

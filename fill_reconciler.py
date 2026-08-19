@@ -359,8 +359,6 @@ class FillReconciler:
 
     def _match_intent_by_order_terms(self, ticker: str, fill: Mapping[str, Any], latest: list[dict[str, Any]]) -> dict[str, Any] | None:
         order_price = fill.get("order_price")
-        if order_price is None:
-            return None
         fill_prefix = "|".join([
             _text(fill.get("account_fingerprint")),
             _text(fill.get("ticker")).upper(),
@@ -390,8 +388,14 @@ class FillReconciler:
                 intent_price = _decimal(intent.get("price"), "intent.price")
             except FillReconciliationError:
                 continue
-            if abs(intent_price - order_price) > Decimal("0.01"):
-                continue
+            if order_price is not None:
+                if abs(intent_price - order_price) > Decimal("0.01"):
+                    continue
+            else:
+                if str(intent.get("order_type", "")).upper() != "LOC":
+                    continue
+                if int(fill["qty"]) != int(intent["qty"]):
+                    continue
             if not self._fill_within_intent(intent, fill):
                 continue
             candidates.append(intent)

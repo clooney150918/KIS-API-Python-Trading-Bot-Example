@@ -31,6 +31,81 @@ import glob
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle # 🚨 NEW: 중앙 통제소 결속
+from order_intent_store import DuplicateOrderIntentError, STRATEGY as OFFICIAL_ORDER_STRATEGY, compute_intent_id
+from runtime_safety import account_fingerprint, resolve_account_fingerprint_key
+
+
+def _official_manual_intent_payload(order, side, order_type):
+    return {
+        "strategy": order.get("strategy"),
+        "strategy_revision": order.get("strategy_revision"),
+        "t_revision": order.get("t_revision"),
+        "ticker": order.get("ticker"),
+        "trade_date": order.get("trade_date"),
+        "event_type": order.get("event_type"),
+        "side": str(side).strip().upper(),
+        "order_type": str(order_type).strip().upper(),
+        "price": str(order.get("price")),
+        "qty": order.get("qty"),
+    }
+
+
+def _is_official_manual_order(order):
+    if not isinstance(order, dict):
+        return False
+    if order.get("strategy") == OFFICIAL_ORDER_STRATEGY:
+        return True
+    return any(field in order for field in ("intent_id", "strategy_revision", "t_revision", "event_type"))
+
+
+def _order_intent_store_from_context(context):
+    bot_data = getattr(context, "bot_data", None)
+    if not isinstance(bot_data, dict):
+        return None
+    app_data = bot_data.get("app_data")
+    if not isinstance(app_data, dict):
+        return None
+    return app_data.get("order_intent_store")
+
+
+def _broker_account_fingerprint(broker):
+    key = resolve_account_fingerprint_key(getattr(broker, "account_fingerprint_key", None))
+    if key is None:
+        raise ValueError("ACCOUNT_FINGERPRINT_KEY_UNAVAILABLE")
+    return account_fingerprint(
+        getattr(broker, "cano", None),
+        getattr(broker, "acnt_prdt_cd", None),
+        key=key,
+    )
+
+
+def _record_manual_accepted_intent(order_intent_store, broker, *, ticker, order, order_type, response):
+    if order_intent_store is None or not _is_official_manual_order(order):
+        return None
+    if not isinstance(response, dict) or str(response.get("rt_cd", "")) != "0":
+        return None
+    odno = str(response.get("odno") or "").strip()
+    if not odno:
+        raise ValueError("ORDER_ACCEPTED_WITHOUT_ORDER_NO")
+
+    side = str(order.get("side", "")).strip().upper()
+    normalized_order_type = str(order.get("order_type") or order_type).strip().upper()
+    payload = _official_manual_intent_payload(order, side, normalized_order_type)
+    intent_id = compute_intent_id(payload)
+    if hasattr(order_intent_store, "create_planned"):
+        try:
+            created = order_intent_store.create_planned(payload)
+            intent_id = str(created.get("intent_id") or intent_id)
+        except DuplicateOrderIntentError:
+            pass
+    accepted_order = {
+        "account_fingerprint": _broker_account_fingerprint(broker),
+        "ticker": str(ticker).strip().upper(),
+        "exchange": str(order.get("exchange") or order.get("ovrs_excg_cd") or "AMEX").strip().upper(),
+        "trade_date": str(order.get("trade_date") or "").strip().replace("-", ""),
+        "order_no": odno,
+    }
+    return order_intent_store.record_accepted_order(intent_id, accepted_order)
 
 class CallbackOrderHandler:
     def __init__(self, config, broker, strategy, legacy_lot_book, sync_engine, view, tx_lock):
@@ -310,6 +385,7 @@ class CallbackOrderHandler:
        
             target_orders = plan.get('core_orders') or plan.get('orders') or []
             if not isinstance(target_orders, list): target_orders = []
+            order_intent_store = _order_intent_store_from_context(context)
             
             is_market_active_now = status_code in ["PRE", "REG", "AFTER"]
             
@@ -358,6 +434,19 @@ class CallbackOrderHandler:
                     res = None
             
                 is_success = isinstance(res, dict) and str(res.get('rt_cd', '')) == '0'
+                if is_success:
+                    try:
+                        _record_manual_accepted_intent(
+                            order_intent_store,
+                            self.broker,
+                            ticker=t,
+                            order=o,
+                            order_type=str(o.get('type', '')),
+                            response=res,
+                        )
+                    except Exception as e:
+                        logging.error(f"🚨 1차 주문 intent 기록 실패: {e}")
+                        is_success = False
                 if not is_success:
                     all_success = False
                 
@@ -400,6 +489,19 @@ class CallbackOrderHandler:
                     res = None
         
                 is_success = isinstance(res, dict) and str(res.get('rt_cd', '')) == '0'
+                if is_success:
+                    try:
+                        _record_manual_accepted_intent(
+                            order_intent_store,
+                            self.broker,
+                            ticker=t,
+                            order=o,
+                            order_type=str(o.get('type', '')),
+                            response=res,
+                        )
+                    except Exception as e:
+                        logging.error(f"🚨 2차 보너스 주문 intent 기록 실패: {e}")
+                        is_success = False
                 err_msg = html.escape(str(res.get('msg1') or '잔금패스')) if isinstance(res, dict) else '응답 없음/통신 장애'
                 status_icon = '✅' if is_success else f'❌({err_msg})'
                 msg += f"└ 2차 보너스: {html.escape(str(o.get('desc', '')))} {int(self._safe_float(o.get('qty')))}주: {status_icon}\n"
