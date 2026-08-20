@@ -28,6 +28,7 @@ import asyncio
 import yfinance as yf
 import html
 import glob
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from global_throttle import GlobalThrottle # 🚨 NEW: 중앙 통제소 결속
@@ -43,6 +44,45 @@ def _official_manual_intent_payload(order, side, order_type):
         "ticker": order.get("ticker"),
         "trade_date": order.get("trade_date"),
         "event_type": order.get("event_type"),
+        "side": str(side).strip().upper(),
+        "order_type": str(order_type).strip().upper(),
+        "price": str(order.get("price")),
+        "qty": order.get("qty"),
+    }
+
+
+def _current_trade_date(order):
+    supplied = str(order.get("trade_date") or "").strip()
+    if supplied:
+        return supplied
+    return datetime.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def _current_t_revision_for_store(order_intent_store, ticker):
+    provider = getattr(order_intent_store, "current_t_revision_provider", None)
+    if callable(provider):
+        try:
+            return int(provider(str(ticker).strip().upper()))
+        except Exception:
+            pass
+    return 1
+
+
+def _manual_strategy_revision_from_order_no(order_no):
+    digits = re.sub(r"\D", "", str(order_no or ""))
+    if digits:
+        return max(1, int(digits[-8:]))
+    return 1
+
+
+def _simple_manual_intent_payload(order_intent_store, ticker, order, side, order_type, order_no):
+    return {
+        "strategy": OFFICIAL_ORDER_STRATEGY,
+        "strategy_revision": _manual_strategy_revision_from_order_no(order_no),
+        "t_revision": _current_t_revision_for_store(order_intent_store, ticker),
+        "ticker": str(order.get("ticker") or ticker).strip().upper(),
+        "trade_date": _current_trade_date(order),
+        "event_type": "MANUAL",
         "side": str(side).strip().upper(),
         "order_type": str(order_type).strip().upper(),
         "price": str(order.get("price")),
@@ -80,7 +120,7 @@ def _broker_account_fingerprint(broker):
 
 
 def _record_manual_accepted_intent(order_intent_store, broker, *, ticker, order, order_type, response):
-    if order_intent_store is None or not _is_official_manual_order(order):
+    if order_intent_store is None:
         return None
     if not isinstance(response, dict) or str(response.get("rt_cd", "")) != "0":
         return None
@@ -90,7 +130,10 @@ def _record_manual_accepted_intent(order_intent_store, broker, *, ticker, order,
 
     side = str(order.get("side", "")).strip().upper()
     normalized_order_type = str(order.get("order_type") or order_type).strip().upper()
-    payload = _official_manual_intent_payload(order, side, normalized_order_type)
+    if _is_official_manual_order(order):
+        payload = _official_manual_intent_payload(order, side, normalized_order_type)
+    else:
+        payload = _simple_manual_intent_payload(order_intent_store, ticker, order, side, normalized_order_type, odno)
     intent_id = compute_intent_id(payload)
     if hasattr(order_intent_store, "create_planned"):
         try:

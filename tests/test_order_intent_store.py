@@ -85,6 +85,14 @@ def test_official_intent_rejects_values_outside_semantic_domain(tmp_path, field,
     assert created["order_type"] == "LOC"
 
 
+def test_manual_event_type_is_allowed_for_sync_manual_order_intents(tmp_path):
+    store, _path = make_store(tmp_path)
+
+    created = store.create_planned(planned_intent(event_type="MANUAL"))
+
+    assert created["event_type"] == "MANUAL"
+
+
 @pytest.mark.parametrize("field", ["qty", "strategy_revision", "t_revision"])
 @pytest.mark.parametrize("value", [1.9, "1.9"])
 def test_official_intent_rejects_non_integer_numeric_values(tmp_path, field, value):

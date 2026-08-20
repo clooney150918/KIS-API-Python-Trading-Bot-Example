@@ -84,3 +84,42 @@ def test_manual_force_exec_records_order_intent_after_kis_acceptance():
         "trade_date": "20260818",
         "order_no": "0030308368",
     })]
+
+
+def test_simple_sync_manual_order_records_manual_order_intent_after_kis_acceptance():
+    order = {
+        "trade_date": "2026-08-19",
+        "side": "BUY",
+        "type": "LOC",
+        "price": "143.63",
+        "qty": 5,
+        "desc": "sync manual LOC buy",
+    }
+    intent_store = TrackingIntentStore()
+
+    _record_manual_accepted_intent(
+        intent_store,
+        FakeBroker(),
+        ticker="SOXL",
+        order=order,
+        order_type="LOC",
+        response={"rt_cd": "0", "msg1": "OK", "odno": "0030785378"},
+    )
+
+    expected_payload = {
+        "strategy": "LAOER_V4_SOXL_20",
+        "strategy_revision": 30785378,
+        "t_revision": 1,
+        "ticker": "SOXL",
+        "trade_date": "2026-08-19",
+        "event_type": "MANUAL",
+        "side": "BUY",
+        "order_type": "LOC",
+        "price": "143.63",
+        "qty": 5,
+    }
+    expected_intent_id = compute_intent_id(expected_payload)
+    assert intent_store.planned == [expected_payload]
+    assert intent_store.accepted[0][0] == expected_intent_id
+    assert intent_store.accepted[0][1]["order_no"] == "0030785378"
+    assert intent_store.accepted[0][1]["trade_date"] == "20260819"
