@@ -38,7 +38,7 @@ from runtime_safety import account_fingerprint, resolve_account_fingerprint_key
 
 def _official_manual_intent_payload(order, side, order_type):
     return {
-        "strategy": order.get("strategy"),
+        "strategy": order.get("strategy") or OFFICIAL_ORDER_STRATEGY,
         "strategy_revision": order.get("strategy_revision"),
         "t_revision": order.get("t_revision"),
         "ticker": order.get("ticker"),
