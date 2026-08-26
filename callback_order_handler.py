@@ -476,6 +476,7 @@ class CallbackOrderHandler:
                     logging.error(f"🚨 1차 주문 전송 통신 에러/타임아웃: {e}")
                     res = None
             
+                is_bonus = str(o.get('type', '')).upper() == 'BONUS'
                 is_success = isinstance(res, dict) and str(res.get('rt_cd', '')) == '0'
                 if is_success:
                     try:
@@ -490,11 +491,19 @@ class CallbackOrderHandler:
                     except Exception as e:
                         logging.error(f"🚨 1차 주문 intent 기록 실패: {e}")
                         is_success = False
-                if not is_success:
+                if not is_success and not is_bonus:
                     all_success = False
-                
-                err_msg = html.escape(str(res.get('msg1') or '오류')) if isinstance(res, dict) else '응답 없음/통신 장애'
-                status_icon = '✅' if is_success else f'❌({err_msg})'
+
+                raw_err = str(res.get('msg1') or '오류') if isinstance(res, dict) else '응답 없음/통신 장애'
+                if 'ORDER_SUBMISSION_AMBIGUOUS' in raw_err or 'runtime safety blocked order' in raw_err:
+                    raw_err = 'KIS 거부(가격제한 등)'
+                err_msg = html.escape(raw_err)
+                if is_success:
+                    status_icon = '✅'
+                elif is_bonus:
+                    status_icon = '❌(거부됨·무시)'
+                else:
+                    status_icon = f'❌({err_msg})'
                 msg += f"└ 1차 필수: {html.escape(str(o.get('desc', '')))} {int(self._safe_float(o.get('qty')))}주: {status_icon}\n"
             
             target_bonus = plan.get('bonus_orders') or []
@@ -545,8 +554,11 @@ class CallbackOrderHandler:
                     except Exception as e:
                         logging.error(f"🚨 2차 보너스 주문 intent 기록 실패: {e}")
                         is_success = False
-                err_msg = html.escape(str(res.get('msg1') or '잔금패스')) if isinstance(res, dict) else '응답 없음/통신 장애'
-                status_icon = '✅' if is_success else f'❌({err_msg})'
+                raw_err = str(res.get('msg1') or '잔금패스') if isinstance(res, dict) else '응답 없음/통신 장애'
+                if 'ORDER_SUBMISSION_AMBIGUOUS' in raw_err or 'runtime safety blocked order' in raw_err:
+                    raw_err = 'KIS 거부(가격제한 등)'
+                err_msg = html.escape(raw_err)
+                status_icon = '✅' if is_success else '❌(거부됨·무시)'
                 msg += f"└ 2차 보너스: {html.escape(str(o.get('desc', '')))} {int(self._safe_float(o.get('qty')))}주: {status_icon}\n"
             
             if len(target_orders) == 0 and len(target_bonus) == 0:
