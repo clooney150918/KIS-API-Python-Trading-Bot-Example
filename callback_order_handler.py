@@ -430,11 +430,14 @@ class CallbackOrderHandler:
             if not isinstance(target_orders, list): target_orders = []
             order_intent_store = _order_intent_store_from_context(context)
             
-            is_market_active_now = status_code in ["PRE", "REG", "AFTER"]
-            
             est_z = ZoneInfo('America/New_York')
             kst_z = ZoneInfo('Asia/Seoul')
             curr_est = datetime.datetime.now(est_z)
+
+            is_market_active_now = (
+                curr_est.hour > 9
+                or (curr_est.hour == 9 and curr_est.minute >= 30)
+            )
             
             b_start = curr_est.replace(hour=15, minute=26, second=0, microsecond=0)
             s_start = curr_est + datetime.timedelta(minutes=3)
