@@ -233,10 +233,7 @@ async def scheduled_early_regular_trade(context):
                         version_label = "V4.0" if is_v4_version else "V14"
                         msgs[t] += f"💎 <b>[{t}] {version_label} 정규장 주문계획 장전 완료 (17:05 KST 타격망)</b>\n"
                         
-                        is_market_active_now = (
-                            curr_est.hour > 9
-                            or (curr_est.hour == 9 and curr_est.minute >= 30)
-                        )
+                        is_market_active_now = curr_est.hour >= 4
 
                         target_orders = plan.get('core_orders') or plan.get('orders') or []
                         if not isinstance(target_orders, list): target_orders = []
