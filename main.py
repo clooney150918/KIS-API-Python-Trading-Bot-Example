@@ -217,7 +217,7 @@ def main():
     
     jq.run_daily(scheduled_force_reset, time=datetime.time(4, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     # 🚨 MODIFIED: [맹점 4 수술] KST 래핑 타임 패러독스(Time Paradox) 완벽 교정 및 PTB 네이티브 타임존 100% 위임
-    early_trade_time = datetime.time(22, 20, tzinfo=kst_zone)
+    early_trade_time = datetime.time(17, 5, tzinfo=kst_zone)
 
     jq.run_daily(scheduled_early_regular_trade, time=early_trade_time, days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
     jq.run_daily(scheduled_self_cleaning, time=datetime.time(17, 0, tzinfo=est_zone), days=tuple(range(7)), chat_id=ADMIN_CHAT_ID, data=app_data)
