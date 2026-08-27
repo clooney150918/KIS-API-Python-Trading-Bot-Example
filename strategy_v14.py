@@ -478,68 +478,125 @@ class V4Strategy:
                     one_portion = float(return_normal.one_buy_budget)
                     # 복귀 판정 즉시 일반모드 단계로 표시 (♻️복귀대기 중간상태 제거)
                     if return_normal.reverse_entry:
-                        process_status = "♻️공식리버스진입대기"
+                        # T>19 재감지: day_count=1로 리셋 후 즉시 리버스 재진입 (진입대기 없음)
+                        self.cfg.set_reverse_state(target, True, 1, dynamic_t=float(t_val_dec), rem_cash=float(official_cash), is_day_one=True)
+                        rev_state = self.cfg.get_reverse_state(target)
+                        is_reverse = True
+                        process_status = "♻️공식리버스"
+                        reverse_t = rev_state.get("dynamic_t", t_val_dec) or t_val_dec
+                        reverse_cash = rev_state.get("rem_cash", official_cash) or official_cash
+                        day, day_reason = self._parse_reverse_day_count(rev_state)
+                        if day_reason:
+                            kernel_fail_closed = True
+                            kernel_reason = day_reason
+                        else:
+                            day = self._get_reverse_plan_display_day(day, rev_state)
+                            previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+                            previous_closes = []
+                            confirmed_close = kwargs.get("confirmed_close")
+                            if confirmed_close is None and self._safe_float(prev_close) > 0 and is_snapshot_mode:
+                                confirmed_close = prev_close
+                            reverse_plan = laoer_v4_20.calculate_reverse_plan(
+                                laoer_v4_20.ReverseState(
+                                    ticker=target,
+                                    split=20,
+                                    quantity=qty,
+                                    previous_quantity=previous_quantity,
+                                    avg_price=laoer_v4_20.Decimal(str(avg_price)),
+                                    cash=laoer_v4_20.Decimal(str(reverse_cash)),
+                                    t=laoer_v4_20.Decimal(str(reverse_t)),
+                                    day=day,
+                                    previous_closes=previous_closes,
+                                    confirmed_close=confirmed_close,
+                                )
+                            )
+                            t_val = float(reverse_plan.t)
+                            star_price = float(reverse_plan.star_point)
+                            one_portion = float(reverse_plan.buy_budget)
+                            kernel_fail_closed = bool(reverse_plan.fail_closed)
+                            kernel_reason = reverse_plan.reason
+                            if not reverse_plan.fail_closed:
+                                if reverse_plan.buy_quantity > 0:
+                                    orders.append(self._official_order(
+                                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                        event_type="REVERSE_QUARTER_BUY", side="BUY", order_type="LOC",
+                                        price=reverse_plan.star_buy_price, qty=reverse_plan.buy_quantity,
+                                        desc="공식리버스매수",
+                                    ))
+                                if reverse_plan.sell_quantity > 0:
+                                    if reverse_plan.sell_order_type == "MOC" and current_price <= 0.0:
+                                        kernel_fail_closed = True
+                                        kernel_reason = "MOC risk reference price must be positive and finite"
+                                    else:
+                                        sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else current_price
+                                        orders.append(self._official_order(
+                                            ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                            event_type="REVERSE_SELL", side="SELL", order_type=reverse_plan.sell_order_type,
+                                            price=sell_price, qty=reverse_plan.sell_quantity,
+                                            desc="공식리버스매도",
+                                            risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
+                                        ))
                     else:
                         process_status = "🌓공식전반전" if return_normal.phase == "FIRST_HALF" else "🌕공식후반전"
-                    # kernel_fail_closed은 False 유지 — 복귀 판정 자체는 성공
-                    if not return_normal.fail_closed:
-                        if return_normal.average_buy_quantity > 0:
-                            orders.append(self._official_order(
-                                ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                event_type="HALF", side="BUY", order_type="LOC",
-                                price=return_normal.average_buy_price, qty=return_normal.average_buy_quantity,
-                                desc="공식평단매수",
-                            ))
-                        if return_normal.star_buy_quantity > 0:
-                            event_type_n = "HALF" if return_normal.average_buy_quantity > 0 else "FULL"
-                            orders.append(self._official_order(
-                                ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                event_type=event_type_n, side="BUY", order_type="LOC",
-                                price=return_normal.star_buy_price, qty=return_normal.star_buy_quantity,
-                                desc="공식별값매수",
-                            ))
-                        if return_normal.star_buy_quantity > 0 and return_normal.one_buy_budget > 0:
-                            _jj_base = int(return_normal.star_buy_quantity)
-                            for _k in range(1, 6):
-                                _jj_price = return_normal.one_buy_budget / laoer_v4_20.Decimal(str(_jj_base + _k))
+                        # kernel_fail_closed은 False 유지 — 복귀 판정 자체는 성공
+                        if not return_normal.fail_closed:
+                            if return_normal.average_buy_quantity > 0:
                                 orders.append(self._official_order(
                                     ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                    event_type="BONUS", side="BUY", order_type="LOC",
-                                    price=float(_jj_price), qty=1,
-                                    desc="공식보너스",
+                                    event_type="HALF", side="BUY", order_type="LOC",
+                                    price=return_normal.average_buy_price, qty=return_normal.average_buy_quantity,
+                                    desc="공식평단매수",
                                 ))
-                        if return_normal.quarter_sell_quantity > 0:
-                            orders.append(self._official_order(
-                                ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                event_type="QUARTER", side="SELL", order_type="LOC",
-                                price=return_normal.star_point, qty=return_normal.quarter_sell_quantity,
-                                desc="공식별값매도",
-                            ))
-                        if return_normal.target_sell_quantity > 0:
-                            orders.append(self._official_order(
-                                ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                event_type="TARGET_FULL", side="SELL", order_type="LIMIT",
-                                price=return_normal.target_sell_price, qty=return_normal.target_sell_quantity,
-                                desc="공식목표매도",
-                            ))
-                    else:
-                        # 매수 예산 부족(fail_closed)이어도 쿼터매도·목표매도는 반드시 생성
-                        _q_qty = qty // 4
-                        _t_qty = max(qty - _q_qty, 0)
-                        if _q_qty > 0 and float(return_normal.star_point) > 0:
-                            orders.append(self._official_order(
-                                ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                event_type="QUARTER", side="SELL", order_type="LOC",
-                                price=return_normal.star_point, qty=_q_qty,
-                                desc="공식별값매도",
-                            ))
-                        if _t_qty > 0 and float(return_normal.target_sell_price) > 0:
-                            orders.append(self._official_order(
-                                ticker=target, trade_date=trade_date, t_revision=t_revision,
-                                event_type="TARGET_FULL", side="SELL", order_type="LIMIT",
-                                price=return_normal.target_sell_price, qty=_t_qty,
-                                desc="공식목표매도",
-                            ))
+                            if return_normal.star_buy_quantity > 0:
+                                event_type_n = "HALF" if return_normal.average_buy_quantity > 0 else "FULL"
+                                orders.append(self._official_order(
+                                    ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                    event_type=event_type_n, side="BUY", order_type="LOC",
+                                    price=return_normal.star_buy_price, qty=return_normal.star_buy_quantity,
+                                    desc="공식별값매수",
+                                ))
+                            if return_normal.star_buy_quantity > 0 and return_normal.one_buy_budget > 0:
+                                _jj_base = int(return_normal.star_buy_quantity)
+                                for _k in range(1, 6):
+                                    _jj_price = return_normal.one_buy_budget / laoer_v4_20.Decimal(str(_jj_base + _k))
+                                    orders.append(self._official_order(
+                                        ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                        event_type="BONUS", side="BUY", order_type="LOC",
+                                        price=float(_jj_price), qty=1,
+                                        desc="공식보너스",
+                                    ))
+                            if return_normal.quarter_sell_quantity > 0:
+                                orders.append(self._official_order(
+                                    ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                    event_type="QUARTER", side="SELL", order_type="LOC",
+                                    price=return_normal.star_point, qty=return_normal.quarter_sell_quantity,
+                                    desc="공식별값매도",
+                                ))
+                            if return_normal.target_sell_quantity > 0:
+                                orders.append(self._official_order(
+                                    ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                    event_type="TARGET_FULL", side="SELL", order_type="LIMIT",
+                                    price=return_normal.target_sell_price, qty=return_normal.target_sell_quantity,
+                                    desc="공식목표매도",
+                                ))
+                        else:
+                            # 매수 예산 부족(fail_closed)이어도 쿼터매도·목표매도는 반드시 생성
+                            _q_qty = qty // 4
+                            _t_qty = max(qty - _q_qty, 0)
+                            if _q_qty > 0 and float(return_normal.star_point) > 0:
+                                orders.append(self._official_order(
+                                    ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                    event_type="QUARTER", side="SELL", order_type="LOC",
+                                    price=return_normal.star_point, qty=_q_qty,
+                                    desc="공식별값매도",
+                                ))
+                            if _t_qty > 0 and float(return_normal.target_sell_price) > 0:
+                                orders.append(self._official_order(
+                                    ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                    event_type="TARGET_FULL", side="SELL", order_type="LIMIT",
+                                    price=return_normal.target_sell_price, qty=_t_qty,
+                                    desc="공식목표매도",
+                                ))
                 elif not reverse_plan.fail_closed:
                     if reverse_plan.buy_quantity > 0:
                         orders.append(self._official_order(
