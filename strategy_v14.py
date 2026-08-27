@@ -584,7 +584,7 @@ class V4Strategy:
             process_status = "🌓공식전반전" if normal_plan.phase == "FIRST_HALF" else "🌕공식후반전"
             if normal_plan.reverse_entry:
                 # T>19 자동 리버스 진입: 대기 없이 즉시 상태 활성화 후 리버스 플랜 계산
-                self.cfg.set_reverse_state(target, True, 0, dynamic_t=float(t_val_dec), rem_cash=float(official_cash))
+                self.cfg.set_reverse_state(target, True, 1, dynamic_t=float(t_val_dec), rem_cash=float(official_cash), is_day_one=True)
                 rev_state = self.cfg.get_reverse_state(target)
                 is_rev_active = True
                 is_reverse = True
