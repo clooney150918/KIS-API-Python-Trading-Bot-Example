@@ -583,7 +583,65 @@ class V4Strategy:
             kernel_reason = normal_plan.reason
             process_status = "🌓공식전반전" if normal_plan.phase == "FIRST_HALF" else "🌕공식후반전"
             if normal_plan.reverse_entry:
-                process_status = "♻️공식리버스진입대기"
+                # T>19 자동 리버스 진입: 대기 없이 즉시 상태 활성화 후 리버스 플랜 계산
+                self.cfg.set_reverse_state(target, True, 0, dynamic_t=float(t_val_dec), rem_cash=float(official_cash))
+                rev_state = self.cfg.get_reverse_state(target)
+                is_rev_active = True
+                is_reverse = True
+                process_status = "♻️공식리버스"
+                reverse_t = rev_state.get("dynamic_t", t_val_dec) or t_val_dec
+                reverse_cash = rev_state.get("rem_cash", official_cash) or official_cash
+                day, day_reason = self._parse_reverse_day_count(rev_state)
+                if day_reason:
+                    kernel_fail_closed = True
+                    kernel_reason = day_reason
+                else:
+                    day = self._get_reverse_plan_display_day(day, rev_state)
+                    previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+                    previous_closes = []
+                    confirmed_close = kwargs.get("confirmed_close")
+                    if confirmed_close is None and self._safe_float(prev_close) > 0 and is_snapshot_mode:
+                        confirmed_close = prev_close
+                    reverse_plan = laoer_v4_20.calculate_reverse_plan(
+                        laoer_v4_20.ReverseState(
+                            ticker=target,
+                            split=20,
+                            quantity=qty,
+                            previous_quantity=previous_quantity,
+                            avg_price=laoer_v4_20.Decimal(str(avg_price)),
+                            cash=laoer_v4_20.Decimal(str(reverse_cash)),
+                            t=laoer_v4_20.Decimal(str(reverse_t)),
+                            day=day,
+                            previous_closes=previous_closes,
+                            confirmed_close=confirmed_close,
+                        )
+                    )
+                    t_val = float(reverse_plan.t)
+                    star_price = float(reverse_plan.star_point)
+                    one_portion = float(reverse_plan.buy_budget)
+                    kernel_fail_closed = bool(reverse_plan.fail_closed)
+                    kernel_reason = reverse_plan.reason
+                    if not reverse_plan.fail_closed:
+                        if reverse_plan.buy_quantity > 0:
+                            orders.append(self._official_order(
+                                ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                event_type="REVERSE_QUARTER_BUY", side="BUY", order_type="LOC",
+                                price=reverse_plan.star_buy_price, qty=reverse_plan.buy_quantity,
+                                desc="공식리버스매수",
+                            ))
+                        if reverse_plan.sell_quantity > 0:
+                            if reverse_plan.sell_order_type == "MOC" and current_price <= 0.0:
+                                kernel_fail_closed = True
+                                kernel_reason = "MOC risk reference price must be positive and finite"
+                            else:
+                                sell_price = reverse_plan.star_point if reverse_plan.sell_order_type == "LOC" else current_price
+                                orders.append(self._official_order(
+                                    ticker=target, trade_date=trade_date, t_revision=t_revision,
+                                    event_type="REVERSE_SELL", side="SELL", order_type=reverse_plan.sell_order_type,
+                                    price=sell_price, qty=reverse_plan.sell_quantity,
+                                    desc="공식리버스매도",
+                                    risk_reference_price=(current_price if reverse_plan.sell_order_type == "MOC" else None),
+                                ))
             elif not normal_plan.fail_closed:
                 if normal_plan.average_buy_quantity > 0:
                     orders.append(self._official_order(
