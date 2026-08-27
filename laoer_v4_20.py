@@ -381,7 +381,7 @@ def calculate_reverse_plan(state: ReverseState) -> ReversePlan:
     confirmed_close = _parse_decimal(state.confirmed_close) if state.confirmed_close is not None else None
     if state.confirmed_close is not None and confirmed_close is None:
         return _empty_reverse_plan(state, reason="invalid Decimal input", t=t)
-    if confirmed_close is not None and confirmed_close > (avg_price * Decimal("0.80")):
+    if state.day > 1 and confirmed_close is not None and confirmed_close > (avg_price * Decimal("0.80")):
         return ReversePlan(
             ticker=state.ticker,
             split=state.split,
