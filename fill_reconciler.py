@@ -425,6 +425,10 @@ class FillReconciler:
             return False
         if int(fill["qty"]) > int(intent["qty"]):
             return False
+        # MOC/MOO orders execute at market price; the intent price is a reference
+        # only, so no price-direction constraint applies.
+        if str(intent.get("order_type", "")).upper() in {"MOC", "MOO"}:
+            return True
         intent_price = _decimal(intent.get("price"), "intent.price")
         fill_price = fill["price"]
         if intent.get("side") == "BUY" and fill_price > intent_price:
