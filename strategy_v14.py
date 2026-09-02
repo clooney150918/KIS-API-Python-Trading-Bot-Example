@@ -45,7 +45,10 @@ class V4Strategy:
         return int(value), ""
 
     def _get_reverse_plan_display_day(self, day, rev_state):
-        # 주문계획 표시용 보정: 진입일이 지난 day_count=1은 2일차 계획으로 보여준다.
+        # 주문계획 화면 표시(문구) 전용 보정: 진입일이 지난 day_count=1은 2일차로 보여준다.
+        # ⚠️ 이 값은 화면 표시에만 사용한다. laoer_v4_20.calculate_reverse_plan() 등
+        #    실제 커널 계산·복귀 판정에는 절대 전달하지 말 것(실제 day_count를 써야 함).
+        #    표시 보정을 커널에 섞으면 실제 1일차인데 2일차 복귀 판정이 조기 트리거된다.
         if day != 1:
             return day
         raw_last_update_date = rev_state.get("last_update_date")
@@ -421,7 +424,7 @@ class V4Strategy:
                 kernel_fail_closed = True
                 kernel_reason = day_reason
             else:
-                day = self._get_reverse_plan_display_day(day, rev_state)
+                display_day = self._get_reverse_plan_display_day(day, rev_state)  # 화면 표시 전용
                 previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
                 if day <= 1:
                     previous_closes = []
@@ -490,7 +493,7 @@ class V4Strategy:
                             kernel_fail_closed = True
                             kernel_reason = day_reason
                         else:
-                            day = self._get_reverse_plan_display_day(day, rev_state)
+                            display_day = self._get_reverse_plan_display_day(day, rev_state)  # 화면 표시 전용
                             previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
                             previous_closes = []
                             confirmed_close = kwargs.get("confirmed_close")
@@ -653,7 +656,7 @@ class V4Strategy:
                     kernel_fail_closed = True
                     kernel_reason = day_reason
                 else:
-                    day = self._get_reverse_plan_display_day(day, rev_state)
+                    display_day = self._get_reverse_plan_display_day(day, rev_state)  # 화면 표시 전용
                     previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
                     previous_closes = []
                     confirmed_close = kwargs.get("confirmed_close")

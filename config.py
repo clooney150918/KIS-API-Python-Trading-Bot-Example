@@ -932,18 +932,80 @@ class ConfigManager:
                 "day_count": day_count, 
                 "exit_target": self._safe_float(exit_target), 
                 "last_update_date": last_update_date,
-                "last_t_update_date": last_update_date, # 🚨 NEW: 팩트 주입
+                "last_t_update_date": (datetime.datetime.strptime(last_update_date, '%Y-%m-%d') - datetime.timedelta(days=1)).strftime('%Y-%m-%d'),
                 "dynamic_t": self._safe_float(dynamic_t),
                 "rem_cash": self._safe_float(rem_cash),
                 "is_day_one": (day_count == 0) if is_day_one is None else bool(is_day_one)
             }
             self._save_json(self.FILES["REVERSE_CFG"], d)
 
+    def _load_reverse_settlement_events(self, ticker, start_date, end_date):
+        """리버스 정산창(start_date ≤ 거래일 < end_date)의 T 이벤트를 읽어
+        [{side, amount, t_after, occurred_at, trade_date}] 리스트로 반환한다.
+
+        소스: t_events_SOXL.jsonl (append-only, T 이벤트 원장). 이 파일은 실제
+        체결마다 side·filled_amount·t_after 를 기록하므로 리버스 정산의 신뢰 소스다.
+        거래일(trade_date)은 별도 필드가 없어 fill_key 안의 8자리 거래일(YYYYMMDD)에서
+        추출해 KIS 거래일 기준으로 정산창을 판정한다.
+        """
+        target = str(ticker).upper()
+        path = self._official_data_path("T_EVENTS", "t_events_SOXL.jsonl")
+        out = []
+        if not path or not os.path.exists(path):
+            logging.warning(f"⚠️ [Config] 리버스 정산: T 이벤트 원장 없음: {path}")
+            return out
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except json.JSONDecodeError:
+                        logging.warning(f"⚠️ [Config] t_events JSONL 파싱 실패: {line[:80]}")
+                        continue
+                    if not isinstance(rec, dict):
+                        continue
+                    if str(rec.get("ticker", "")).upper() != target:
+                        continue
+
+                    # fill_key(hash|TICKER|EXCH|YYYYMMDD|order|time|side|qty|price)의
+                    # 8자리 거래일 세그먼트를 추출 → YYYY-MM-DD
+                    trade_date = ""
+                    for p in str(rec.get("fill_key", "")).split("|"):
+                        if len(p) == 8 and p.isdigit() and p.startswith("20"):
+                            trade_date = f"{p[0:4]}-{p[4:6]}-{p[6:8]}"
+                            break
+                    if not trade_date:
+                        continue
+                    if not (start_date < trade_date <= end_date):
+                        continue
+
+                    out.append({
+                        "side": str(rec.get("side", "")).upper(),
+                        "amount": self._safe_float(rec.get("filled_amount", 0.0)),
+                        "t_after": rec.get("t_after", None),
+                        "occurred_at": str(rec.get("occurred_at") or ""),
+                        "trade_date": trade_date,
+                    })
+        except Exception as e:
+            logging.warning(f"⚠️ [Config] t_events 읽기 실패: {e}")
+        return out
+
     def apply_reverse_daily_settlement(self, ticker):
         """
         🚨 [리버스 모드 팩트 정산 및 자본 격리]
-        스냅샷 생성 직전 1회 호출되어, 전날(마지막 갱신일 ~ 오늘 사이)의 
-        'is_reverse: True' 체결 장부 내역을 기반으로 잔금(rem_cash)과 T값(dynamic_t)을 원자적으로 역산 갱신한다.
+        스냅샷 생성 직전 1회 호출되어, 전날(마지막 갱신일 ~ 오늘 사이)의 리버스 체결을
+        기반으로 잔금(rem_cash)과 T값(dynamic_t)을 원자적으로 역산 갱신한다.
+
+        V4.1: 비활성 legacy 원장(disabled_legacy_ledger.json, 실체 없음/레코드 0개)
+        의존을 폐기하고, 실제 체결이 기록되는 T 이벤트 원장(t_events_SOXL.jsonl)을
+        정산 소스로 사용한다.
+          - rem_cash : 정산창 내 SELL 체결금액 − BUY 체결금액 (filled_amount 합산)
+          - dynamic_t: 같은 창에서 마지막(최신) 이벤트의 t_after(실측 T)로 정합.
+            t_events가 이미 T를 기록하므로 단순 ×0.9 근사 대신 실측값을 신뢰한다.
+            (t_after 미기록 구 이벤트만 있을 때는 ×0.9/×0.95 근사로 폴백)
         """
         with GlobalThrottle.get_file_lock(self.FILES["REVERSE_CFG"]):
             d = self._load_json(self.FILES["REVERSE_CFG"], {})
@@ -957,62 +1019,60 @@ class ConfigManager:
             last_t_update_date = state.get("last_t_update_date", "")
             if not last_t_update_date:
                 last_t_update_date = state.get("last_update_date", "")
-            
+
             if last_t_update_date == today_str:
                 return
 
-            split = self.get_split_count(ticker)
             dynamic_t = self._safe_float(state.get("dynamic_t", 0.0))
             rem_cash = self._safe_float(state.get("rem_cash", 0.0))
 
-            with GlobalThrottle.get_file_lock(self.FILES["LEDGER"]):
-                ledger = self._load_json(self.FILES["LEDGER"], [])
-            
-            if not isinstance(ledger, list):
-                ledger = []
-
-            target_recs = [
-                r for r in ledger
-                if isinstance(r, dict) and r.get("ticker") == ticker and r.get("is_reverse", False)
-                and last_t_update_date <= str(r.get("date", ""))[:10] < today_str
-            ]
+            recs = self._load_reverse_settlement_events(ticker, last_t_update_date, today_str)
 
             buy_sum = 0.0
             sell_sum = 0.0
             had_buy = False
             had_sell = False
+            latest_key = None
+            latest_t_after = None
 
-            for r in target_recs:
-                qty = int(self._safe_float(r.get("qty", 0)))
-                price = self._safe_float(r.get("price", 0.0))
-                amt = qty * price
-                
-                if r.get("side") == "BUY":
+            for r in recs:
+                side = str(r.get("side", "")).upper()
+                amt = self._safe_float(r.get("amount", 0.0))
+
+                if side == "BUY":
                     buy_sum += amt
                     had_buy = True
-                elif r.get("side") == "SELL":
+                elif side == "SELL":
                     sell_sum += amt
                     had_sell = True
 
+                # 정산창 내 최신(occurred_at 최대) 이벤트의 t_after를 실측 T로 채택
+                t_after = r.get("t_after", None)
+                if t_after is not None:
+                    key = str(r.get("occurred_at") or "")
+                    if latest_key is None or key >= latest_key:
+                        latest_key = key
+                        latest_t_after = self._safe_float(t_after)
+
             if had_buy or had_sell:
-                # 🚨 MODIFIED: KIS 예수금 의존 파기 및 순수 장부 역산으로 자본 격리 완벽 사수
+                # 🚨 KIS 예수금 의존 파기 — 순수 장부 역산으로 자본 격리 사수
                 rem_cash = max(0.0, rem_cash + sell_sum - buy_sum)
 
-                if had_sell:
+                if latest_t_after is not None and latest_t_after > 0:
+                    # V4.1: t_events 실측 T(t_after)로 정합 — 신뢰 소스
+                    dynamic_t = latest_t_after
+                elif had_sell:
+                    # 폴백: t_after 미기록 구 이벤트 — split 기반 근사 감소
+                    split = self.get_split_count(ticker)
                     if split <= 20: dynamic_t *= 0.9
                     else: dynamic_t *= 0.95
-                
-                # V4.0: 스무딩 없이 T값은 매일 실제 보유량 기준으로 재계산
-                # (여기서는 dynamic_t를 실제 보유잔고로 역산하지 않고,
-                #  매도/매수 비율만 반영해 감소시킴)
-                # V4.0: T값 스무딩 제거 — strategy_v14.py에서 보유량 기준으로 재계산
 
                 logging.info(f"♻️ [{ticker}] 리버스 일일 정산 완료: sell=${sell_sum:.2f}, buy=${buy_sum:.2f} ➔ 잔액=${rem_cash:.2f}, T값={dynamic_t:.4f}")
 
             state["rem_cash"] = round(rem_cash, 2)
             state["dynamic_t"] = round(dynamic_t, 4)
             state["last_t_update_date"] = today_str
-            
+
             d[ticker] = state
             self._save_json(self.FILES["REVERSE_CFG"], d)
 
