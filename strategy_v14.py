@@ -425,7 +425,7 @@ class V4Strategy:
                 kernel_reason = day_reason
             else:
                 display_day = self._get_reverse_plan_display_day(day, rev_state)  # 화면 표시 전용
-                previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+                previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", qty)))
                 if day <= 1:
                     previous_closes = []
                 else:
@@ -494,7 +494,7 @@ class V4Strategy:
                             kernel_reason = day_reason
                         else:
                             display_day = self._get_reverse_plan_display_day(day, rev_state)  # 화면 표시 전용
-                            previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+                            previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", qty)))
                             previous_closes = []
                             confirmed_close = kwargs.get("confirmed_close")
                             if confirmed_close is None and self._safe_float(prev_close) > 0 and is_snapshot_mode:
@@ -657,7 +657,7 @@ class V4Strategy:
                     kernel_reason = day_reason
                 else:
                     display_day = self._get_reverse_plan_display_day(day, rev_state)  # 화면 표시 전용
-                    previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", baseline.get("qty", qty))))
+                    previous_quantity = int(self._safe_float(rev_state.get("previous_quantity", qty)))
                     previous_closes = []
                     confirmed_close = kwargs.get("confirmed_close")
                     if confirmed_close is None and self._safe_float(prev_close) > 0 and is_snapshot_mode:
