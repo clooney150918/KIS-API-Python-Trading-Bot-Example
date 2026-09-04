@@ -599,7 +599,10 @@ class TelegramView:
             if is_rev_logic:
                 icon = "🔄"
                 bdg_txt = f"리버스 잔금쿼터: ${safe_one_portion:,.0f}"
-                body_msg += f"{icon} <b>{t} · 무한매수 {int(safe_split)}분할 · 리버스</b>{snap_tag}\n"
+                _rev_state = t_info.get('reverse_state') or {}
+                _day_count = int(_rev_state.get('day_count') or 0)
+                _rev_label = f"리버스 {_day_count}일차" if _day_count > 0 else "리버스"
+                body_msg += f"{icon} <b>{t} · 무한매수 {int(safe_split)}분할 · {_rev_label}</b>{snap_tag}\n"
                 body_msg += "━━━━━━━━━━━━━━━━━━━\n"
                 body_msg += f"📈 진행   <b>{safe_t_val:.1f} / {int(safe_split)} T</b>\n"
             else:
